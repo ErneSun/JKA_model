@@ -1,0 +1,20 @@
+architecture:
+  package: jka_model
+  revision: "2.1"
+data:
+  action_dim: 1
+  constant_dt: 0.1
+  dt_mode: constant
+  normalization: standardize_from_train_split
+  parameter_dim: 1
+  problem_name: toy_scalar_field
+project_version: 0.1.0
+tags:
+  - v0.1
+  - smoke
+training:
+  deterministic: true
+  run_root: runs
+  seed: 7
+  stage: koopman
+
