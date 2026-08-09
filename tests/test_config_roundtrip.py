@@ -90,3 +90,55 @@ def test_v0_3_config_rejects_data_oscillator_mismatch(tmp_path) -> None:
     destination.write_text(yaml.safe_dump(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="dt_mode must match"):
         load_config(destination)
+
+
+def test_config_roundtrip_v0_4(tmp_path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_config(root / "configs" / "v0_4_smoke.yaml")
+    destination = tmp_path / "v0_4.yaml"
+    save_config(config, destination)
+    restored = load_config(destination)
+    assert restored == config
+    assert restored.autoencoder is not None
+    assert restored.autoencoder.observation_dim == 5
+    assert restored.autoencoder.latent_dim == 2
+    assert restored.representation_evaluation is not None
+    assert restored.representation_evaluation.min_alignment_r2 == 0.98
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value", "message"),
+    [
+        ("autoencoder", "observation_dim", 4, "observation_dim=5"),
+        ("data", "normalization", {"kind": "external", "eps": 1e-6}, "standard"),
+        ("known_latent", "num_steps", 5, "too short"),
+        ("representation_evaluation", "rollout_horizon", 81, "exceeds"),
+    ],
+)
+def test_v0_4_config_rejects_cross_section_mismatches(
+    tmp_path,
+    section: str,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    payload = load_config(root / "configs" / "v0_4_smoke.yaml").to_dict()
+    payload[section][field] = value
+    destination = tmp_path / f"bad-{section}-{field}.yaml"
+    destination.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        load_config(destination)
+
+
+def test_v0_4_constant_dt_must_match_generator_config(tmp_path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    payload = load_config(root / "configs" / "v0_4_smoke.yaml").to_dict()
+    payload["known_latent"]["variable_dt"] = False
+    payload["known_latent"]["dt_jitter"] = 0.0
+    payload["data"]["dt_mode"] = "constant"
+    payload["data"]["constant_dt"] = 0.2
+    destination = tmp_path / "bad-v0-4-constant-dt.yaml"
+    destination.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="constant_dt must match"):
+        load_config(destination)

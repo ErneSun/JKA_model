@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.0 — Learned Koopman Coordinates
+
+- Added deterministic known-latent rotation-decay data with nonlinear five-channel observations
+  and evaluation-only true latent trajectories.
+- Added a trainable `KoopmanEncoder`, two-hidden-layer Tanh `TrainingDecoder`, and thin
+  `KoopmanAutoencoder` composition while reusing the unchanged V0.3 continuous-time core.
+- Added online-encoder one-step consistency, closed-loop multi-step consistency, model-space
+  reconstruction, population-variance anti-collapse, and optional stability losses.
+- Added train-fit/test-apply affine latent alignment, non-collapse statistics, reconstruction,
+  decoded rollout, persistence, and similarity-invariant spectrum diagnostics.
+- Added interval-based training loss/latent-statistic snapshots, explicit held-out one-step and
+  multi-step latent errors, strict V0.4 cross-section config validation, and checkpoint-type-aware
+  latent analysis discovery.
+- Added actual reconstruction-off and multi-step-off ablations plus a secondary learned-lifting
+  Duffing comparison.
+- Added complete learned-model checkpoint round-trip, mandatory unit/integration coverage,
+  23-step smoke, 17-step teaching script, latent analyzer, walkthrough, and checklist.
+- Updated project version to 0.4.0 and checkpoint schema to 4; architecture remains revision 2.2.
+- Added no JEPA, target/EMA encoder, residual closure, attention, PDE training, physics loss, or
+  action conditioning.
+
 ## 0.3.0 — Direct-State Continuous-Time KoopmanCore
 
 - Added fixed/trainable continuous generator `A` with exact `torch.matrix_exp` propagation.

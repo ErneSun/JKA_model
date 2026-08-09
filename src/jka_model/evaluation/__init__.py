@@ -1,9 +1,37 @@
-"""V0.3 direct-state rollout and baseline metrics."""
+"""V0.3 direct-state and V0.4 learned-coordinate evaluation."""
 
+from jka_model.evaluation.duffing_lifting import (
+    DuffingLiftingDiagnostic,
+    run_duffing_lifting_diagnostic,
+)
 from jka_model.evaluation.dynamics import (
     RolloutMetrics,
     evaluate_rollout,
     persistence_rollout,
 )
+from jka_model.evaluation.known_latent_experiment import (
+    KnownLatentExperimentResult,
+    run_known_latent_experiment,
+    without_multi_step,
+    without_reconstruction,
+)
+from jka_model.evaluation.representation import (
+    LearnedRolloutMetrics,
+    encode_records_for_alignment,
+    evaluate_learned_trajectory,
+)
 
-__all__ = ["RolloutMetrics", "evaluate_rollout", "persistence_rollout"]
+__all__ = [
+    "LearnedRolloutMetrics",
+    "KnownLatentExperimentResult",
+    "DuffingLiftingDiagnostic",
+    "RolloutMetrics",
+    "encode_records_for_alignment",
+    "evaluate_learned_trajectory",
+    "evaluate_rollout",
+    "persistence_rollout",
+    "run_known_latent_experiment",
+    "run_duffing_lifting_diagnostic",
+    "without_multi_step",
+    "without_reconstruction",
+]

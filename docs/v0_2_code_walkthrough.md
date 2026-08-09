@@ -1,6 +1,6 @@
 # V0.2 Code Walkthrough — Data Windows & Physics Contracts
 
-> 历史导读说明：仓库运行时现为 V0.3/`0.3.0`、checkpoint schema 3；本文保留 V0.2 数据与
+> 历史导读说明：仓库运行时现为 V0.4/`0.4.0`、checkpoint schema 4；本文保留 V0.2 数据与
 > 物理契约的实现语义。当前整体入口见 `docs/v0_3_code_walkthrough.md`。
 
 本文是 V0.2 的代码结构阅读手册。唯一有效架构修订为 `2.2`。V0.2 的目标不是获得预测

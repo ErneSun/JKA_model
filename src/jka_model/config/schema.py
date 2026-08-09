@@ -440,6 +440,310 @@ class KoopmanEvaluationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class KnownLatentConfig:
+    """Known-latent nonlinear-observation synthetic system settings."""
+
+    alpha: float = 0.08
+    omega: float = 1.6
+    base_dt: float = 0.05
+    variable_dt: bool = True
+    dt_jitter: float = 0.2
+    num_steps: int = 72
+    num_trajectories: int = 18
+
+    def __post_init__(self) -> None:
+        if self.alpha <= 0 or self.omega <= 0 or self.base_dt <= 0:
+            raise ValueError("known-latent alpha, omega, and base_dt must be positive")
+        if not 0 <= self.dt_jitter < 1:
+            raise ValueError("known-latent dt_jitter must lie in [0,1)")
+        if not self.variable_dt and self.dt_jitter != 0:
+            raise ValueError("constant-dt known-latent data requires dt_jitter=0")
+        if self.num_steps < 2 or self.num_trajectories < 3:
+            raise ValueError("known-latent data requires at least 2 steps and 3 trajectories")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "alpha": self.alpha,
+            "omega": self.omega,
+            "base_dt": self.base_dt,
+            "variable_dt": self.variable_dt,
+            "dt_jitter": self.dt_jitter,
+            "num_steps": self.num_steps,
+            "num_trajectories": self.num_trajectories,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> KnownLatentConfig:
+        allowed = {
+            "alpha",
+            "omega",
+            "base_dt",
+            "variable_dt",
+            "dt_jitter",
+            "num_steps",
+            "num_trajectories",
+        }
+        _reject_unknown(data, allowed, "known-latent config")
+        defaults = cls()
+        return cls(
+            alpha=float(data.get("alpha", defaults.alpha)),
+            omega=float(data.get("omega", defaults.omega)),
+            base_dt=float(data.get("base_dt", defaults.base_dt)),
+            variable_dt=bool(data.get("variable_dt", defaults.variable_dt)),
+            dt_jitter=float(data.get("dt_jitter", defaults.dt_jitter)),
+            num_steps=int(data.get("num_steps", defaults.num_steps)),
+            num_trajectories=int(data.get("num_trajectories", defaults.num_trajectories)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class KoopmanAutoencoderConfig:
+    """Small vector MLP architecture for V0.4 learned coordinates."""
+
+    observation_dim: int = 5
+    latent_dim: int = 2
+    hidden_dim: int = 32
+    encoder_hidden_layers: int = 1
+    decoder_hidden_layers: int = 2
+    activation: str = "tanh"
+
+    def __post_init__(self) -> None:
+        if self.observation_dim < 1 or self.latent_dim < 1 or self.hidden_dim < 1:
+            raise ValueError("autoencoder dimensions must be positive")
+        if self.encoder_hidden_layers not in {0, 1, 2}:
+            raise ValueError("V0.4 encoder_hidden_layers must be 0, 1, or 2")
+        if self.decoder_hidden_layers not in {1, 2}:
+            raise ValueError("V0.4 decoder_hidden_layers must be 1 or 2")
+        if self.activation not in {"tanh", "silu"}:
+            raise ValueError("autoencoder activation must be tanh or silu")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "observation_dim": self.observation_dim,
+            "latent_dim": self.latent_dim,
+            "hidden_dim": self.hidden_dim,
+            "encoder_hidden_layers": self.encoder_hidden_layers,
+            "decoder_hidden_layers": self.decoder_hidden_layers,
+            "activation": self.activation,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> KoopmanAutoencoderConfig:
+        allowed = {
+            "observation_dim",
+            "latent_dim",
+            "hidden_dim",
+            "encoder_hidden_layers",
+            "decoder_hidden_layers",
+            "activation",
+        }
+        _reject_unknown(data, allowed, "Koopman autoencoder config")
+        defaults = cls()
+        return cls(
+            observation_dim=int(data.get("observation_dim", defaults.observation_dim)),
+            latent_dim=int(data.get("latent_dim", defaults.latent_dim)),
+            hidden_dim=int(data.get("hidden_dim", defaults.hidden_dim)),
+            encoder_hidden_layers=int(
+                data.get("encoder_hidden_layers", defaults.encoder_hidden_layers)
+            ),
+            decoder_hidden_layers=int(
+                data.get("decoder_hidden_layers", defaults.decoder_hidden_layers)
+            ),
+            activation=str(data.get("activation", defaults.activation)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RepresentationLossConfig:
+    """Independent V0.4 representation-loss weights."""
+
+    lambda_k: float = 1.0
+    lambda_multi: float = 1.0
+    lambda_rec: float = 1.0
+    lambda_var: float = 0.2
+    lambda_spec: float = 0.0
+    min_std: float = 0.15
+    stability_margin: float = 0.0
+
+    def __post_init__(self) -> None:
+        weights = (
+            self.lambda_k,
+            self.lambda_multi,
+            self.lambda_rec,
+            self.lambda_var,
+            self.lambda_spec,
+        )
+        if any(weight < 0 for weight in weights) or sum(weights) <= 0:
+            raise ValueError("representation loss weights must be non-negative and nonzero")
+        if self.min_std <= 0:
+            raise ValueError("representation min_std must be positive")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "lambda_k": self.lambda_k,
+            "lambda_multi": self.lambda_multi,
+            "lambda_rec": self.lambda_rec,
+            "lambda_var": self.lambda_var,
+            "lambda_spec": self.lambda_spec,
+            "min_std": self.min_std,
+            "stability_margin": self.stability_margin,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RepresentationLossConfig:
+        allowed = {
+            "lambda_k",
+            "lambda_multi",
+            "lambda_rec",
+            "lambda_var",
+            "lambda_spec",
+            "min_std",
+            "stability_margin",
+        }
+        _reject_unknown(data, allowed, "representation loss config")
+        defaults = cls()
+        return cls(
+            lambda_k=float(data.get("lambda_k", defaults.lambda_k)),
+            lambda_multi=float(data.get("lambda_multi", defaults.lambda_multi)),
+            lambda_rec=float(data.get("lambda_rec", defaults.lambda_rec)),
+            lambda_var=float(data.get("lambda_var", defaults.lambda_var)),
+            lambda_spec=float(data.get("lambda_spec", defaults.lambda_spec)),
+            min_std=float(data.get("min_std", defaults.min_std)),
+            stability_margin=float(
+                data.get("stability_margin", defaults.stability_margin)
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RepresentationTrainingConfig:
+    """Minimal optimizer and diagnostic-run controls for V0.4."""
+
+    epochs: int = 700
+    batch_size: int = 256
+    learning_rate: float = 0.003
+    weight_decay: float = 0.0
+    init_scale: float = 0.05
+    ablation_epochs: int = 160
+    duffing_epochs: int = 300
+    diagnostic_interval: int = 100
+
+    def __post_init__(self) -> None:
+        if self.epochs < 1 or self.batch_size < 2 or self.learning_rate <= 0:
+            raise ValueError("representation epochs/batch_size/lr must be positive")
+        if (
+            self.weight_decay < 0
+            or self.init_scale < 0
+            or self.ablation_epochs < 1
+            or self.duffing_epochs < 1
+            or self.diagnostic_interval < 1
+        ):
+            raise ValueError("representation regularization/diagnostic epochs are invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "epochs": self.epochs,
+            "batch_size": self.batch_size,
+            "learning_rate": self.learning_rate,
+            "weight_decay": self.weight_decay,
+            "init_scale": self.init_scale,
+            "ablation_epochs": self.ablation_epochs,
+            "duffing_epochs": self.duffing_epochs,
+            "diagnostic_interval": self.diagnostic_interval,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RepresentationTrainingConfig:
+        allowed = {
+            "epochs",
+            "batch_size",
+            "learning_rate",
+            "weight_decay",
+            "init_scale",
+            "ablation_epochs",
+            "duffing_epochs",
+            "diagnostic_interval",
+        }
+        _reject_unknown(data, allowed, "representation training config")
+        defaults = cls()
+        return cls(
+            epochs=int(data.get("epochs", defaults.epochs)),
+            batch_size=int(data.get("batch_size", defaults.batch_size)),
+            learning_rate=float(data.get("learning_rate", defaults.learning_rate)),
+            weight_decay=float(data.get("weight_decay", defaults.weight_decay)),
+            init_scale=float(data.get("init_scale", defaults.init_scale)),
+            ablation_epochs=int(data.get("ablation_epochs", defaults.ablation_epochs)),
+            duffing_epochs=int(data.get("duffing_epochs", defaults.duffing_epochs)),
+            diagnostic_interval=int(
+                data.get("diagnostic_interval", defaults.diagnostic_interval)
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RepresentationEvaluationConfig:
+    """Held-out V0.4 evaluation controls."""
+
+    rollout_horizon: int = 60
+    max_test_reconstruction_mse: float = 1e-3
+    min_alignment_r2: float = 0.98
+    max_frequency_relative_error: float = 0.02
+    min_latent_std: float = 0.01
+
+    def __post_init__(self) -> None:
+        if self.rollout_horizon < 2:
+            raise ValueError("representation rollout_horizon must be at least 2")
+        if self.max_test_reconstruction_mse <= 0:
+            raise ValueError("maximum reconstruction MSE must be positive")
+        if not 0 < self.min_alignment_r2 <= 1:
+            raise ValueError("minimum alignment R2 must lie in (0,1]")
+        if self.max_frequency_relative_error <= 0 or self.min_latent_std <= 0:
+            raise ValueError("frequency error and latent std thresholds must be positive")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rollout_horizon": self.rollout_horizon,
+            "max_test_reconstruction_mse": self.max_test_reconstruction_mse,
+            "min_alignment_r2": self.min_alignment_r2,
+            "max_frequency_relative_error": self.max_frequency_relative_error,
+            "min_latent_std": self.min_latent_std,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RepresentationEvaluationConfig:
+        allowed = {
+            "rollout_horizon",
+            "max_test_reconstruction_mse",
+            "min_alignment_r2",
+            "max_frequency_relative_error",
+            "min_latent_std",
+        }
+        _reject_unknown(data, allowed, "representation evaluation config")
+        defaults = cls()
+        return cls(
+            rollout_horizon=int(data.get("rollout_horizon", defaults.rollout_horizon)),
+            max_test_reconstruction_mse=float(
+                data.get(
+                    "max_test_reconstruction_mse",
+                    defaults.max_test_reconstruction_mse,
+                )
+            ),
+            min_alignment_r2=float(
+                data.get("min_alignment_r2", defaults.min_alignment_r2)
+            ),
+            max_frequency_relative_error=float(
+                data.get(
+                    "max_frequency_relative_error",
+                    defaults.max_frequency_relative_error,
+                )
+            ),
+            min_latent_std=float(
+                data.get("min_latent_std", defaults.min_latent_std)
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DataConfig:
     """Static data expectations shared by V0.2+ pipelines."""
 
@@ -547,7 +851,7 @@ class DataConfig:
 
 @dataclass(frozen=True, slots=True)
 class ProjectConfig:
-    """Resolved configuration with optional V0.3 direct-state sections."""
+    """Resolved configuration with optional V0.3 and V0.4 experiment sections."""
 
     architecture: ArchitectureConfig
     training: TrainingConfig
@@ -557,6 +861,11 @@ class ProjectConfig:
     duffing: DuffingConfig | None = None
     identification: DirectIdentificationConfig | None = None
     evaluation: KoopmanEvaluationConfig | None = None
+    known_latent: KnownLatentConfig | None = None
+    autoencoder: KoopmanAutoencoderConfig | None = None
+    representation_loss: RepresentationLossConfig | None = None
+    representation_training: RepresentationTrainingConfig | None = None
+    representation_evaluation: RepresentationEvaluationConfig | None = None
     project_version: str = PROJECT_VERSION
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -566,21 +875,30 @@ class ProjectConfig:
                 f"config project version {self.project_version!r} does not match "
                 f"runtime version {PROJECT_VERSION!r}"
             )
-        v0_3_sections = (
-            self.koopman,
-            self.oscillator,
-            self.duffing,
-            self.identification,
-            self.evaluation,
-        )
+        v0_3_sections = (self.oscillator, self.identification, self.evaluation)
         if any(section is not None for section in v0_3_sections) and not all(
             section is not None for section in v0_3_sections
         ):
-            raise ValueError("V0.3 config must provide all direct-state sections together")
-        if self.koopman is not None and self.koopman.state_dim != 2:
-            raise ValueError("V0.3 oscillator experiments require Koopman state_dim=2")
-        if self.koopman is not None:
-            assert self.oscillator is not None
+            raise ValueError("V0.3 config must provide oscillator/identification/evaluation")
+        v0_4_sections = (
+            self.known_latent,
+            self.autoencoder,
+            self.representation_loss,
+            self.representation_training,
+            self.representation_evaluation,
+        )
+        if any(section is not None for section in v0_4_sections) and not all(
+            section is not None for section in v0_4_sections
+        ):
+            raise ValueError("V0.4 config must provide all representation sections together")
+        if (any(section is not None for section in v0_3_sections) or any(
+            section is not None for section in v0_4_sections
+        )) and self.koopman is None:
+            raise ValueError("versioned Koopman experiments require a Koopman config")
+        if self.oscillator is not None:
+            assert self.koopman is not None
+            if self.koopman.state_dim != 2:
+                raise ValueError("V0.3 oscillator experiments require Koopman state_dim=2")
             expected_mode = (
                 DtMode.VARIABLE if self.oscillator.variable_dt else DtMode.CONSTANT
             )
@@ -594,6 +912,42 @@ class ProjectConfig:
                 assert self.data.constant_dt is not None
                 if abs(self.data.constant_dt - self.oscillator.base_dt) > 1e-12:
                     raise ValueError("V0.3 constant_dt must match oscillator base_dt")
+        if self.known_latent is not None:
+            assert self.koopman is not None
+            assert self.autoencoder is not None
+            assert self.representation_evaluation is not None
+            if self.koopman.state_dim != self.autoencoder.latent_dim:
+                raise ValueError("Koopman state_dim must equal autoencoder latent_dim")
+            if not self.koopman.trainable:
+                raise ValueError("V0.4 representation learning requires koopman.trainable=true")
+            if self.autoencoder.observation_dim != 5:
+                raise ValueError("V0.4 nonlinear observation requires observation_dim=5")
+            if self.data.problem_name != "known_latent_nonlinear_observation":
+                raise ValueError("V0.4 data problem_name is incompatible")
+            if self.data.action_dim != 0 or self.data.parameter_dim != 2:
+                raise ValueError("V0.4 known-latent data requires action_dim=0/parameter_dim=2")
+            expected_mode = (
+                DtMode.VARIABLE if self.known_latent.variable_dt else DtMode.CONSTANT
+            )
+            if self.data.dt_mode is not expected_mode:
+                raise ValueError("V0.4 data dt_mode must match known_latent variable_dt")
+            if expected_mode is DtMode.CONSTANT:
+                assert self.data.constant_dt is not None
+                if abs(self.data.constant_dt - self.known_latent.base_dt) > 1e-12:
+                    raise ValueError("V0.4 constant_dt must match known_latent base_dt")
+            if self.data.normalization.kind != "standard":
+                raise ValueError(
+                    "V0.4 known-latent data requires train-only standard normalization"
+                )
+            if self.data.horizon < 2:
+                raise ValueError("V0.4 multi-step training requires data horizon > 1")
+            if self.known_latent.num_steps < self.data.history + self.data.horizon - 1:
+                raise ValueError("V0.4 trajectories are too short for history/horizon")
+            if (
+                self.representation_evaluation.rollout_horizon
+                > self.known_latent.num_steps
+            ):
+                raise ValueError("V0.4 rollout horizon exceeds known-latent trajectory length")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -607,6 +961,23 @@ class ProjectConfig:
                 None if self.identification is None else self.identification.to_dict()
             ),
             "evaluation": None if self.evaluation is None else self.evaluation.to_dict(),
+            "known_latent": (
+                None if self.known_latent is None else self.known_latent.to_dict()
+            ),
+            "autoencoder": None if self.autoencoder is None else self.autoencoder.to_dict(),
+            "representation_loss": (
+                None if self.representation_loss is None else self.representation_loss.to_dict()
+            ),
+            "representation_training": (
+                None
+                if self.representation_training is None
+                else self.representation_training.to_dict()
+            ),
+            "representation_evaluation": (
+                None
+                if self.representation_evaluation is None
+                else self.representation_evaluation.to_dict()
+            ),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }
@@ -624,6 +995,11 @@ class ProjectConfig:
                 "duffing",
                 "identification",
                 "evaluation",
+                "known_latent",
+                "autoencoder",
+                "representation_loss",
+                "representation_training",
+                "representation_evaluation",
                 "project_version",
                 "tags",
             },
@@ -666,6 +1042,45 @@ class ProjectConfig:
                 if data.get("evaluation") is None
                 else KoopmanEvaluationConfig.from_dict(
                     _ensure_mapping(data["evaluation"], "Koopman evaluation config")
+                )
+            ),
+            known_latent=(
+                None
+                if data.get("known_latent") is None
+                else KnownLatentConfig.from_dict(
+                    _ensure_mapping(data["known_latent"], "known-latent config")
+                )
+            ),
+            autoencoder=(
+                None
+                if data.get("autoencoder") is None
+                else KoopmanAutoencoderConfig.from_dict(
+                    _ensure_mapping(data["autoencoder"], "Koopman autoencoder config")
+                )
+            ),
+            representation_loss=(
+                None
+                if data.get("representation_loss") is None
+                else RepresentationLossConfig.from_dict(
+                    _ensure_mapping(data["representation_loss"], "representation loss config")
+                )
+            ),
+            representation_training=(
+                None
+                if data.get("representation_training") is None
+                else RepresentationTrainingConfig.from_dict(
+                    _ensure_mapping(
+                        data["representation_training"], "representation training config"
+                    )
+                )
+            ),
+            representation_evaluation=(
+                None
+                if data.get("representation_evaluation") is None
+                else RepresentationEvaluationConfig.from_dict(
+                    _ensure_mapping(
+                        data["representation_evaluation"], "representation evaluation config"
+                    )
                 )
             ),
             project_version=str(data.get("project_version", PROJECT_VERSION)),

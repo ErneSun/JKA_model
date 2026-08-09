@@ -1,4 +1,4 @@
-"""Stage contracts and minimal V0.3 direct-state identification."""
+"""Stage contracts and minimal V0.3/V0.4 Koopman training loops."""
 
 from jka_model.training.direct_koopman import (
     IdentificationResult,

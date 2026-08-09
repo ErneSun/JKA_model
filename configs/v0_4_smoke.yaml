@@ -1,0 +1,80 @@
+architecture:
+  package: jka_model
+  revision: "2.2"
+data:
+  problem_name: known_latent_nonlinear_observation
+  action_dim: 0
+  parameter_dim: 2
+  dt_mode: variable
+  constant_dt: null
+  history: 2
+  horizon: 8
+  split:
+    train: 0.67
+    validation: 0.17
+    test: 0.16
+    seed: 41
+  normalization:
+    kind: standard
+    eps: 1.0e-6
+  toy_advection_diffusion: null
+koopman:
+  state_dim: 2
+  trainable: true
+  dtype: float64
+known_latent:
+  alpha: 0.05
+  omega: 1.2
+  base_dt: 0.1
+  variable_dt: true
+  dt_jitter: 0.2
+  num_steps: 80
+  num_trajectories: 30
+autoencoder:
+  observation_dim: 5
+  latent_dim: 2
+  hidden_dim: 48
+  encoder_hidden_layers: 0
+  decoder_hidden_layers: 2
+  activation: tanh
+representation_loss:
+  lambda_k: 10.0
+  lambda_multi: 50.0
+  lambda_rec: 10.0
+  lambda_var: 10.0
+  lambda_spec: 0.01
+  min_std: 0.2
+  stability_margin: 0.0
+representation_training:
+  epochs: 1000
+  batch_size: 256
+  learning_rate: 0.003
+  weight_decay: 0.0
+  init_scale: 0.05
+  ablation_epochs: 160
+  duffing_epochs: 300
+  diagnostic_interval: 100
+representation_evaluation:
+  rollout_horizon: 60
+  max_test_reconstruction_mse: 1.0e-3
+  min_alignment_r2: 0.98
+  max_frequency_relative_error: 0.02
+  min_latent_std: 0.01
+duffing:
+  delta: 0.2
+  alpha: 1.0
+  beta: 0.5
+  dt: 0.02
+  num_steps: 120
+  num_trajectories: 8
+  rk4_substeps: 2
+project_version: 0.4.0
+tags:
+  - v0.4
+  - learned-representation
+  - synthetic
+training:
+  deterministic: true
+  run_root: runs
+  seed: 17
+  stage: koopman

@@ -1,6 +1,6 @@
 # V0.3 Code Walkthrough — Direct-State Continuous-Time KoopmanCore
 
-本文对应仓库中的最终 V0.3 代码。软件版本为 `0.3.0`，架构修订仍为 `2.2`。本版本只回答：
+本文对应仓库中的历史 V0.3 代码；当前运行时软件版本为 `0.4.0`，架构修订仍为 `2.2`。本版本只回答：
 给定低维 direct state `z`，continuous-time linear generator 能否被正确传播、学习和分析？
 
 ## 1. V0.3 到底增加了什么
