@@ -3,7 +3,7 @@
 > 面向流体、燃烧与一般 PDE 动力系统的结构化潜在世界模型设计文档  
 > 目标：将 **JEPA 的潜在预测、Koopman 的结构化动力学、Attention 的跨模态/长时耦合建模** 与 **物理约束、可选择物理解码和控制接口** 统一到一个可直接实现的软件架构中。
 
-> **Revision v2.1**：在 v2.0 的三类 latent 分层架构基础上，新增一套面向 Codex 实际编码的**强工程契约**：统一时间/动作对齐、严格 Batch 数据结构、raw/model 两套物理量语义、EMA 与同坐标 latent target 的分离、closed-loop rollout 防泄漏协议、训练阶段状态机、checkpoint schema、数值精度边界、配置校验、数据指纹、梯度所有权测试与版本级科学验收规则。特别修复一个关键闭环问题：未来时刻没有真实 `z_phys` 时，closure 必须使用 `PhysicalReadout(z_K)` 的预测物理锚点，禁止读取未来真值。
+> **Revision v2.2**：重新整理 latent 的数学角色。核心状态不再采用旧版 `z_phys + z_K + z_R` 三个并列 latent，而改为 **PhysicsConstraint / optional PhysicalProbe + Koopman dynamical state `z_K` + history-dependent closure state `z_R`**。物理性由 governing equations、边界条件、守恒/耗散、状态可容许性与 constitutive relations 定义，而不是通过穷举物理量形成第三个 latent。`z_R` 只在冻结 Koopman 表示后，由同一 Koopman 坐标系中的真实未来 latent 与 Koopman base prediction 的差值构造监督目标。新增训练用轻量 decoder，使物理方程能够直接约束 decoded prediction；该 decoder 可在控制类部署中丢弃。工程契约继续沿用 v2.1 的时间对齐、EMA、closed-loop 防泄漏、checkpoint、梯度所有权和版本化验收规则。
 
 ---
 
@@ -26,7 +26,7 @@ U_{t+1}=\Phi_{\Delta t}(U_t,a_t;\mu),
 其中：
 
 - \(U_t\in\mathcal X\)：高维物理状态，例如二维/三维流场 \([\rho,u,v,w,p,T,Y_i,\ldots]\)；
-- \(a_t\in\mathcal A\)：控制量，例如质量流量、入口压力、阀门开度、喷注参数、外力等；（）
+- \(a_t\in\mathcal A\)：控制量，例如质量流量、入口压力、阀门开度、喷注参数、外力等；
 - \(\mu\)：静态或慢变物理参数，例如 Reynolds 数、Mach 数、几何参数、边界条件、材料参数等；
 - \(\Phi_{\Delta t}\)：真实但昂贵、未知或仅能通过 CFD/FEM/实验访问的演化算子。
 
@@ -91,13 +91,13 @@ z_t
 
 \[
 \boxed{
-\text{Physics grounding}:\ \text{确保 latent 与真实物理量和物理规律相连}
+\text{PhysicsConstraint}:\ \text{定义并约束物理可容许状态与演化}
 }
 \]
 
 \[
 \boxed{
-\text{Selective decoder}:\ \text{仅在任务需要时恢复完整物理场}
+\text{Training/Selective decoder}:\ \text{训练时映射回物理空间施加约束，部署时按任务选择保留}
 }
 \]
 
@@ -117,256 +117,203 @@ z_t
 
 ---
 
-## 3. 三类潜在状态：非对称、分层而非并列切片
+## 3. 核心状态设计：PhysicsConstraint + `z_K` + `z_R`
 
-本框架仍保留三类 latent 的概念：
+### 3.1 不再把物理性定义成第三个 latent
+
+设离散后的真实物理状态为
+
+\[
+U_t\in\mathcal X,
+\]
+
+但系统真实可访问的状态并不是整个任意欧氏空间，而是满足 governing equations、边界条件、constitutive relations、守恒/耗散和状态可容许性的集合：
 
 \[
 \boxed{
-\mathcal S_t^{latent}
+\mathcal M_{\rm phys}
 =
-\left(
- z_t^{\mathrm{phys}},
- z_t^{K},
- z_t^{R}
-\right)
+\left\{
+U:\;
+\mathcal R_{\rm PDE}(U)=0,\;
+\mathcal B(U)=0,\;
+\mathcal C(U)=0,\;
+\mathcal A(U)\ge 0
+\right\}.
 }
 \]
 
-但 **v2.0 不再建议** 使用一个 Encoder 输出
+因此本框架不再定义一个需要穷举或学习的
 
 \[
-E(U_t)=[z_t^{\mathrm{phys}},z_t^K,z_t^R]
+z_t^{\rm phys}.
 \]
 
-然后让三部分一起自由反向传播。这样极易出现三种 representation 重新混合、复制信息，最终退化为一个不可解释的大黑箱。
+物理信息被拆成两类对象：
 
-三类 latent 应具有不同来源、不同训练信号和不同职责：
+1. **PhysicsConstraint**：定义哪些状态/演化是物理允许的，是核心约束；
+2. **PhysicalProbe（可选）**：少量任务相关的可观测量，仅用于诊断、grounding、控制目标或消融，不是模型状态的一部分。
+
+可选 probe 记为
 
 \[
 \boxed{
-\begin{aligned}
-z_t^{\mathrm{phys}} &: \text{physical anchoring，尽量由已知物理量直接构造};\\
-z_t^{K} &: \text{Koopman lifting，学习主要可结构化动力学};\\
-z_t^{R} &: \text{closure/memory state，学习结构化模型剩余误差的历史依赖。}
-\end{aligned}
+q_t=G_{\rm probe}(U_t),
 }
 \]
 
-因此推荐的因果顺序是
+例如能量、升阻力、主频、局部压力传感器值等。`q_t` 不要求穷尽全部物理量，也不要求形成完备坐标；它只是可解释的观测接口。
+
+### 3.2 这不是“枚举所有物理量”的问题
+
+对于一个闭合的 PDE 系统，应首先选择一个足够描述演化的基本状态，例如可压缩反应流可采用
+
+\[
+U=[\rho,\rho\mathbf u,\rho E,\rho Y_1,\ldots,\rho Y_{N_s-1}],
+\]
+
+压力、温度、焓、涡量、Mach 数等大量派生物理量都可以写成
+
+\[
+q_i=G_i(U,\nabla U,\mu).
+\]
+
+因此不需要枚举它们。需要人工给定的是**状态定义与物理算子**，机器学习负责寻找适合描述其动力学的低维坐标。
+
+这使问题成为
 
 \[
 \boxed{
-\text{Physical anchoring}
-\rightarrow
-\text{Koopman discovery}
-\rightarrow
-\text{Residual closure}
-\rightarrow
-\text{JEPA joint alignment}
+\text{physics-defined admissible state space}
++\text{learned dynamical coordinates}
 }
 \]
 
-### 3.1 `z_phys`：显式物理锚点，不要求网络重新发现已知物理
+而不是物理量枚举问题。
 
-定义一个尽可能确定性的物理映射
+### 3.3 `z_K`：真正的 learned dynamical coordinates
 
-\[
-\boxed{
-z_t^{\mathrm{phys}}
-=G_{\mathrm{phys}}(U_t,\mu)
-}
-\]
-
-其中 `G_phys` 优先使用解析计算、离散积分、统计量、谱分析或已知传感器量，而不是神经网络。
-
-例如二维流体可取
-
-\[
-z_t^{\mathrm{phys}}
-=
-[
-M,
-P_x,
-P_y,
-E_k,
-\Omega,
-C_D,
-C_L,
-p_{\mathrm{rms}},
-f_{\mathrm{dom}},\ldots
-].
-\]
-
-典型物理量包括
-
-\[
-M_t=\int_\Omega \rho\,d\Omega,
-\]
-
-\[
-P_x=\int_\Omega \rho u\,d\Omega,
-\]
-
-\[
-E_k=\int_\Omega \frac12\rho |\mathbf u|^2\,d\Omega,
-\]
-
-\[
-\Omega=\int_\Omega \frac12|\boldsymbol\omega|^2\,d\Omega.
-\]
-
-第一版推荐
+定义可学习 lifting
 
 \[
 \boxed{
-z_t^{\mathrm{phys}}
-=\operatorname{Normalize}(G_{\mathrm{phys}}(U_t))
-}
-\]
-
-且 `G_phys` **无可训练参数**。这样 physical identifiability 从架构层面成立，而不是依赖 latent 后验解释。
-
-如果后续确实需要一个可学习的 physical branch，可增加
-
-\[
-\tilde z_t^{\mathrm{phys}}=E_{\mathrm{phys}}(z_t^{\mathrm{phys}}),
-\qquad
-\hat q_t=D_{\mathrm{phys}}(\tilde z_t^{\mathrm{phys}}),
-\]
-
-并使用
-
-\[
-\mathcal L_{\mathrm{phys\text{-}recon}}
-=\|\hat q_t-q_t\|_2^2,
-\]
-
-但这属于后续扩展，不属于 MVP。
-
-### 3.2 `z_K`：Koopman-structured dynamical latent
-
-定义可学习 lifting/encoder
-
-\[
-\boxed{
-z_t^K=E_K(U_t,\mu),
+z_t^K=E_K(U_t^{\rm model},\mu),
 \qquad
 z_t^K\in\mathbb R^{d_K}.
 }
 \]
 
-它的职责不是重构所有场细节，而是寻找一个有限维表示，使主要动力学尽量满足结构化演化：
+这里 `U_model` 是经过 normalization/preprocessing 后的网络输入；物理约束仍在 raw-unit physical space 中定义。
 
-离散时间：
+`E_K` 的目标不是简单压缩，而是寻找一个坐标图，使主要动力学尽量具有有限维 Koopman closure：
 
 \[
 \boxed{
-\tilde z_{t+1}^{K}
-=K_{\Delta t}(\mu)z_t^K+B_d(\mu)a_t
+E_K\big(\Phi_{\Delta t}(U_t,a_t)\big)
+\approx
+\mathcal K_{\Delta t}\big(E_K(U_t),a_t\big).
 }
 \]
 
-连续时间：
+连续时间写成
 
 \[
-\boxed{
 \dot z_t^K=A(\mu)z_t^K+B(\mu)a_t,
 \qquad
 K_{\Delta t}=e^{A\Delta t}.
-}
 \]
 
-进一步可扩展为双线性 action coupling：
+从几何上，可以把
 
 \[
-\dot z_t^K
-=A z_t^K+B a_t+
-\sum_{j=1}^{d_a}a_t^{(j)}N_j z_t^K.
+E_K:\mathcal M_{\rm phys}\rightarrow\mathcal M_K
 \]
 
-`z_K` 必须通过**多步动力学一致性、非塌缩和谱诊断**共同训练，而不能只优化一步误差。
+理解为学习一张适合动力学传播的低维坐标图；理想情况下其分量接近 Koopman observables/eigenfunction-like coordinates，而不是任意压缩特征。
 
-建议目标：
+### 3.4 `z_R`：不是第二张平级流形，而是 closure/memory state
+
+有限维 `z_K` 一般无法对复杂 PDE 完全闭合。即使 `E_K` 与 Koopman core 已训练完成，仍会存在
 
 \[
-\mathcal L_K^{(1)}
+\epsilon_{t+1}
 =
-\left\|
-\operatorname{sg}(z_{t+1}^{K,tar})
--\mathcal K_{\Delta t}(z_t^K,a_t)
-\right\|_2^2,
+E_K(U_{t+1})
+-
+\mathcal K_{\Delta t}(E_K(U_t),a_t).
 \]
+
+如果这个误差具有历史依赖，则定义
 
 \[
 \boxed{
-\mathcal L_K^{multi}
-=
-\sum_{k=1}^{H_K}w_k
-\left\|
-\operatorname{sg}(z_{t+k}^{K,tar})
--
-\mathcal K_{\Delta t}^{(k)}(z_t^K,a_{t:t+k-1})
-\right\|_2^2.
+z_t^R=M_\psi(\mathcal H_t),
 }
 \]
 
-还必须防止平凡解
-
-\[
-E_K(U)\equiv 0.
-\]
-
-因此至少加入方差约束
-
-\[
-\mathcal L_{var}
-=
-\frac1{d_K}\sum_j
-\max\left(0,\sigma_{min}-\sqrt{\operatorname{Var}(z_{:,j}^K)+\epsilon}\right)^2,
-\]
-
-必要时再加入弱 covariance regularization。
-
-### 3.3 `z_R`：Residual closure / memory latent，不是第二个自由 Encoder
-
-`z_R` 的定义在 v2.0 中发生关键变化。
-
-不推荐直接写
-
-\[
-z_t^R=E_R(U_t).
-\]
-
-更合理的定义是：**只有当有限维 Koopman 状态不能完全形成 Markov closure 时，才从历史信息中产生一个 closure/memory state。**
-
-给定历史窗口
+其中
 
 \[
 \mathcal H_t=
-\left\{
- z_{t-H+1:t}^K,
- z_{t-H+1:t}^{\mathrm{phys}},
- a_{t-H+1:t},
- \mu
-\right\},
+\{z_{t-H+1:t}^{K},a_{t-H+1:t},\Delta t_{t-H+1:t},\mu\},
 \]
 
-定义
+可选地加入少量 probe `q_hist`，但默认 MVP 不依赖 probe。
+
+`z_R` 更接近一个用于**把非 Markov 的 reduced dynamics 扩展成近似 Markov 系统的隐藏记忆状态**：
 
 \[
 \boxed{
-z_t^R=M_\psi(\mathcal H_t)
+(z_t^K,z_t^R)\in\mathcal M_{\rm ext}.
 }
 \]
 
-其中 `M_psi` 可以是小型 Transformer、Attention block、SSM 或 GRU；本项目主路线采用小型 Attention/Transformer。
+因此 `z_R` 不与 `z_K` 统计独立，也不追求与 `z_K` 形成另一张独立物理流形。它的存在完全依赖于 `z_K` 的有限维 closure error。
 
-`z_R` 本身不直接等价于物理场状态，而是一个**历史闭合状态**。再通过 residual head 映射到 Koopman latent 空间中的修正：
+### 3.5 `z_R` 必须在 Koopman 完成后训练
+
+先训练并冻结
+
+\[
+E_K,\quad \mathcal K,\quad D_{\rm train}.
+\]
+
+然后在**同一冻结 Koopman 坐标系**中构造 residual label：
 
 \[
 \boxed{
-\Delta z_{t+1}^K=W_R z_t^R.
+r_{t+1}
+=
+\operatorname{sg}\left[
+E_K(U_{t+1}^{\rm model})
+-
+\mathcal K_{\Delta t}(E_K(U_t^{\rm model}),a_t)
+\right].
+}
+\]
+
+这可以离线预计算成 residual dataset：
+
+```text
+Input : z_K[t-H+1:t], action history, dt history, parameters
+Label : r[t+1]
+```
+
+然后训练
+
+\[
+z_t^R=M_\psi(\mathcal H_t),
+\qquad
+\Delta z_{t+1}^K=W_Rz_t^R,
+\]
+
+使
+
+\[
+\boxed{
+\mathcal L_R
+=
+\|g_t\Delta z_{t+1}^K-r_{t+1}\|_2^2.
 }
 \]
 
@@ -374,139 +321,114 @@ z_t^R=M_\psi(\mathcal H_t)
 
 \[
 \boxed{
-\hat z_{t+1}^{K}
+\hat z_{t+1}^K
 =
 \underbrace{\mathcal K_{\Delta t}(z_t^K,a_t)}_{\text{structured backbone}}
 +
-\underbrace{g_t\,\Delta z_{t+1}^{K}}_{\text{closure correction}}
+\underbrace{g_t\Delta z_{t+1}^K}_{\text{memory/closure correction}}.
 }
 \]
 
-其中 gate
+因此：
 
-\[
-g_t=\sigma(g_\psi(\mathcal H_t))\in[0,1]
-\]
+- `z_K` 与 `z_R` **训练阶段可以分开**；
+- `z_K` 与 `z_R` **数学作用并不独立**；
+- `z_R` 是在固定 `z_K` 表示下，为预测 residual 所学习出的 hidden representation。
 
-用于抑制 residual branch 无限制接管动力学。
+### 3.6 物理方程如何真正进入训练
 
-### 3.4 `z_R` 的直接训练目标：学习 Koopman 无法解释的误差
-
-先得到结构化预测
-
-\[
-\tilde z_{t+1}^{K}
-=\mathcal K_{\Delta t}(z_t^K,a_t).
-\]
-
-再由 target encoder 得到未来目标
-
-\[
-z_{t+1}^{K,tar}=E_{\bar\theta}(U_{t+1}).
-\]
-
-定义 residual target
+为了让物理约束直接作用于预测结果，训练阶段引入轻量 decoder
 
 \[
 \boxed{
-r_{t+1}^{tar}
-=
-\operatorname{sg}\left[
- z_{t+1}^{K,tar}-\tilde z_{t+1}^{K}
-\right].
+\hat U_t^{\rm train}=D_{\rm train}(z_t^K,\mu).
 }
 \]
 
-Attention/closure branch 只学习
+它首先提供重构约束
+
+\[
+\mathcal L_{rec}
+=
+\|\hat U_t^{\rm train}-U_t\|_W^2,
+\]
+
+防止 `E_K` 只保留“容易线性传播但无法区分真实状态”的变量；同时对预测未来状态
+
+\[
+\hat U_{t+1}^{\rm train}
+=D_{\rm train}(\hat z_{t+1}^K)
+\]
+
+施加
 
 \[
 \boxed{
-\Delta z_{t+1}^{K}
-\approx
-r_{t+1}^{tar}
-}
-\]
-
-即
-
-\[
-\mathcal L_R
+\mathcal L_{physics}
 =
-\left\|
-\Delta z_{t+1}^{K}-r_{t+1}^{tar}
-\right\|_2^2.
-\]
-
-这里的 `stop-gradient` 是架构核心：在 residual warm-up 阶段，Transformer **不能通过反向传播把 Koopman backbone 故意变差再由自己补偿**。
-
-进一步增加 residual budget：
-
-\[
-\boxed{
-\mathcal L_{budget}
-=
-\|g_t\Delta z_{t+1}^K\|_2^2
-}
-\]
-
-或稀疏版本
-
-\[
-\mathcal L_{budget}^{L1}=\|g_t\Delta z_{t+1}^K\|_1.
-\]
-
-设计原则为
-
-\[
-\boxed{
-\text{structured explanation first, neural correction second.}
-}
-\]
-
-### 3.5 三类 latent 不追求完全统计独立，而追求 functional disentanglement
-
-真实物理量之间本来就是耦合的，因此不要求
-
-\[
-z^{\mathrm{phys}}\perp z^K\perp z^R.
-\]
-
-真正要求的是：
-
-- `z_phys` 负责**物理锚定**；
-- `z_K` 负责**主要可谱分析动力学**；
-- `z_R` 负责**未闭合历史效应和非线性残差**。
-
-可以使用较弱的交叉协方差正则避免完全复制：
-
-\[
-\mathcal L_{cross}
-=
-\|\operatorname{Cov}(z^{\mathrm{phys}},z^K)\|_F^2
+\lambda_R\|\mathcal R_{\rm PDE}(\hat U)\|^2
 +
-\eta_R\|\operatorname{Cov}(z^K,z^R)\|_F^2,
+\lambda_B\|\mathcal B(\hat U)\|^2
++
+\lambda_C\|\mathcal C(\hat U)\|^2
++
+\lambda_A\mathcal P_{\rm admissible}(\hat U).
+}
 \]
 
-但该项权重必须较小，不应破坏真实的物理相关性。
+如果存在精确/高效投影，也可使用 hard constraint：
 
-### 3.6 三类状态的最终代码语义
+\[
+\hat U\leftarrow\Pi_{\mathcal M_{\rm phys}}(\tilde U).
+\]
 
-推荐在代码中明确区分：
+`D_train` 是**训练与验证工具**。后续若任务只做 latent control/MPC，可以丢弃它；若需要高分辨率全场 surrogate，再在 V1.x 增加独立高保真 decoder。
+
+### 3.7 可选 PhysicalProbe 的角色
+
+PhysicalProbe 不进入核心状态定义。它只在以下场景出现：
+
+1. 诊断 `z_K` 是否保留任务相关物理信息；
+2. 用作控制/MPC 的目标量；
+3. 做跨模型可解释指标；
+4. 作为 residual memory 的可选辅助输入进行消融。
+
+定义
+
+\[
+q_t=G_{\rm probe}(U_t),
+\qquad
+\hat q_t=H_q(z_t^K,z_t^R).
+\]
+
+对应辅助损失
+
+\[
+\mathcal L_{probe}=\|\hat q_t-q_t\|^2.
+\]
+
+但 **MVP 不要求枚举或穷尽 `q_t`**，也不允许因为 probe 缺失而改变 `z_K + z_R` 的核心动力学定义。
+
+### 3.8 最终代码语义
+
+核心运行状态只保留：
 
 ```python
 @dataclass
 class LatentState:
-    z_phys: Tensor   # [B, d_phys], explicit/anchored observables
-    z_K: Tensor      # [B, d_K], instantaneous Koopman state
-    z_R: Tensor | None  # [B, d_R], history-dependent closure memory
+    z_k: Tensor              # [B, d_k], instantaneous Koopman state
+    z_r: Tensor | None       # [B, d_r], history-dependent closure memory
 ```
 
-其中：
+物理对象单独存在：
 
-- `z_phys` 由 `PhysicalAnchor.compute()` 得到；
-- `z_K` 由 `KoopmanEncoder.forward()` 得到；
-- `z_R` 由 `ResidualMemory.forward(history)` 得到；
-- 不允许 `latent_split.py` 简单把一个向量切成三段作为最终实现。
+```python
+class PhysicsConstraint: ...   # PDE / BC / conservation / admissibility
+class PhysicalProbe: ...       # optional deterministic diagnostics q(U)
+class TrainingDecoder(nn.Module): ...  # latent -> physical state for training constraints
+```
+
+禁止把 `q_phys`、probe 或其它物理诊断量重新包装成第三个必需 latent。
 
 ## 4. Koopman 谱骨架的推荐参数化
 
@@ -562,9 +484,23 @@ A(\mu)=A_0+\sum_{k=1}^{d_\mu}\phi_k(\mu)A_k,
 
 ---
 
-## 5. Attention residual dynamics：由历史产生 `z_R`，只修正 `z_K`
+## 5. Attention residual dynamics：由 `z_K` 历史形成 `z_R`，只学习 closure
 
-Attention 不负责从零学习完整演化算子，也不直接在原始物理场上做 full transition。它首先形成历史闭合状态
+Attention 不负责从零学习完整演化算子，也不直接在原始物理场上做 full transition。它接收已经由 Koopman encoder 压缩的历史：
+
+\[
+\mathcal H_t=
+\left\{
+ z_{t-H+1:t}^{K},
+ a_{t-H+1:t},
+ \mu,
+ \Delta t_{t-H+1:t}
+\right\}.
+\]
+
+可选 PhysicalProbe 历史 `q_hist` 只作为消融输入，不是默认依赖。
+
+定义
 
 \[
 \boxed{
@@ -572,20 +508,7 @@ z_t^R=M_\psi(\mathcal H_t)
 }
 \]
 
-其中
-
-\[
-\mathcal H_t=
-\left\{
- z_{t-H+1:t}^{K},
- z_{t-H+1:t}^{\mathrm{phys}},
- a_{t-H+1:t},
- \mu,
- \Delta t
-\right\}.
-\]
-
-然后将 `z_R` 映射到 Koopman latent 空间中的 closure correction：
+并将 `z_R` 映射到 Koopman latent 空间中的 closure correction：
 
 \[
 \Delta z_{t+1}^{K}=W_Rz_t^R.
@@ -605,7 +528,7 @@ Koopman backbone 给出
 \hat z_{t+1}^{K}
 =
 \tilde z_{t+1}^{K}
-+g_t\odot\Delta z_{t+1}^{K}
++g_t\odot\Delta z_{t+1}^{K},
 }
 \]
 
@@ -615,61 +538,62 @@ Koopman backbone 给出
 g_t=\sigma(G_\eta(z_t^R))\in[0,1].
 \]
 
-Residual branch 必须满足两个训练约束：
+### 5.1 residual target 必须来自冻结的同坐标 Koopman 表示
 
-### 5.1 residual target
+Residual warm-up 开始前冻结 `E_K` 与 Koopman core。定义
 
 \[
-r_{t+1}^{tar}
-=
-\operatorname{sg}\left[
- z_{t+1}^{K,tar}-\tilde z_{t+1}^{K}
-\right],
+\boxed{
+r_{t+1}
+=\operatorname{sg}\left[
+E_K(U_{t+1})-\tilde z_{t+1}^K
+\right].
+}
 \]
+
+EMA teacher 不参与这个差分。
 
 \[
 \mathcal L_R
-=\|g_t\Delta z_{t+1}^{K}-r_{t+1}^{tar}\|_2^2.
+=\|g_t\Delta z_{t+1}^{K}-r_{t+1}\|_2^2.
 \]
 
 ### 5.2 residual budget
 
+为了防止 Attention 接管主动力学，使用
+
 \[
 \mathcal L_{budget}
-=
-\frac{
-\|g_t\Delta z_{t+1}^{K}\|_2^2
-}{
-\|\tilde z_{t+1}^{K}\|_2^2+\varepsilon
-}.
+=\|g_t\Delta z_{t+1}^K\|_2^2
 \]
 
-因此 Attention 的职责被严格限定为：
-
-1. 学习有限维 Koopman closure error；
-2. 学习非 Markov 压缩产生的 memory effect；
-3. 学习跨 latent mode 的非线性耦合；
-4. 在瞬态、模态切换和控制扰动附近提供局部修正。
-
-模型必须持续记录
+以及更稳定的相对诊断量
 
 \[
-R_{res}(t)=
-\frac{\|g_t\Delta z_{t+1}^{K}\|_2}
-{\|\tilde z_{t+1}^{K}\|_2+\epsilon}.
+\boxed{
+C_{closure}
+=\frac{\|g_t\Delta z_{t+1}^K\|}
+{\|g_t\Delta z_{t+1}^K\|+\|\tilde z_{t+1}^K-z_t^K\|+\epsilon}
+\in[0,1].
+}
 \]
 
-如果稳定区域长期出现
+稳定区域长期接近 1 说明 Koopman backbone 被架空；瞬态/切换附近上升则可能是有意义的 closure activity，需要通过实验验证。
+
+### 5.3 数学解释
+
+`z_R` 不是第二套瞬时编码，而是有限维投影后的 memory/closure variable。其目标与 Mori--Zwanzig 意义下的非 Markov memory term 接近：
 
 \[
-R_{res}\gg1,
+\text{reduced dynamics}
+=\text{Markov backbone}+\text{memory closure}+\text{unresolved noise}.
 \]
 
-则说明结构分工失败，Attention 已经接管主动力学。
+本项目首先用确定性 `z_R` 近似可预测的 memory closure；随机 unresolved component 留到 V2.x。
 
-## 6. JEPA 训练外壳：主要对齐 Koopman dynamical representation
+## 6. JEPA 训练外壳：只服务于 `z_K` 的 predictive representation
 
-JEPA 在本框架中的作用不是产生第三个任意 latent，而是为 `z_K` 提供稳定的未来 representation target。
+JEPA 不产生新的 latent 类型。它的作用是让 `E_K` 学到的表示不仅可重构、可被 Koopman 传播，而且对未来具有稳定 predictive semantics。
 
 定义 online encoder
 
@@ -682,170 +606,126 @@ z_t^K=E_\theta(U_t,\mu),
 \[
 \boxed{
 z_{t+k}^{K,tar}
-=
-\operatorname{sg}\left[E_{\bar\theta}(U_{t+k},\mu)\right].
+=\operatorname{sg}[E_{\bar\theta}(U_{t+k},\mu)].
 }
 \]
 
-Target encoder 不直接梯度更新，而使用 EMA：
+Target encoder 使用 EMA：
 
 \[
-\boxed{
-\bar\theta
-\leftarrow
-\tau\bar\theta+(1-\tau)\theta
-}
+\bar\theta\leftarrow\tau\bar\theta+(1-\tau)\theta.
 \]
 
-其中通常
-
-\[
-\tau\rightarrow1.
-\]
-
-Koopman + residual predictor 给出
-
-\[
-\hat z_{t+k}^{K}.
-\]
-
-JEPA loss：
+Koopman 或 Koopman+closure predictor 给出 \(\hat z_{t+k}^{K}\)，JEPA loss 为
 
 \[
 \boxed{
 \mathcal L_{JEPA}
-=
-\sum_{k=1}^{H_J}\omega_k
-\,d\left(
-\hat z_{t+k}^{K},
- z_{t+k}^{K,tar}
-\right).
+=\sum_{k=1}^{H_J}\omega_k\,
+d(\hat z_{t+k}^{K},z_{t+k}^{K,tar}).
 }
 \]
 
-这样 JEPA 的职责是：
+JEPA target 仅用于 representation alignment；**Residual target 必须在冻结阶段使用同一个 frozen online Koopman encoder 计算，不能把 EMA coordinate drift 当成 residual。**
 
-- 让 representation 对未来演化有用；
-- 避免把训练目标完全绑定在像素/网格重构上；
-- 为 Koopman 和 residual closure 提供共同预测空间。
+因此：
 
-`z_phys` 不需要 JEPA target，因为它由真实物理状态显式计算；`z_R` 也没有独立 target encoder，因为它是由历史生成的 closure memory，其监督来自 residual target。
+- `z_K` 是 JEPA/Koopman 共享的 predictive state；
+- `z_R` 没有独立 target encoder；
+- PhysicsConstraint 不需要 target encoder；
+- PhysicalProbe 只提供可选监督/诊断。
 
-## 7. 物理锚定与可识别性
+## 7. PhysicsConstraint 与可选 PhysicalProbe
 
-仅有 JEPA non-collapse 不足以保证 latent 是真实的“物理状态”。因此定义物理 readout
+### 7.1 强物理性来自方程和可容许状态，而不是 probe 枚举
 
-\[
-\hat q_t=H_\omega(z_t),
-\]
-
-并施加
+定义统一物理约束接口
 
 \[
 \boxed{
-\mathcal L_{ground}
-=
-\|\hat q_t-q(U_t)\|_W^2
+\mathcal L_{physics}
+=\mathcal L_{PDE}+\mathcal L_{BC}+\mathcal L_{conservation}+\mathcal L_{admissibility}+\mathcal L_{constitutive}.
 }
 \]
 
-其中 \(q(U_t)\) 选取少量真正重要的物理量，而不是完整场。
+具体系统只实现适用的项。例如可压缩流至少需要考虑守恒形式、边界通量和 EOS consistency；不可压流可包含 divergence-free constraint。
 
-如系统存在守恒量/耗散量 \(I_m(U)\)，可进一步要求
+PhysicsConstraint 应作用在 decoded raw-unit state 或其时空窗口上，而不是作用在一个人为枚举的 physical-latent vector 上。
 
-\[
-\hat I_m(z_t)=I_m(U_t),
-\]
+### 7.2 PhysicalProbe 只是可选观测接口
 
-以及
+对于任务确实关心的少量量，可以定义
 
 \[
-I_m(U_{t+1})-I_m(U_t)=0
+q_t=G_{probe}(U_t)
 \]
 
-或耗散系统中
+以及可学习 readout
 
 \[
-I_m(U_{t+1})-I_m(U_t)\le0.
+\hat q_t=H_q(z_t^K,z_t^R).
 \]
 
-若有控制动作，需要避免 counterfactual collapse：同一 \(z_t\) 下明显不同的动作应产生可区分的未来状态
+辅助损失
+
+\[
+\mathcal L_{probe}=\|\hat q_t-q_t\|_W^2.
+\]
+
+Probe 的选择应由任务和诊断需求决定，而不是试图穷尽所有物理变量。
+
+### 7.3 Counterfactual identifiability
+
+若有控制动作，需要避免不同动作在 latent 中被压成同一未来：
 
 \[
 \hat z_{t+1}^{(1)}=P(z_t,a_t^{(1)}),\qquad
 \hat z_{t+1}^{(2)}=P(z_t,a_t^{(2)}).
 \]
 
-可使用 margin loss：
+可以使用 action-held-out evaluation 或 margin/counterfactual loss，具体放在 action-conditioned 版本实现。
 
-\[
-\mathcal L_{cf}
-=
-\max\left(
-0,
-\kappa\|a_t^{(1)}-a_t^{(2)}\|
--
-\|\hat z_{t+1}^{(1)}-\hat z_{t+1}^{(2)}\|
-\right).
-\]
+## 8. 两级 Decoder：训练约束 Decoder 与任务 Decoder
 
----
+### 8.1 `D_train`：训练阶段的轻量物理解码器
 
-## 8. 可选择的物理解码
-
-### 8.1 完整场预测任务
-
-若需要 CFD/FEM surrogate：
+为了避免 Koopman encoder 得到无法区分真实状态的任意 representation，并让 PDE/BC/守恒可以直接作用于预测，基础训练阶段需要
 
 \[
 \boxed{
-\hat U_t=D_\phi(z_t,\mu)
+\hat U_t^{train}=D_{train}(z_t^K,\mu).
 }
 \]
 
-并使用
+使用
 
 \[
-\mathcal L_{field}
-=\|W_U(\hat U_t-U_t)\|^2.
+\mathcal L_{rec}=\|\hat U_t^{train}-U_t\|^2
 \]
 
-必要时增加 PDE residual、BC/IC consistency、flux/conservation loss。
+以及对未来预测 decoded state 的 `L_physics`。
 
-### 8.2 控制/规划任务
+`D_train` 不承担时间演化，只承担 latent 到物理状态的映射；它可以是低容量、低分辨率或仅在训练阶段存在。
 
-若只需要控制，则不必恢复百万维流场，只需
+### 8.2 高保真 field decoder：后续可选
+
+若最终任务需要 CFD/FEM surrogate，再训练
 
 \[
-\boxed{
-\hat q_t=H_\omega(z_t)
-}
+\hat U_t=D_{field}(z_t^K,z_t^R,\mu).
 \]
 
-并在 latent rollout 上进行 MPC：
+它可以独立于 `D_train`，并在 V1.x 以后增加容量。
+
+### 8.3 控制/规划任务
+
+若只需要控制，可以部署
 
 \[
-\boxed{
-\mathbf a^*
-=
-\arg\min_{a_{t:t+H_c-1}}
-\sum_{k=1}^{H_c}
-\ell\left(
-H_\omega(\hat z_{t+k}),q_{target}
-\right)
-+\lambda_a\|a_{t+k-1}\|^2
-}
+(z_t^K,z_t^R)\rightarrow H_q\rightarrow q_t
 \]
 
-或将 latent 直接输入 policy：
-
-\[
-a_t\sim\pi_\xi(a|z_t).
-\]
-
-因此 decoder 是**任务接口**，不是 JEPA 世界模型成立的必要条件。
-
----
+或直接输入 policy/MPC，而不部署 field decoder。因此“训练时需要物理映射”与“部署时必须输出完整物理场”是两个不同问题。
 
 ## 9. 完整损失函数：按职责分组，而不是一次性全部开启
 
@@ -862,9 +742,9 @@ a_t\sim\pi_\xi(a|z_t).
 +\lambda_J\mathcal L_{JEPA}
 +\lambda_R\mathcal L_R
 +\lambda_B\mathcal L_{budget}
-+\lambda_G\mathcal L_{ground}
-+\lambda_C\mathcal L_{cross}
++\lambda_{rec}\mathcal L_{rec}
 +\lambda_P\mathcal L_{physics}
++\lambda_Q\mathcal L_{probe}
 +\lambda_{cf}\mathcal L_{cf}
 +\lambda_F\mathcal L_{field}.
 }
@@ -979,28 +859,32 @@ R_{res}(t)
 
 作为关键诊断量。
 
-### 9.8 Physical grounding
-
-若 `z_phys` 是显式计算量，则不需要对其自身训练；grounding 主要用于检验 `z_K`/combined latent 是否仍能恢复关键可观测量：
+### 9.8 Reconstruction / state sufficiency
 
 \[
-\hat q_t=H_\omega(z_t^K,z_t^R),
+\boxed{
+\mathcal L_{rec}=\|D_{train}(z_t^K)-U_t\|_W^2.
+}
+\]
+
+该项不是为了把模型退化成重构型 autoencoder，而是防止 `z_K` 只保留“容易线性传播但不足以区分真实物理状态”的信息。第一版可对降采样场或关键 state channels 使用低容量 decoder。
+
+### 9.9 Optional PhysicalProbe loss
+
+若任务需要少量可解释量：
+
+\[
+q_t=G_{probe}(U_t),\qquad
+\hat q_t=H_q(z_t^K,z_t^R),
 \]
 
 \[
-\mathcal L_{ground}=\|\hat q_t-q_t\|_2^2.
+\boxed{
+\mathcal L_{probe}=\|\hat q_t-q_t\|_2^2.
+}
 \]
 
-### 9.9 Functional non-redundancy
-
-\[
-\mathcal L_{cross}
-=
-\|\operatorname{Cov}(z^{\mathrm{phys}},z^K)\|_F^2
-+\eta_R\|\operatorname{Cov}(z^K,z^R)\|_F^2.
-\]
-
-只使用小权重，目的仅是防止完全复制。
+该项默认可关闭；不存在 `z_phys` 与跨 latent covariance penalty。
 
 ### 9.10 Physics constraint
 
@@ -1016,7 +900,7 @@ R_{res}(t)
 =|E(\hat U_{t+1})-E_{expected}|^2.
 \]
 
-如果暂时没有 decoder，则优先对可观测量和 latent dynamics 加约束，而不是强行构造全场 PDE residual。
+基础 Koopman representation 阶段至少保留一个 `D_train`，使物理约束能够落到 raw-unit state。若完整 PDE residual 计算昂贵，可先从 BC、守恒、EOS/admissibility 等廉价约束开始，再逐步增加 PDE residual。
 
 ### 9.11 Action counterfactual loss
 
@@ -1039,39 +923,39 @@ R_{res}(t)
 对于规则网格二维流体，batch 推荐：
 
 ```text
-U_context : [B, H, C_u, Nx, Ny]
-a_context : [B, H, d_a]        # optional
-U_future  : [B, Kf, C_u, Nx, Ny]
-a_future  : [B, Kf, d_a]       # optional
-mu        : [B, d_mu]           # optional
-dt        : [B, Kf] or scalar
-```
-
-显式物理锚点：
-
-```text
-zphys_context : [B, H, d_phys]
-zphys_future  : [B, Kf, d_phys]
+U_context_raw   : [B, H+1, C_u, Nx, Ny] or explicit transition-aligned contract
+U_context_model : [B, H+1, C_u, Nx, Ny]
+a_context       : [B, H, d_a]        # optional
+U_future_raw    : [B, Kf, C_u, Nx, Ny]
+U_future_model  : [B, Kf, C_u, Nx, Ny]
+a_future        : [B, Kf, d_a]       # optional
+mu              : [B, d_mu]          # optional
+dt              : [B, H+Kf] or scalar
 ```
 
 Koopman representation：
 
 ```text
-zK_context      : [B, H, d_K]
-zK_future_target: [B, Kf, d_K]
+z_k_context       : [B, H, d_k]
+z_k_future_target : [B, Kf, d_k]
 ```
 
-Residual closure memory：
+Residual closure：
 
 ```text
-zR_t       : [B, d_R]
-delta_zK   : [B, d_K]
-gate       : [B, 1] or [B, d_K]
+z_r_t       : [B, d_r]
+delta_z_k   : [B, d_k]
+gate        : [B, 1] or [B, d_k]
 ```
 
-注意：`z_R` 不应预先为每个 raw frame 独立编码；它由历史窗口产生。
+可选物理 probe：
 
-第一版建议使用全局 latent vector，而不是大量 spatial tokens。只有当 V1.0 已证明全局结构成立后，才进入 spatial Koopman token / region token。
+```text
+q_context : [B, H, d_q]   # optional; deterministic from raw state
+q_future  : [B, Kf, d_q]  # metric/target only, never required for rollout
+```
+
+`z_R` 不应为每个 raw frame 独立编码；它由 `z_K` 历史窗口产生。第一版建议使用全局 latent vector，而不是大量 spatial tokens。
 
 ## 11. 推荐的最小可行模型（MVP）
 
@@ -1079,39 +963,39 @@ gate       : [B, 1] or [B, d_K]
 
 \[
 \boxed{
-G_{phys}
-+
 E_K
 +
-\text{EMA target}
+D_{train}
++
+\text{PhysicsConstraint}
++
+\text{EMA JEPA target}
 +
 \text{continuous-time Koopman core}
 +
 \text{small residual memory/Attention}
-+
-\text{physical readout}
 }
 \]
 
-但**工程开发的第一个版本不是这个完整 MVP**。必须按第三部分 V0.1–V1.0 逐步组装。
+可选增加 `PhysicalProbe` 和 probe readout，但它们不属于核心状态。
+
+工程开发仍必须按第三部分 V0.1--V1.0 逐步组装。
 
 暂时不做：
 
-- 大型 field decoder；
+- 大型高保真 field decoder；
 - RL；
 - mixture-of-Koopman experts；
 - stochastic latent；
 - 多尺度 spatial token hierarchy；
 - 3D combustion/detonation。
 
-V1.0 必须回答四个科学问题：
+V1.0 必须回答：
 
-1. `z_K` 是否真的形成比普通 representation 更稳定的 long-horizon dynamics？
-2. JEPA target 是否改善 learned lifting 的 predictive quality，而不是只改善训练表面稳定性？
-3. `z_R` / Attention 是否主要在 Koopman closure 失败处起作用，而不是接管主动力学？
-4. physical anchors/readout 是否证明 latent 的变化仍对应真实物理状态变化？
-
----
+1. `z_K` 是否形成稳定、可传播的动力学坐标？
+2. JEPA 是否改善 `z_K` 的 predictive representation，而不是只降低表面 loss？
+3. `z_R` 是否只在 Koopman closure 失败处承担可预测 memory，而不是接管主动力学？
+4. decoded prediction 是否满足预先定义的物理约束，并且这一结果不依赖穷举物理 probe？
 
 # 第二部分：各模块选择原因、理论原理与代码实现说明（详细版）
 
@@ -1211,7 +1095,7 @@ JEPA 可以避免显式像素/场重构，但 latent 仍可能只是“统计可
 - latent 距离对应物理意义；
 - 守恒量和稳定性在 latent 中被保留。
 
-因此本框架必须加入 physics grounding、action counterfactual consistency 与 Koopman dynamics constraint。
+因此本框架必须同时使用 state-sufficiency/reconstruction、decoded PhysicsConstraint、Koopman dynamics constraint；进入控制版本后再加入 action counterfactual consistency。
 
 ---
 
@@ -1369,69 +1253,90 @@ r_{res}
 
 ---
 
-## 17. 为什么三类 latent 必须采用不同训练机制
+## 17. 为什么核心状态只保留 `z_K` 与 `z_R`
 
-三类 latent 的划分不是说真实物理世界天然严格分成三组变量，而是建立一种**可审计的内部状态设计**。
-
-如果只使用单一自由 latent，容易出现：
-
-- Koopman branch 只保留“容易线性传播但没有物理信息”的变量；
-- residual network 复制全部状态并接管预测；
-- reconstruction loss 迫使 representation 保存大量任务无关细节；
-- physical probe 只能事后拟合，而不能证明 state representation 真正 grounded。
-
-因此三类状态必须使用不同学习机制。
-
-### 17.1 `z_phys`：锚定出来，而不是自由学习出来
+原先把 `z_phys`、`z_K`、`z_R` 并列的设计容易混淆三个不同层次：物理定律、动力学坐标和 memory state。v2.2 将其分离：
 
 \[
 \boxed{
-z^{phys}=G_{phys}(U)
+\text{PhysicsConstraint}\quad\neq\quad\text{latent state}
 }
 \]
 
-它回答：
-
-> 当前 latent model 是否仍然和质量、能量、频率、涡量、力系数等真实物理量保持联系？
-
-第一版固定，不参与梯度更新。
-
-### 17.2 `z_K`：通过“可演化性”学出来
+\[
+\boxed{
+z_K=\text{learned dynamical coordinates}
+}
+\]
 
 \[
 \boxed{
-z^K=E_K(U),
+z_R=\text{closure/memory state conditioned on }z_K\text{ history}
+}
+\]
+
+### 17.1 PhysicsConstraint：定义状态空间，不参与 latent 竞争
+
+它回答：
+
+> 什么样的状态和演化是物理允许的？
+
+例如 PDE residual、boundary flux、divergence-free、EOS、质量/能量守恒、正密度/正温度等。它们直接约束 `D_train(z_K)` 或预测后的 decoded state，不需要形成一个 trainable latent branch。
+
+### 17.2 `z_K`：通过可传播性、可重构性和物理一致性共同学习
+
+\[
+\boxed{
+z_t^K=E_K(U_t),
 \qquad
 z_{t+1}^K\approx\mathcal K(z_t^K)
 }
 \]
 
-它回答：
+其训练信号来自：
 
-> 哪组内部坐标最适合描述系统的主导频率、增长/衰减和长期演化？
+- one/multi-step Koopman consistency；
+- reconstruction/state sufficiency；
+- JEPA predictive target；
+- non-collapse；
+- spectral diagnostics；
+- decoded physical constraints。
 
-其训练信号来自 Koopman consistency、multi-step rollout、JEPA target、non-collapse 和 physical grounding。
-
-### 17.3 `z_R`：通过“结构模型剩余误差”学出来
+### 17.3 `z_R`：冻结 `z_K` 后，由 residual supervision 学出
 
 \[
 \boxed{
-z_t^R=M_\psi(\mathcal H_t)}
+r_{t+1}=\operatorname{sg}[E_K(U_{t+1})-\mathcal K(E_K(U_t))]
+}
 \]
-
-它不是另一个 frame encoder，而是 history-dependent closure state。
-
-它回答：
-
-> 有限维 Koopman 状态还漏掉了什么记忆效应、非线性耦合和瞬态信息？
-
-训练目标直接来自
 
 \[
-r_{t+1}^{tar}=\operatorname{sg}(z_{t+1}^{K,tar}-z_{t+1}^{K,base}).
+\boxed{
+z_t^R=M_\psi(z_{t-H:t}^K,a_{hist},dt_{hist}),
+\quad
+W_Rz_t^R\approx r_{t+1}.
+}
 \]
 
-对于模态切换问题，`R_res(t)`、gate 或 `||z_R||` 有可能进一步成为 transition indicator，但这必须通过实验验证，不能预先假定。
+因此 `z_R` 没有人工定义的分量含义；它学习的是“为了预测 Koopman closure error，历史中还需要保留什么信息”。
+
+### 17.4 几何解释
+
+`E_K` 学习
+
+\[
+\mathcal M_{phys}\rightarrow\mathcal M_K.
+\]
+
+当 `z_K` 不是严格 Markov sufficient state 时，引入 `z_R` 得到扩展状态
+
+\[
+\boxed{
+(z_K,z_R)\in\mathcal M_{ext},
+}
+\]
+
+其目的不是建立第二张独立物理流形，而是用 memory coordinate 使 reduced dynamics 更接近 Markov closure。
 
 ## 18. Encoder 应该怎么选
 
@@ -1610,7 +1515,7 @@ Kz+Ba+\sum_ja_jN_jz
 
 ## 22. Attention / ResidualMemory 应该输入什么
 
-ResidualMemory 的输入不应是 raw CFD field，也不应重复做一个大型 spatial encoder。
+ResidualMemory 的输入不应是 raw CFD field，也不应重复做一个大型 spatial encoder。默认输入只包含 `z_K` 历史、action、dt 和参数；PhysicalProbe 仅作为可选消融输入。
 
 推荐历史 token：
 
@@ -1618,7 +1523,7 @@ ResidualMemory 的输入不应是 raw CFD field，也不应重复做一个大型
 \boxed{
 \xi_i
 =P_\xi\left(
-[z_i^K,z_i^{phys},a_i,\mu,\Delta t_i]
+[z_i^K,a_i,\mu,\Delta t_i]
 \right)
 }
 \]
@@ -1696,9 +1601,9 @@ Kf = 1 -> 2 -> 4 -> 8 -> 16
 
 ---
 
-## 24. Physical grounding 如何选择
+## 24. PhysicalProbe 如何选择（可选，不属于核心状态）
 
-不要把所有网格变量都作为 grounding target，否则又退化成 reconstruction。
+不要试图穷尽所有物理变量。PhysicalProbe 只用于诊断、控制目标或额外可解释监督；强物理性由 PhysicsConstraint 保证。
 
 选择原则：
 
@@ -1733,39 +1638,49 @@ Kf = 1 -> 2 -> 4 -> 8 -> 16
 
 ---
 
-## 25. 物理约束放在什么位置
+## 25. PhysicsConstraint 放在什么位置
 
-推荐分为三层。
+物理约束应优先作用于**物理空间预测**，而不是通过枚举 latent observable 间接实现。
 
-### 层 A：latent grounding
+### 层 A：状态可容许性与 constitutive consistency
 
-\[
-H(z)\approx q(U).
-\]
-
-成本最低，第一版必须做。
-
-### 层 B：latent dynamics constraints
-
-例如 Koopman 谱约束、已知 invariant 的 latent readout consistency。
+例如正密度、正温度、质量分数 simplex、EOS consistency：
 
 \[
-I_z(\hat z_{t+1})\approx I_z(z_t).
+\mathcal L_{adm}+\mathcal L_{EOS}.
 \]
 
-### 层 C：decoded field constraints
-
-只有有 decoder 时才计算：
+### 层 B：守恒与边界条件
 
 \[
-\mathcal R_{PDE}(\hat U)=0,
+\mathcal L_{cons}+\mathcal L_{BC}.
 \]
 
-BC/IC、flux、mass/energy conservation 等。
+这类约束通常比完整 PDE residual 更便宜，适合首先加入。
 
-不建议第一版把昂贵 PDE residual 当作主要训练信号，否则难以判断性能提升来自结构化 latent 还是 PINN-style regularization。
+### 层 C：PDE residual / discrete operator consistency
 
----
+对 decoded prediction
+
+\[
+\hat U=D_{train}(\hat z_K)
+\]
+
+计算
+
+\[
+\mathcal R_{PDE}(\hat U,a,\mu,\Delta t).
+\]
+
+如果原数值离散算子可调用，优先比较离散更新/flux consistency，而不是强行使用连续自动微分 PINN residual。
+
+### 层 D：可选 PhysicalProbe readout
+
+\[
+H_q(z_K,z_R)\approx q(U)
+\]
+
+只用于 interpretability、控制目标和诊断，不承担“保证物理性”的主要责任。
 
 ## 26. Selective decoder 的设计原则
 
@@ -1806,250 +1721,144 @@ z_t\rightarrow U_t\rightarrow q_t.
 ```text
 WorldModel.transition()
 WorldModel.decode_field()
-WorldModel.read_physics()
+WorldModel.read_probe()  # optional
 ```
 
 写成三个独立接口。
 
 ---
 
-## 27. 推荐训练流程：严格分层训练，不允许一开始端到端“一锅训练”
+## 27. 推荐训练流程：先学 Koopman 坐标，再冻结生成 residual dataset
 
-训练策略本身属于架构设计的一部分。核心原则：
+核心原则：
 
 \[
 \boxed{
-\text{anchor first}
+\text{physics contracts}
 \rightarrow
-\text{Koopman first}
+\text{Koopman representation}
 \rightarrow
-\text{closure second}
+\text{JEPA refinement}
 \rightarrow
-\text{joint fine-tune last}
+\text{freeze + residual dataset}
+\rightarrow
+\text{closure memory}
+\rightarrow
+\text{controlled joint fine-tune}
 }
 \]
 
-### Stage 0：数据、物理锚点与基准
+### Stage 0：数据与 PhysicsConstraint
 
-先完成：
+完成：
 
-1. trajectory-level train/val/test 划分；
-2. window sampler；
-3. `PhysicalAnchor` 及其 normalization；
-4. baseline：Persistence、DMD/POD、AE+MLP/Transformer、Koopman-only；
-5. 固定随机种子和配置保存机制。
+1. trajectory-level train/val/test；
+2. window sampler 与 time/action/dt alignment；
+3. raw/model normalization；
+4. `PhysicsConstraint` / `ProblemSpec`；
+5. 可选 `PhysicalProbe`；
+6. Persistence、DMD/POD 等 baseline。
 
-此阶段不训练世界模型。
+### Stage 1：直接验证 KoopmanCore
 
-### Stage 1：直接验证 KoopmanCore，本阶段不要 learned encoder
+使用 oscillator / Duffing / Lorenz 等已知低维状态，只测试 `A/K`、`matrix_exp`、irregular dt、spectrum、multi-step rollout 和 checkpoint。
 
-先使用已知低维状态或合成动力系统，例如 damped oscillator / Duffing / Lorenz 的真实状态：
+### Stage 2：训练 `E_K + D_train + KoopmanCore`
 
-\[
-x_t\rightarrow A/K\rightarrow \hat x_{t+k}.
-\]
-
-目的：验证
-
-- `matrix_exp` / discrete propagation；
-- irregular `dt`；
-- eigenvalue/frequency extraction；
-- multi-step rollout；
-- gradient；
-- checkpoint/reload。
-
-如果这一阶段失败，禁止进入 field encoder。
-
-### Stage 2：训练 Koopman encoder `E_K`
-
-加入
+关闭 residual。训练
 
 \[
-z_t^K=E_K(U_t).
-\]
-
-Attention residual 保持关闭：
-
-\[
-\Delta z=0.
-\]
-
-第一轮可使用 lightweight reconstruction/readout 防止 representation 完全自由漂移：
-
-\[
-\hat U_t^{low}=D_{warm}(z_t^K)
-\]
-
-或物理 probe：
-
-\[
-\hat q_t=H(z_t^K).
-\]
-
-优化
-
-\[
-\mathcal L_{K}^{(1)}
+\mathcal L_{stage2}
+=
+\lambda_K\mathcal L_K
 +\lambda_M\mathcal L_{K,multi}
++\lambda_{rec}\mathcal L_{rec}
++\lambda_P\mathcal L_{physics}
 +\lambda_V\mathcal L_{var}
-+\lambda_G\mathcal L_{ground}.
++\lambda_S\mathcal L_{spec}.
 \]
 
-目标：证明 `z_K` 自身已经具有可用的 open-loop dynamics。
+`D_train` 只负责 latent 到物理空间的映射，不承担未来 dynamics。
 
-### Stage 3：引入 JEPA online/target encoder
+目标：先证明 `z_K` 本身是可传播且保留足够物理状态的信息。
 
-建立：
+### Stage 3：引入 JEPA target
+
+建立 online / EMA target encoder。Residual 仍关闭。使用 JEPA predictive alignment 进一步组织 `z_K`，但 Koopman dynamics target 与 residual target 的“同坐标”要求保持不变。
+
+### Stage 4：冻结结构分支并生成 residual dataset
+
+完成 Stage 3 后：
+
+```text
+freeze E_K
+freeze KoopmanCore
+freeze D_train
+hard-sync/pause EMA for residual stage
+```
+
+对训练集离线计算
 
 \[
-E_\theta\quad\text{online},
-\qquad
-E_{\bar\theta}\quad\text{EMA target}.
+r_{t+1}=E_K(U_{t+1})-\mathcal K(E_K(U_t),a_t).
 \]
 
-更新：
+缓存：
 
-\[
-\bar\theta\leftarrow\tau\bar\theta+(1-\tau)\theta.
-\]
+```text
+z_k_history
+action_history
+dt_history
+mu
+residual_target
+trajectory_id / time_index
+```
 
-此时仍然关闭 residual branch，只做：
+Residual dataset 必须带 `encoder_hash + koopman_hash`；若结构分支权重变化，旧 residual cache 自动失效。
 
-\[
-\mathcal L_{JEPA}
-+\mathcal L_K
-+\mathcal L_{K,multi}
-+\mathcal L_{var}
-+\mathcal L_{ground}.
-\]
-
-目的是先证明 **JEPA target + Koopman backbone** 可以稳定训练，而不是一次性引入 Attention。
-
-### Stage 4：Residual target 机制验证，先不用 Transformer
-
-冻结或近似冻结：
-
-- Koopman encoder；
-- Koopman core；
-- target encoder。
-
-进入本阶段时先执行 `target <- hard_copy(online)`，随后冻结 online/target/Koopman 并暂停 EMA。Residual target 使用**同坐标 online latent**：
-
-\[
-\boxed{
-r_{t+1}^{tar}
-=\operatorname{sg}[E_\theta(U_{t+1})]
--\operatorname{sg}[\tilde z_{t+1}^K].
-}
-\]
-
-EMA teacher 仅保留为 JEPA 语义，不参与 residual 差分。先用一个极小的 MLP/linear residual head 从简单 history summary 预测 residual。
-
-目的不是追求性能，而是验证：
-
-- residual target 是否数值合理；
-- stop-gradient 是否正确；
-- residual branch 是否只补偿 structured model；
-- `C_closure` / `R_closure` 指标是否能正常记录。
-
-这一版通过后才换 Attention。
+先用 tiny MLP/GRU 验证这个 supervised closure target 是否可学。
 
 ### Stage 5：Attention closure / `z_R`
 
-将 residual MLP 替换为历史依赖模块：
+替换 tiny baseline：
 
 \[
-z_t^R=M_\psi(\mathcal H_t),
-\qquad
-\Delta z_{t+1}^K=W_R z_t^R.
+z_t^R=M_\psi(z_{t-H:t}^K,a_{hist},dt_{hist},\mu),
 \]
-
-Koopman branch 继续冻结或使用极小学习率。
-
-优化
 
 \[
-\boxed{
-\mathcal L_{stage5}
-=\mathcal L_R
-+\lambda_B\mathcal L_{budget}
-+\lambda_{gate}\mathcal L_{gate}.
-}
+\Delta z_{t+1}=W_Rz_t^R.
 \]
 
-Residual head 使用 near-zero small initialization，gate bias 初始设为负值，使
+只优化 residual branch。加入 gate 与 residual budget；默认不依赖任何 PhysicalProbe。
+
+### Stage 6：Closed-loop multi-step closure
+
+从单步 residual supervision 过渡到
 
 \[
-g_t\ll 1
+\hat z_{t+1}\rightarrow\hat z_{t+2}\rightarrow\cdots
 \]
 
-开始训练，同时避免严格全零输出层在首步完全阻断 memory branch 的梯度。ResidualMemory 使用 causal mask，并将真实 `dt` 作为 token 条件。
+未来历史只压入模型自己的 `z_k_next`、给定 future action/dt/parameters；不得重新编码未来真实 `U` 作为 transition 输入。
 
-从本阶段起必须实现 closed-loop rollout：context 之后的 `z_phys` 由 `PhysicalReadout(\hat z_k)` 生成，禁止读取未来真实物理锚点。
+### Stage 7：Controlled joint fine-tune
 
-### Stage 6：联合微调
+只有前面阶段稳定后才允许小学习率解冻 `E_K/KoopmanCore`。此时离线 residual cache 不再作为唯一 target；必须在线重新计算 detached residual target，避免 encoder 坐标变化后标签过期。
 
-只有前五个阶段都通过后，才联合优化：
-
-\[
-\mathcal L_{total}.
-\]
-
-学习率建议满足
+学习率满足
 
 ```text
 LR_KoopmanEncoder << LR_ResidualAttention
 LR_KoopmanCore    << LR_ResidualAttention
 LR_TargetEncoder = 0  # EMA only
-PhysicalAnchor   = frozen
 ```
 
-例如数量级：
+### Stage 8：任务接口
 
-```text
-Koopman encoder : 1e-5
-Koopman core    : 1e-5
-Residual attn   : 1e-4
-Readout/decoder : 1e-4
-```
-
-目标是防止 joint fine-tune 把已经学到的谱结构“洗掉”。本阶段恢复 EMA，并加入 closed-loop rollout horizon curriculum；所有冻结/解冻通过统一 `TrainStage` 状态机配置，阶段切换默认重新创建 optimizer/scheduler。
-
-### Stage 7：任务头
-
-根据任务选择：
-
-#### A. 物理量/控制任务
-
-只加入
-
-\[
-H_{phys}(z_K,z_R)\rightarrow q.
-\]
-
-#### B. 全场 surrogate
-
-再加入
-
-\[
-D_{field}(z_K,z_R,\mu)\rightarrow \hat U.
-\]
-
-#### C. Action-conditioned control
-
-最后才加入
-
-\[
-B a_t,
-\quad
-\sum_j a_jN_jz,
-\quad
-\mathcal L_{cf},
-\quad
-MPC/RL.
-\]
-
-不要在第一个可运行版本中同时做完整场 decoder 和 RL。
+- 控制/规划：`H_q(z_K,z_R)` 或直接 latent MPC/policy；
+- 高保真全场：额外训练 `D_field`；
+- action-conditioned Koopman：最后加入 `B a` / bilinear terms / counterfactual test。
 
 ## 28. 代码目录建议：按职责与版本边界模块化
 
@@ -2077,8 +1886,9 @@ project/
 │   │   ├── splits.py
 │   │   └── normalization.py
 │   ├── physics/
-│   │   ├── anchors.py
-│   │   ├── observables.py
+│   │   ├── constraints.py
+│   │   ├── probes.py
+│   │   ├── operators.py
 │   │   └── invariants.py
 │   ├── config/
 │   │   ├── schema.py             # strict structured config + validation
@@ -2091,7 +1901,8 @@ project/
 │   │   ├── residual_memory.py
 │   │   ├── residual_head.py
 │   │   ├── gate.py
-│   │   ├── physical_readout.py
+│   │   ├── training_decoder.py
+│   │   ├── probe_readout.py
 │   │   ├── field_decoder.py
 │   │   └── world_model.py
 │   ├── losses/
@@ -2099,7 +1910,8 @@ project/
 │   │   ├── jepa.py
 │   │   ├── collapse.py
 │   │   ├── residual.py
-│   │   ├── grounding.py
+│   │   ├── reconstruction.py
+│   │   ├── probe.py
 │   │   ├── physics.py
 │   │   └── counterfactual.py
 │   ├── rollout/
@@ -2131,7 +1943,8 @@ project/
 │   └── visualize_latent.py
 └── tests/
     ├── test_windows.py
-    ├── test_physical_anchor.py
+    ├── test_physics_constraints.py
+    ├── test_physical_probe_optional.py
     ├── test_koopman_core.py
     ├── test_matrix_exp_grad.py
     ├── test_ema.py
@@ -2144,12 +1957,13 @@ project/
     ├── test_same_coordinate_residual_target.py
     ├── test_causal_residual_memory.py
     ├── test_no_future_leakage.py
+    ├── test_residual_cache_fingerprint.py
     └── test_closed_loop_rollout_history_update.py
 ```
 
 设计要求：
 
-1. `physics/` 不依赖神经网络；
+1. `physics/` 不依赖神经网络，且 `PhysicalProbe` 不属于 latent state；
 2. `koopman_core.py` 不依赖 JEPA 或 Transformer；
 3. `residual_memory.py` 不允许内部直接调用 Koopman core；
 4. `world_model.py` 只负责编排，不堆放具体数学实现；
@@ -2158,86 +1972,82 @@ project/
 
 ## 29. 推荐接口契约
 
-本节属于**公共 API 规范**。数学文中可以写 `z^K`，Python API 一律使用 `z_k`。
+本节属于公共 API 规范。数学文中写 `z^K,z^R`，Python API 一律使用 `z_k,z_r`。
 
-### 29.1 PhysicalAnchor
+### 29.1 PhysicsConstraint
 
 ```python
-class PhysicalAnchor:
-    def compute(self, state_raw, spec, metadata=None):
-        """Raw physical state -> explicit physical observables z_phys."""
+class PhysicsConstraint(Protocol):
+    def loss(self, pred_state_raw, *, prev_state_raw=None,
+             action=None, dt=None, spec=None, metadata=None) -> dict[str, Tensor]:
+        """Return named physical losses in raw physical units."""
         ...
 ```
 
-输入/输出：
+可以组合多个 constraint；禁止在 constraint 内部重新训练网络。
 
-```text
-state_raw : [B,C,*spatial]，必须为真实物理单位
-z_phys    : [B,d_phys]
+### 29.2 PhysicalProbe（可选）
+
+```python
+class PhysicalProbe(Protocol):
+    def compute(self, state_raw, spec, metadata=None) -> Tensor:
+        """Deterministic diagnostic q(U); never part of required latent state."""
+        ...
 ```
 
-`PhysicalAnchor` 不接收 normalized `state_model`。
-
-### 29.2 KoopmanEncoder
+### 29.3 KoopmanEncoder
 
 ```python
 class KoopmanEncoder(nn.Module):
-    def forward(self, state_model, mu_static=None):
-        """Normalized field/state -> instantaneous Koopman latent z_k."""
+    def forward(self, state_model, mu_static=None) -> Tensor:
+        """Normalized state -> z_k [B,d_k]."""
         ...
 ```
 
-### 29.3 KoopmanCore
+### 29.4 TrainingDecoder
+
+```python
+class TrainingDecoder(nn.Module):
+    def forward(self, z_k, mu_static=None) -> Tensor:
+        """z_k -> normalized/model-space state; caller converts to raw units for physics loss."""
+        ...
+```
+
+### 29.5 KoopmanCore
 
 ```python
 class KoopmanCore(nn.Module):
     def step(self, z_k, action=None, dt=None, mu_static=None):
-        """One structured latent step U_i --(a_i,dt_i)--> U_{i+1}."""
         ...
 
     def rollout(self, z_k0, future_actions=None, future_dts=None,
                 horizon=None, mu_static=None):
-        """Pure Koopman open-loop rollout; no residual/teacher access."""
         ...
 
     @torch.no_grad()
     def spectrum(self):
-        """Detached continuous/discrete spectral diagnostics."""
         ...
 ```
 
-### 29.4 PhysicalReadout
-
-```python
-class PhysicalReadout(nn.Module):
-    def forward(self, z_k):
-        """Predicted z_k -> normalized/predicted z_phys used for grounding and closed-loop history."""
-        ...
-```
-
-训练指标最终必须 inverse-transform 回 raw physical units。
-
-### 29.5 ResidualMemory
+### 29.6 ResidualMemory
 
 ```python
 class ResidualMemory(nn.Module):
     def forward(
         self,
         z_k_hist,
-        z_phys_hist,
         history_actions=None,
         history_dts=None,
         current_action=None,
         current_dt=None,
         mu_static=None,
-    ):
-        """Causal history -> closure memory z_r."""
+        probe_hist=None,  # optional ablation only
+    ) -> Tensor:
+        """Causal z_k history -> closure memory z_r."""
         ...
 ```
 
-`current_action/current_dt` 对应最后一个历史状态到待预测状态的 transition。Variable-`dt` 数据时 `current_dt` 不得省略。
-
-### 29.6 ResidualHead
+### 29.7 ResidualHead
 
 ```python
 class ResidualHead(nn.Module):
@@ -2246,44 +2056,25 @@ class ResidualHead(nn.Module):
         ...
 ```
 
-### 29.7 StructuredPhysicalJEPA
+### 29.8 StructuredPhysicalJEPA
 
 ```python
 class StructuredPhysicalJEPA(nn.Module):
-    def encode_koopman(self, state_model, mu_static=None):
-        ...
+    def encode_koopman(self, state_model, mu_static=None): ...
+    def base_step(self, z_k, action, dt, mu_static=None): ...
 
-    def compute_physical_anchor(self, state_raw, spec, metadata=None):
-        ...
-
-    def base_step(self, z_k, action, dt, mu_static=None):
-        ...
-
-    def closure_step(
-        self, z_k_hist, z_phys_hist,
+    def transition(
+        self, *, z_k_hist,
         history_actions, history_dts,
         current_action, current_dt,
         mu_static=None,
-    ):
-        ...
-
-    def transition(self, *, z_k_hist, z_phys_hist,
-                   history_actions, history_dts,
-                   current_action, current_dt,
-                   mu_static=None):
-        """Return base/residual/gate/combined next z_k separately."""
-        ...
+        probe_hist=None,
+    ): ...
 
     def rollout_closed_loop(self, batch, horizon=None):
-        """No future-state access; future z_phys comes from PhysicalReadout."""
-        ...
-
-    def rollout_teacher_forced(self, batch, horizon=None):
-        """Diagnostics only; never used as official forecasting metric."""
+        """Transition loop never accesses future states."""
         ...
 ```
-
-`transition()` 禁止只返回一个 tensor：
 
 ```python
 @dataclass
@@ -2291,13 +2082,11 @@ class TransitionOutput:
     z_k_base: Tensor
     z_r: Tensor | None
     delta_z_k: Tensor
-    gate: Tensor             # [B,1]
+    gate: Tensor
     z_k_next: Tensor
 ```
 
-这样训练日志能够明确知道最终性能来自 Koopman backbone 还是 neural closure。
-
-### 29.8 TrainingStage API
+### 29.9 TrainStage
 
 ```python
 class TrainStage(Enum):
@@ -2305,108 +2094,96 @@ class TrainStage(Enum):
     JEPA = "jepa"
     RESIDUAL = "residual"
     JOINT = "joint"
-
-
-def configure_trainable(model, stage: TrainStage) -> None:
-    ...
-
-
-def assert_optimizer_matches_trainable_params(model, optimizer) -> None:
-    ...
 ```
 
-冻结语义只能从这里产生，训练脚本不自行改 `requires_grad`。
+冻结/解冻只能由统一状态机产生。
 
 ## 30. 分阶段训练伪代码
 
-以下伪代码只表达**梯度与 target 语义**；实际实现统一接收 `ProblemBatch`。
-
-### 30.1 Koopman-only：同坐标 online dynamics
+### 30.1 Koopman representation + training decoder
 
 ```python
 z_k_t = online_encoder(U_t_model)
-z_k_next_online = online_encoder(U_next_model)
+z_k_next = online_encoder(U_next_model)
 
-z_k_base = koopman_core.step(
-    z_k_t,
+z_k_base = koopman_core.step(z_k_t, current_action, current_dt, mu_static)
+
+U_t_hat_model = training_decoder(z_k_t, mu_static)
+U_next_hat_model = training_decoder(z_k_base, mu_static)
+U_t_hat_raw = normalizer.inverse(U_t_hat_model)
+U_next_hat_raw = normalizer.inverse(U_next_hat_model)
+
+physics_terms = physics_constraints.loss(
+    U_next_hat_raw,
+    prev_state_raw=U_t_raw,
     action=current_action,
     dt=current_dt,
-    mu_static=mu_static,
+    spec=problem_spec,
 )
 
-# Koopman representation learning may backprop through both online encodings.
 loss = (
-    lambda_k * koopman_one_step(z_k_base, z_k_next_online)
-    + lambda_m * koopman_multistep_closed_or_encoded_targets(...)
-    + lambda_v * variance_loss(z_k_t)
-    + lambda_g * grounding_loss(
-        physical_readout(z_k_t),
-        z_phys_t_normalized,
-    )
+    lambda_k * mse(z_k_base, z_k_next)
+    + lambda_rec * reconstruction_loss(U_t_hat_model, U_t_model)
+    + lambda_phys * sum(physics_terms.values())
+    + lambda_var * variance_loss(z_k_t)
 )
-
-optimizer.zero_grad(set_to_none=True)
-loss.backward()
-optimizer.step()
 ```
 
-本阶段没有 EMA teacher。
-
-### 30.2 JEPA + Koopman：EMA target 只用于 JEPA
+### 30.2 JEPA + Koopman
 
 ```python
 z_k_ctx = online_encoder(U_context_model)
-z_k_future_online = online_encoder(U_future_model)   # same-coordinate dynamics target
+z_k_future_online = online_encoder(U_future_model)
 
 with torch.no_grad():
-    z_k_future_jepa = target_encoder(U_future_model) # EMA JEPA target only
+    z_k_future_jepa = target_encoder(U_future_model)
 
-z_k_pred = koopman_core.rollout(
-    z_k_ctx[:, -1],
-    future_actions=future_actions,
-    future_dts=future_dts,
-    horizon=K,
-    mu_static=mu_static,
-)
+z_k_pred = koopman_core.rollout(...)
 
 loss = (
     lambda_j * jepa_loss(z_k_pred, z_k_future_jepa)
     + lambda_k * koopman_consistency(z_k_pred, z_k_future_online)
-    + lambda_v * variance_loss(z_k_ctx)
-    + lambda_g * grounding_loss(...)
+    + lambda_rec * reconstruction_loss(...)
+    + lambda_phys * physics_loss_on_decoded_prediction(...)
+    + lambda_var * variance_loss(z_k_ctx)
 )
 
-optimizer.zero_grad(set_to_none=True)
-loss.backward()
 optimizer.step()
 update_ema_after_optimizer_step(target_encoder, online_encoder)
 ```
 
-### 30.3 Residual warm-up：hard-sync 后全部结构分支冻结
-
-进入阶段时：
+### 30.3 冻结后生成 residual dataset
 
 ```python
-hard_sync(target_encoder, online_encoder)
+freeze(online_encoder)
+freeze(koopman_core)
+freeze(training_decoder)
 pause_ema()
-configure_trainable(model, TrainStage.RESIDUAL)
-```
 
-单步 residual target：
-
-```python
 with torch.no_grad():
     z_k_hist = online_encoder(U_context_model)
-    z_k_next_same_coord = online_encoder(U_next_model)
+    z_k_next = online_encoder(U_next_model)
     z_k_base = koopman_core.step(
         z_k_hist[:, -1], current_action, current_dt, mu_static
     )
-    residual_target = z_k_next_same_coord - z_k_base
+    residual_target = z_k_next - z_k_base
 
-z_phys_hist = physical_anchor.compute(U_context_raw, problem_spec)
+cache.write(
+    z_k_hist=z_k_hist,
+    actions=history_actions,
+    dts=history_dts,
+    mu=mu_static,
+    residual_target=residual_target,
+    encoder_hash=hash_module(online_encoder),
+    koopman_hash=hash_module(koopman_core),
+)
+```
+
+### 30.4 Residual closure training
+
+```python
 z_r = residual_memory(
     z_k_hist,
-    z_phys_hist,
     history_actions,
     history_dts,
     current_action,
@@ -2420,106 +2197,72 @@ loss = (
     mse(correction, residual_target)
     + lambda_budget * closure_budget(correction, z_k_hist[:, -1], z_k_base)
 )
-
-residual_optimizer.zero_grad(set_to_none=True)
-loss.backward()
-residual_optimizer.step()
 ```
 
-这里 residual target 两端都没有梯度，EMA teacher 不参与 target。
-
-### 30.4 Closed-loop rollout：正式预测不能读取未来状态
+### 30.5 Closed-loop rollout
 
 ```python
 z_k_hist = online_encoder(batch.context_states_model)
-z_phys_hist = physical_anchor.compute(batch.context_states_raw, problem_spec)
-
 predictions = []
-for k in range(horizon):
-    current_action = None if batch.future_actions is None else batch.future_actions[:, k]
-    current_dt = batch.future_dts[:, k]
 
+for k in range(horizon):
     out = model.transition(
         z_k_hist=z_k_hist,
-        z_phys_hist=z_phys_hist,
         history_actions=history_actions_for_current_queue,
         history_dts=history_dts_for_current_queue,
-        current_action=current_action,
-        current_dt=current_dt,
+        current_action=batch.future_actions[:, k] if batch.future_actions is not None else None,
+        current_dt=batch.future_dts[:, k],
         mu_static=batch.mu_static,
     )
-
-    z_k_next = out.z_k_next
-    z_phys_next = physical_readout(z_k_next)  # NOT true future anchor
-
-    predictions.append(z_k_next)
-    z_k_hist = append_and_crop(z_k_hist, z_k_next)
-    z_phys_hist = append_and_crop(z_phys_hist, z_phys_next)
+    predictions.append(out.z_k_next)
+    z_k_hist = append_and_crop(z_k_hist, out.z_k_next)
     update_action_dt_history(...)
 ```
 
-`batch.future_states_*` 只允许在循环完成后用于 loss/metric，不得进入上述 transition history。
+`batch.future_states_*` 只能在 rollout 完成后用于 loss/metric，不能进入 transition history。
 
-### 30.5 Joint fine-tune
+### 30.6 Joint fine-tune
+
+如果 `E_K/KoopmanCore` 解冻，旧 residual cache 立即失效。Joint 阶段必须在线计算 detached residual target：
 
 ```python
-configure_trainable(model, TrainStage.JOINT)
-hard_sync(target_encoder, online_encoder)
-resume_ema()
-
-# full_pred is generated by rollout_closed_loop; no future-state input to transition.
-full_pred = model.rollout_closed_loop(batch, horizon=current_curriculum_horizon)
-
 with torch.no_grad():
-    jepa_target = target_encoder(batch.future_states_model[:, :current_horizon])
-
-# same-coordinate target for Koopman/residual diagnostics
-z_k_future_online = online_encoder(batch.future_states_model[:, :current_horizon])
-
-loss = (
-    lambda_j * jepa_loss(full_pred.z_k, jepa_target)
-    + lambda_k * koopman_structure_loss(full_pred.z_k_base, z_k_future_online)
-    + lambda_r * residual_target_loss(...same-coordinate detached targets...)
-    + lambda_b * closure_budget(...)
-    + lambda_g * grounding_loss(...)
-    + lambda_v * variance_loss(...)
-)
-
-optimizer.zero_grad(set_to_none=True)
-loss.backward()
-optimizer.step()
-update_ema_after_optimizer_step(target_encoder, online_encoder)
+    z_next_target = online_encoder(U_next_model)
+    z_base_detached = koopman_core.step(...)
+    residual_target = z_next_target - z_base_detached
 ```
 
-联合训练时仍然分别记录 `z_k_base` 和 `z_k_next` 的误差。正式 long-horizon 指标来自 `rollout_closed_loop()`。
+同时保留 JEPA、reconstruction、physics constraints 和 closure budget；Koopman LR 远小于 residual LR。
 
 ## 31. 必做消融实验
 
-为了证明研究贡献来自“结构化 latent”而不是模型参数更多，至少比较：
+为了证明贡献来自“结构化动力学 + 物理约束 + closure memory”，而不是单纯参数更多，至少比较：
 
-| ID | Encoder/Training | Dynamics | Residual | Physics grounding |
-|---|---|---|---|---|
-| B0 | AE | MLP | No | No |
-| B1 | AE | Transformer | Full | No |
-| B2 | JEPA | Transformer | Full | No |
-| B3 | JEPA | Koopman | No | No |
-| B4 | JEPA | Koopman | Attention residual | No |
-| B5 | JEPA | Koopman | Attention residual | Yes |
-| B6 | Physics-JEPA | Koopman | Attention residual | Yes + constraints |
+| ID | Representation | Dynamics | Closure | PhysicsConstraint | Probe |
+|---|---|---|---|---|---|
+| B0 | AE | MLP | No | No | No |
+| B1 | AE | Transformer full transition | Full | No | No |
+| B2 | JEPA | Transformer full transition | Full | No | No |
+| B3 | Koopman AE | Koopman | No | No/weak | No |
+| B4 | JEPA + Koopman | Koopman | No | Yes | No |
+| B5 | JEPA + Koopman | Koopman | Attention residual | Yes | No |
+| B6 | B5 | Koopman | Attention residual | Yes | Optional probe input/readout |
 
-核心不是只报告一步 MSE，而是报告：
+这里 B5 是核心模型；B6 用于判断少量 physical probe 是否真的提供额外价值，不能把 probe 当成模型成立的必要条件。
+
+正式报告至少包括
 
 \[
 \boxed{
 \text{short error}
 +\text{long rollout}
 +\text{spectrum}
-+\text{physics}
-+\text{control}
++\text{physics-constraint violation}
++\text{closure burden}
 }
 \]
 
----
+控制阶段再增加 counterfactual/control metrics。
 
 ## 32. 评价指标
 
@@ -2641,11 +2384,7 @@ V-JEPA 2 已经展示：先从大规模视频学习 representation，再以少�
 
 2026 年的 Phys-JEPA 将 known physical variables 和 physics consistency 直接放入 latent state/transition，而非只在 decoded output 上约束；PhyLatent 更进一步指出：仅防止 JEPA 全局 collapse，并不等于 latent 保留 physical state identity 和 action consequences。
 
-这直接支持本框架加入：
-
-\[
-\mathcal L_{ground}+\mathcal L_{cf}+\mathcal L_{physics-latent}.
-\]
+这支持本框架把 physical-state identity 问题显式拆成：`D_train` 的 state sufficiency、decoded PhysicsConstraint、可选 PhysicalProbe diagnostics，以及 action-conditioned 版本的 counterfactual consistency。
 
 ### 34.3 Koopman 世界模型正在强调谱稳定性和 long-horizon imagination
 
@@ -2668,7 +2407,7 @@ Koopman embedding + Transformer 早在 2020–2022 年即已有工作，因此�
 \[
 \boxed{
 \text{JEPA predictive representation}
-+\text{explicit physical identifiability}
++\text{physics-constrained state sufficiency}
 +\text{spectral Koopman backbone}
 +\text{bounded residual attention closure}
 }
@@ -2683,30 +2422,27 @@ Koopman embedding + Transformer 早在 2020–2022 年即已有工作，因此�
 | 当前痛点 | 后果 | 本框架对应机制 |
 |---|---|---|
 | latent collapse / partial collapse | 表示无信息 | EMA target + variance monitoring |
-| physical identifiability collapse | 不同物理状态 latent 不可区分 | physical grounding |
-| counterfactual collapse | 不同 action 未来 latent 过近 | action-conditioned Koopman + counterfactual loss |
-| reconstruction bias | latent 保留细节而非动力学 | JEPA prediction objective |
-| finite Koopman closure | 固定 \(K\) 无法解释复杂瞬态 | residual latent + Attention closure |
+| state insufficiency | `z_K` 易传播但丢失真实状态信息 | `D_train` reconstruction/state discrimination |
+| physical inadmissibility | decoded rollout 违反 PDE/BC/守恒 | PhysicsConstraint / hard projection where possible |
+| counterfactual collapse | 不同 action 未来 latent 过近 | action-conditioned Koopman + counterfactual tests |
+| reconstruction bias | latent 过度保存细节 | 低容量 `D_train` + JEPA predictive objective |
+| finite Koopman closure | 固定有限维 `K` 无法解释复杂瞬态 | frozen-base residual dataset + `z_R` memory closure |
 | spectral instability | rollout 爆炸/坍缩 | structured generator / bounded spectrum |
-| long-horizon error accumulation | 单步准、长期错 | multi-step open-loop curriculum |
-| attention takeover | Koopman 变成装饰 | gated residual + residual budget + staged training |
-| latent/physics metric mismatch | latent 近不代表物理近 | physical probe/readout |
+| long-horizon error accumulation | 单步准、长期错 | multi-step closed-loop curriculum |
+| attention takeover | Koopman 变成装饰 | staged freeze + gated residual + residual budget |
+| residual labels stale | joint fine-tune 后 offline cache 坐标失效 | encoder/core hash guard + online detached targets in joint stage |
 | generalization across parameters | 新 Re/Ma/geometry 失效 | parameter-conditioned spectral core |
-| full-field decoding expensive | 控制效率差 | selective decoder |
-| partial observation | 传感器不构成 Markov state | context encoder / latent memory（后续） |
-
----
+| full-field decoding expensive | 控制效率差 | training decoder 与 deployment field decoder 分离 |
+| partial observation | 观测不构成 Markov state | history/memory extension，后续观测模型 |
 
 ## 36. 第一版超参数建议
 
-仅作为启动值：
+仅作为启动值，不是理论常数：
 
 ```yaml
 latent:
-  d_total: 128
-  d_phys: 16
   d_koopman: 64
-  d_residual: 48
+  d_residual: 32
 
 context:
   history: 16
@@ -2719,9 +2455,17 @@ koopman:
   parameter_conditioned: false
   bilinear_action: false
 
+training_decoder:
+  enabled: true
+  low_capacity: true
+
+physical_probe:
+  enabled: false       # core model does not depend on probes
+  use_as_closure_input: false
+
 attention:
-  d_model: 256
-  layers: 3
+  d_model: 128
+  layers: 2
   heads: 4
   dropout: 0.05
   residual_gate_init_bias: -3.0
@@ -2731,112 +2475,87 @@ jepa:
   ema_tau_end: 0.9999
 
 loss:
-  lambda_jepa: 1.0
   lambda_koopman: 1.0
   lambda_multistep: 0.5
-  lambda_ground: 0.2
-  lambda_residual_budget: 1e-3
-  lambda_disentangle: 1e-3
-  lambda_physics: 0.0   # first MVP
-  lambda_counterfactual: 0.0  # enable for control phase
-  lambda_field: 0.0     # enable when decoder is introduced
+  lambda_reconstruction: 0.2
+  lambda_physics: 0.1       # tune by gradient scale; V0.5 onward
+  lambda_jepa: 1.0          # V0.6 onward
+  lambda_residual: 1.0      # V0.7 onward
+  lambda_residual_budget: 1.0e-3
+  lambda_probe: 0.0         # optional ablation
+  lambda_counterfactual: 0.0
 ```
 
-这些权重不是最终答案，应以 gradient scale 和 validation behavior 调整，而不是机械沿用。
-
----
+实际权重必须通过 gradient-scale、validation rollout 和 physical violation 共同调节。
 
 ## 37. 必须记录的训练诊断
 
 每个 epoch/validation 至少记录：
 
 ```text
-loss/jepa
 loss/koopman
 loss/multistep
-loss/ground
-loss/residual_budget
+loss/reconstruction
+loss/physics_total
+loss/jepa                 # when enabled
+loss/residual             # when enabled
+loss/residual_budget      # when enabled
+loss/probe                # optional
 
-latent/variance_min
-latent/variance_mean
-latent/cov_K_R
+latent/z_k_variance_min
+latent/z_k_variance_mean
+latent/z_k_cov_condition
 
 koopman/alpha_min_mean_max
 koopman/omega_min_mean_max
 koopman/spectral_radius_discrete
 
-residual/norm_ratio_mean
+residual/correction_norm
+residual/closure_fraction_mean
 residual/gate_mean
 residual/gate_p95
 
-forecast/error_1
-forecast/error_4
-forecast/error_8
-forecast/error_16
+forecast/base_error_1_4_8_16
+forecast/full_error_1_4_8_16
 
-physics/frequency_error
-physics/energy_error
-physics/observable_error
+physics/constraint_total
+physics/conservation_error
+physics/bc_error
+physics/admissibility_error
+physics/probe_error          # optional
 ```
 
-否则很容易得到一个“预测 MSE 看起来很好”但结构完全退化的模型。
-
----
+否则很容易得到一个预测 MSE 看起来很好、但动力学分工或物理约束已经失效的模型。
 
 ## 38. 关键失败模式与调试顺序
 
-### 失败 A：latent variance 接近 0
+### 失败 A：`z_K` variance 接近 0
 
-说明 representation collapse。
+说明 representation collapse。优先检查：EMA/stop-gradient、variance loss、decoder 是否失去 state discrimination、normalization。
 
-优先检查：
+### 失败 B：`z_K` 可线性传播但 reconstruction 很差
 
-1. EMA tau；
-2. target stop-gradient；
-3. batch normalization/latent normalization；
-4. variance regularization；
-5. grounding loss 是否太弱。
+说明 encoder 找到了容易传播但不 sufficient 的退化坐标。提高 state-sufficiency 约束，检查 `D_train` 容量与数据覆盖；不要先增加 Attention。
 
-### 失败 B：Koopman-only 很差，Attention 打开后突然很好
+### 失败 C：decoded state reconstruction 好但 PhysicsConstraint 很差
 
-可能 Attention 完全接管。
+检查 raw/model inverse transform、BC/flux 离散、constraint 实现和单位。若约束本身无误，再调 physics loss 或采用硬投影。
 
-检查：
+### 失败 D：Koopman-only 很差，Attention 打开后突然很好
 
-\[
-R_{burden},\quad g_t,
-\]
+可能 Attention 完全接管。检查 `C_closure`、gate、base error；必要时回退到 V0.7 tiny closure，重新判断 residual 是否真的可预测。
 
-并增加 residual penalty、降低 Transformer 容量、延长 Koopman warm-up。
+### 失败 E：一步预测很好，16 步后爆炸
 
-### 失败 C：一步预测很好，16 步后爆炸
+检查谱半径、non-normal transient、residual feedback、closed-loop curriculum 和 teacher-forcing 泄漏。
 
-检查：
+### 失败 F：V0.7 residual dataset 可学，joint fine-tune 后突然失效
 
-1. \(\alpha_i\)/谱半径；
-2. non-normal action matrices；
-3. residual feedback amplification；
-4. 是否真正做 open-loop training；
-5. rollout 中是否误用了 teacher forcing。
+优先检查离线 cache 是否仍对应当前 encoder/core。Joint 阶段禁止继续把旧 cache 当作唯一标签，应在线重算 detached residual target。
 
-### 失败 D：latent error 小但物理量错
+### 失败 G：稳定态好，模态切换错
 
-说明 latent metric 与 physics 不一致。
-
-增加 physical grounding/readout，并以 physical observables 作为 validation 选择标准之一。
-
-### 失败 E：稳定态好，模态切换错
-
-这并不一定意味着架构失败，可能恰好说明有限 Koopman closure 不足。
-
-检查 residual gate 是否在 transition 前后升高。如果会升高但预测仍错，可：
-
-- 增大 history；
-- 引入 regime-conditioned/mixed Koopman；
-- 增加 residual latent；
-- 使用 event-aware loss。
-
----
+可能说明固定有限维 Koopman closure 不足。先检查 residual activity 是否在 transition 前上升，再考虑延长 history、regime-conditioned Koopman 或 mixture experts。
 
 ## 39. 第二阶段可扩展方向
 
@@ -2920,14 +2639,14 @@ D:(z,x)\mapsto U(x).
 
 \[
 \boxed{
-\textbf{A physically grounded predictive latent-state architecture with}
-\textbf{spectrally structured dynamics and attention-based closure.}
+\textbf{A physics-constrained predictive latent-state architecture with}
+\textbf{spectrally structured dynamics and attention-based memory closure.}
 }
 \]
 
 对应中文：
 
-> **一种具有物理锚定、预测性潜在表征、谱结构动力学和 Attention 闭合修正的物理世界模型。**
+> **一种由物理方程约束、具有预测性 Koopman 潜在坐标、谱结构动力学与 Attention 记忆闭合的物理世界模型。**
 
 若在流体/燃烧问题上能证明：
 
@@ -2949,7 +2668,7 @@ D:(z,x)\mapsto U(x).
 ```text
 V0.1  工程骨架与接口
   ↓
-V0.2  数据窗口 + PhysicalAnchor
+V0.2  数据窗口 + PhysicsConstraint contracts
   ↓
 V0.3  Direct-state KoopmanCore
   ↓
@@ -3113,7 +2832,7 @@ class ProblemBatch:
 
 必须同时维护 `raw` 与 `model` 两套状态：
 
-- `raw`：有真实物理单位，用于 `PhysicalAnchor`、物理损失、最终指标；
+- `raw`：有真实物理单位，用于 `PhysicalProbe`、物理损失、最终指标；
 - `model`：经过训练集统计量归一化，用于 neural encoder。
 
 \[
@@ -3139,7 +2858,7 @@ boundary:
   type: periodic   # example only
 ```
 
-`PhysicalAnchor` 根据 channel name/ProblemSpec 查找物理变量。缺少必需变量时应明确报错或跳过该 observable，禁止悄悄用错误 channel。
+`PhysicalProbe` 根据 channel name/ProblemSpec 查找物理变量。缺少必需变量时应明确报错或跳过该 observable，禁止悄悄用错误 channel。
 
 ### 42.9 配置必须严格校验，禁止 silent defaults
 
@@ -3278,36 +2997,27 @@ assert_optimizer_matches_trainable_params(model, optimizer)
 
 ### 42.14 Closed-loop rollout 是唯一正式预测指标，禁止未来真值泄漏
 
-当前模型的 closure 输入包含 `z_phys`，但未来真实 `U_{t+k}` 在推理时不可用。因此必须定义两种 rollout：
+v2.2 的默认 closure state **不包含 PhysicalProbe**。正式 closed-loop rollout 在 context 结束后只能使用：
 
-**Teacher-forced rollout（只用于诊断）**：允许使用真实未来 encoded state / physical anchor；不得作为正式 forecasting 指标。
+- 自己预测得到的 `z_k` 历史；
+- 已知 future action；
+- 已知 `dt`；
+- static/known parameters `mu`。
 
-**Closed-loop rollout（正式评估）**：context 结束后只能使用：
-
-- 自己预测得到的 `z_k`；
-- 已知 future action / `dt` / static parameters；
-- 由 `PhysicalReadout` 从预测 `z_k` 得到的
-
-\[
-\boxed{
-\hat z_{t+k}^{phys}=H_{phys}(\hat z_{t+k}^{K})
-}
-\]
-
-然后把 `\hat z_phys` 和 `\hat z_k` 重新压入历史队列，供下一步 closure 使用。
+PhysicalProbe 若存在，只能用于 rollout 完成后的 metric/diagnostic，或在明确的 ablation 中作为额外输入；MVP 不依赖它。
 
 正式 rollout 禁止访问：
 
 ```text
 future_states_raw
 future_states_model
-true future z_phys
-true future encoded z_K
+true future physical probes
+true future encoded z_k
 ```
 
-除非只是计算 loss/metric，且该 tensor 不进入下一步预测路径。
+除非只是计算 loss/metric，且该 tensor 不进入下一步 transition path。
 
-必须增加 `test_no_future_leakage.py`：将未来真值随机打乱后，closed-loop prediction 必须保持不变。
+必须增加 `test_no_future_leakage.py`：将未来真值与未来 probe 随机打乱后，closed-loop prediction 必须保持不变。
 
 ### 42.15 Attention 必须是因果的，并显式条件化真实时间间隔
 
@@ -3317,7 +3027,7 @@ ResidualMemory 不是普通 bidirectional encoder。第一版强制 causal mask�
 
 \[
 \boxed{
-\xi_i=P([z_i^K,z_i^{phys},a_i,\mu,\Delta t_i])
+\xi_i=P([z_i^K,a_i,\mu,\Delta t_i])
 }
 \]
 
@@ -3391,7 +3101,7 @@ scheduler_state
 amp_scaler_state (if used)
 epoch/global_step
 normalizer_state
-physical_anchor_spec
+physics_constraint_spec
 resolved_config
 config_hash
 data_fingerprint
@@ -3464,11 +3174,10 @@ Codex 不得因为方便自动引入 Lightning、Hydra、Ray、wandb、xformers�
 
 ### 42.22 命名契约
 
-数学记号仍使用 `z^K, z^{phys}, z^R`。Python 代码统一 snake_case：
+核心状态数学记号使用 `z^K,z^R`。可选物理诊断记为 `q`。Python 代码统一 snake_case：
 
 ```text
 z_k
-z_phys
 z_r
 z_k_base
 delta_z_k
@@ -3490,7 +3199,7 @@ z_k_next
 因此：
 
 - latent rollout error 只用于**同一 frozen encoder 坐标系内部**的 ablation/训练诊断；
-- 跨模型正式比较优先使用 raw-unit physical observables、field error、频率/谱、控制性能；
+- 跨模型正式比较优先使用 raw-unit physical metrics/probes、field error、频率/谱、控制性能；
 - 若确实比较 latent geometry，需要先定义明确 alignment/procrustes/CCA 等协议，V1.0 前不实现。
 
 ### 42.24 外部数据与最小 smoke dataset 分开
@@ -3510,7 +3219,7 @@ V0.5 默认 smoke dataset 采用**二维周期 advection-diffusion 的解析/半
 
 ```text
 test_problem_batch_alignment.py
-test_raw_vs_model_anchor_semantics.py
+test_raw_vs_model_physics_semantics.py
 test_optimizer_gradient_ownership.py
 test_target_hard_sync_and_ema_order.py
 test_same_coordinate_residual_target.py
@@ -3551,7 +3260,6 @@ V0.1 即固定 Python 命名为 snake_case，并同时实现 `ProblemBatch`/`Pro
 ```python
 @dataclass
 class LatentState:
-    z_phys: Tensor | None
     z_k: Tensor
     z_r: Tensor | None = None
 
@@ -3604,27 +3312,27 @@ pytest -q
 
 ---
 
-## 44. V0.2 — Data Windows & Physical Anchors
+## 44. V0.2 — Data Windows & Physics Contracts
 
 ### 目标
 
-建立时间窗数据协议和确定性 `z_phys`。
+建立严格的时间窗数据协议、raw/model 双状态语义以及物理约束接口。PhysicalProbe 只作为可选诊断模块。
 
 ### 输入协议
 
-严格遵守第 42.6 节时间语义。模型接收标准 `ProblemBatch`：
+严格遵守第 42.6 节时间语义。底层 trajectory 使用
 
 ```text
-context_states_raw/model : [B,H,C,Nx,Ny]
-future_states_raw/model  : [B,K,C,Nx,Ny]
-history_actions          : [B,H-1,d_a]   # optional
-future_actions           : [B,K,d_a]     # optional; element 0 drives U_t -> U_{t+1}
-history_dts              : [B,H-1]
-future_dts               : [B,K]
-mu_static                : [B,d_mu]       # optional
+states  : [T+1,...]
+actions : [T,d_a]
+dts     : [T]
 ```
 
-底层 trajectory 使用 `[T+1] states + [T] transitions` 语义，不允许另建含糊的 action 对齐方式。
+且唯一语义为
+
+\[
+U_i\xrightarrow{a_i,\Delta t_i}U_{i+1}.
+\]
 
 ### 新增模块
 
@@ -3633,53 +3341,44 @@ src/data/datasets.py
 src/data/windows.py
 src/data/splits.py
 src/data/normalization.py
-src/physics/anchors.py
-src/physics/observables.py
+src/physics/constraints.py
+src/physics/operators.py
+src/physics/probes.py        # optional
 ```
 
-### 第一版 PhysicalAnchor
+### 第一版 PhysicsConstraint
 
-先支持通用统计量与简单二维流体 observables：
+先实现通用 contract 和 toy/advection-diffusion 可验证约束：
 
-- channel mean/std/RMS；
-- total/mean kinetic energy（若变量定义允许）；
-- vorticity RMS / enstrophy（规则网格）；
-- 用户可注册 custom observable。
+- boundary-condition consistency；
+- state admissibility/finite-value checks；
+- 可用时的 conservation/discrete residual；
+- custom constraint registry。
 
-### 关键要求
+### PhysicalProbe（可选）
 
-`PhysicalAnchor` 无 trainable parameter：
+允许支持少量通用统计量，例如 channel mean/RMS、kinetic energy、enstrophy 等，但它们：
 
-\[
-z^{phys}=G_{phys}(U_{raw}).
-\]
+- 无 trainable parameter；
+- 只读取 raw-unit state；
+- 不属于 `LatentState`；
+- 不作为后续 closure 的必需输入。
 
-特别强调：`PhysicalAnchor` 只能读取 raw-unit state；neural encoder 使用 normalized `U_model`。normalizer 单独 fit 在 train split，val/test 禁止重新 fit。积分型 observable 必须使用坐标/网格权重或明确声明等距规则网格假设。
-
-V0.2 必须同时输出并保存 `split_manifest`、`data_fingerprint`、`normalizer_state`。
+normalizer 只在 train split fit；val/test 禁止重新 fit。V0.2 保存 `split_manifest`、`data_fingerprint`、`normalizer_state` 和 physics-contract metadata。
 
 ### 测试
 
 - window 不跨 trajectory；
 - train/val/test 无 trajectory leakage；
-- constant field 的 gradient observable 为 0；
-- normalizer inverse transform；
-- shape tests。
+- raw/model 不混用；
+- PhysicsConstraint 输入单位正确；
+- optional probe 可完全关闭；
+- normalizer round-trip；
+- shape/alignment tests。
 
 ### 验收
 
-生成一个 toy dataset，打印：
-
-```text
-U_context.shape
-U_future.shape
-z_phys.shape
-train/val/test trajectory ids
-```
-
-结果必须可复现。
-
----
+生成 toy dataset，运行数据窗口和 physics contract smoke test；关闭所有 probe 后流程仍完全可运行。
 
 ## 45. V0.3 — Direct-State Continuous-Time KoopmanCore
 
@@ -3750,19 +3449,24 @@ spectrum()
 
 ---
 
-## 46. V0.4 — Learned KoopmanEncoder on Low-Dimensional/Synthetic Data
+## 46. V0.4 — Learned KoopmanEncoder + TrainingDecoder on Synthetic Data
 
 ### 目标
 
-引入 `E_K`，验证“learned lifting + Koopman”本身可训练且不塌缩。
+引入 `E_K` 与轻量 `D_train`，验证 learned lifting 同时具有：
+
+- Koopman 可传播性；
+- state sufficiency / 可重构性；
+- non-collapse。
 
 ### 新增模块
 
 ```text
 src/models/koopman_encoder.py
+src/models/training_decoder.py
 src/losses/koopman.py
 src/losses/collapse.py
-src/models/physical_readout.py
+src/losses/reconstruction.py
 src/train/train_koopman.py
 ```
 
@@ -3772,90 +3476,72 @@ src/train/train_koopman.py
 \mathcal L
 =\lambda_K\mathcal L_K
 +\lambda_M\mathcal L_{K,multi}
++\lambda_{rec}\mathcal L_{rec}
 +\lambda_V\mathcal L_{var}
-+\lambda_G\mathcal L_{ground}.
++\lambda_S\mathcal L_{spec}.
 \]
 
-第一版可增加一个小 reconstruction warm-up head，但必须是可选配置。
+Synthetic 版本可先不加复杂 PDE residual，但 `D_train` 从本版本开始是正式接口，不再只是可选 warm-up head。
 
 ### 必须记录
 
-- `z_K` 每维 mean/std；
-- covariance condition number；
-- one-step error；
-- 16/32/64-step rollout error；
+- `z_k` mean/std 与 covariance condition；
+- reconstruction error；
+- one/multi-step latent rollout；
 - learned spectrum。
 
 ### 验收
 
-- `z_K` 不塌缩；
-- Koopman-only rollout 显著优于 persistence；
-- 关闭 encoder 后 V0.3 测试仍全部通过。
+- `z_k` 不塌缩；
+- reconstruction/state discrimination 正常；
+- Koopman-only rollout 优于 persistence；
+- V0.3 数值核心回归测试全部通过。
 
----
-
-## 47. V0.5 — 2D/PDE Koopman-Only Baseline
+## 47. V0.5 — 2D/PDE Koopman-Only + PhysicsConstraint Baseline
 
 ### 目标
 
-将结构扩展到规则网格物理场，但**仍然不使用 JEPA 和 Attention**。
+将 `E_K + D_train + KoopmanCore` 扩展到规则网格物理场，并第一次让物理约束直接作用于 decoded prediction；仍然不使用 JEPA 和 Attention。
 
-### Encoder
+### Encoder / Decoder
 
-第一版默认小型 CNN encoder；FNO encoder 作为可选后端，不要同时实现两个复杂版本。
+第一版使用小型 CNN encoder + 对称/轻量 decoder，避免同时引入多个复杂 backend。
 
 \[
-U_t\xrightarrow{E_K}z_t^K.
+U_t\xrightarrow{E_K}z_t^K
+\xrightarrow{\mathcal K} \hat z_{t+1}^K
+\xrightarrow{D_{train}}\hat U_{t+1}.
 \]
-
-### 新增/修改
-
-```text
-src/models/koopman_encoder.py   # CNN backend
-configs/data/pde2d.yaml
-configs/model/koopman_only.yaml
-scripts/evaluate_rollout.py
-```
 
 ### 推荐测试问题
 
-分成两层：
+1. 仓库内置二维周期 advection-diffusion smoke dataset；
+2. 研究者提供的 cylinder wake / 2D Navier--Stokes / reaction-diffusion。
 
-1. **仓库内置 smoke dataset（必须）**：二维周期 advection-diffusion 的小型确定性场序列，用于 CI 与接口验证，不需要联网或外部 CFD；
-2. **research dataset（研究者显式提供）**：优先 cylinder wake、2D Navier–Stokes 或 reaction-diffusion。
-
-Codex 不得自动联网下载数据，也不得为了 smoke test 临时实现一个复杂 CFD solver。不要第一版直接进入爆轰。
-
-### 训练
-
-Residual branch 不存在：
+### Loss
 
 \[
-\hat z_{t+k}^K=K^kz_t^K.
+\mathcal L
+=\mathcal L_K
++\lambda_M\mathcal L_{K,multi}
++\lambda_{rec}\mathcal L_{rec}
++\lambda_P\mathcal L_{physics}
++\lambda_V\mathcal L_{var}.
 \]
 
-使用 physical readout：
-
-\[
-H(z_K)\rightarrow \hat q.
-\]
+优先从便宜的 BC、守恒、离散 operator consistency 开始；完整连续 PDE residual 不是强制第一项。
 
 ### 验收
 
-至少比较：
-
-- persistence；
-- DMD/POD（若可实现）；
-- learned Koopman。
-
-必须报告：
+至少比较 persistence、DMD/POD（可实现时）、learned Koopman，并报告：
 
 - latent rollout；
-- observable error；
+- raw-unit field/reconstruction error；
+- physics constraint violation；
 - frequency/spectrum；
-- `z_K` variance。
+- `z_k` variance。
 
----
+PhysicalProbe 只作为可选额外 metric。
 
 ## 48. V0.6 — JEPA Online/Target Shell over Koopman Dynamics
 
@@ -3917,15 +3603,16 @@ z_{t+k}^{K,tar}=E_{\bar\theta}(U_{t+k}),
 
 ---
 
-## 49. V0.7 — Residual Target Infrastructure + Tiny Closure Baseline
+## 49. V0.7 — Residual Dataset Infrastructure + Tiny Closure Baseline
 
 ### 目标
 
-先验证 residual target 和 stop-gradient 机制，不急着上 Transformer。
+验证“冻结 Koopman 后，closure residual 是否具有可学习的历史结构”。先不用 Transformer。
 
 ### 新增模块
 
 ```text
+src/data/residual_cache.py
 src/losses/residual.py
 src/metrics/residual_burden.py
 src/models/residual_head.py
@@ -3934,63 +3621,75 @@ src/train/train_residual.py
 
 ### 核心 target
 
-Residual target 必须与 `z_k_base` 处于同一个 online latent 坐标系：
+进入 V0.7 时冻结：
+
+```text
+online encoder : frozen
+Koopman core   : frozen
+training decoder: frozen
+EMA target     : paused / not used for residual difference
+```
+
+同坐标 residual：
 
 \[
 \boxed{
-r_{t+1}^{tar}
-=\operatorname{sg}\left[E_\theta(U_{t+1})\right]
--\operatorname{sg}\left[z_{t+1}^{K,base}\right]
+r_{t+1}
+=\operatorname{sg}\left[
+E_K(U_{t+1})-\mathcal K(E_K(U_t),a_t)
+\right].
 }
 \]
 
-不要用 EMA teacher latent 直接做差。进入 V0.7 时先 hard-sync `target <- online`，随后 online/target/Koopman 全部冻结并暂停 EMA，直到 V0.9。
-
-### Closure baseline
-
-只使用一个极小 MLP：
+离线 cache 至少保存：
 
 ```text
-[zK_t, zphys_t, a_t] -> delta_zK
+z_k_history
+action_history
+dt_history
+mu
+residual_target
+trajectory_id/time_index
+encoder_hash
+koopman_hash
 ```
 
-不使用历史 Attention。
+若 encoder/core 权重变化，cache 必须判定失效。
 
-### 冻结策略
+### Tiny closure baseline
+
+先使用线性层、小 MLP 或 GRU summary：
 
 ```text
-online/target encoder : frozen
-Koopman core          : frozen
-MLP residual          : trainable
+[z_k history summary, action/dt] -> delta_z_k
 ```
+
+不依赖 PhysicalProbe。
 
 ### 测试
 
 - residual target 无 gradient；
-- 冻结参数 optimizer step 后不变；
-- `delta_zK=0` 时结果严格等于 Koopman-only；
+- frozen 参数 step 前后完全不变；
+- cache hash/version guard；
+- `delta_z_k=0` 时严格退化为 Koopman-only；
 - residual burden metric 正确。
 
 ### 验收
 
-要求证明：
-
-1. MLP correction 可以降低部分 one-step residual；
-2. 必须记录 `C_closure/R_closure`，并检查 correction 是否在大部分稳定区异常主导；
-3. Koopman-only 指标没有被修改。
-
----
+如果 tiny baseline 连 residual 都完全不可预测，应先检查 `z_k` 是否足够、history 是否需要延长或 Koopman representation 是否不合适，而不是直接用更大的 Transformer 掩盖问题。
 
 ## 50. V0.8 — Attention Closure / History-Dependent `z_R`
 
 ### 目标
 
-正式引入第三个 latent：
+正式引入 closure memory state：
 
 \[
 \boxed{
 z_t^R=M_\psi(\mathcal H_t)}.
 \]
+
+`z_R` 不是“第三个独立物理 latent”，而是为了预测冻结 Koopman residual 所形成的历史隐藏状态。
 
 ### 新增模块
 
@@ -4002,8 +3701,6 @@ configs/model/full_closure.yaml
 
 ### 第一版 Transformer 约束
 
-只允许小模型，例如：
-
 ```text
 d_model: 64 or 128
 layers : 2-3
@@ -4011,37 +3708,28 @@ heads  : 4
 history: 8-16
 ```
 
-不要做大型 Transformer。
-
 ### 输入 token
-
-每个时间步拼接/投影：
 
 \[
 \boxed{
-\xi_t=P([z_t^K,z_t^{phys},a_t,\mu,\Delta t_t])
+\xi_t=P([z_t^K,a_t,\mu,\Delta t_t])
 }
 \]
 
-对于无控制系统去掉 `a_t`；固定 `dt` 仍保留接口但可输入常数。ResidualMemory 必须使用 causal mask。
-
-历史：
-
-\[
-[\xi_{t-H+1},\ldots,\xi_t]
-\xrightarrow{Attention}
-z_t^R.
-\]
+无控制系统去掉 `a_t`。PhysicalProbe 默认不输入；仅在后续 ablation 通过 `use_probe_input=true` 显式加入。
 
 ### Closed-loop 历史更新
 
-一步训练可以使用真实 context 的 `z_phys`。但 multi-step rollout 进入未来后，禁止从 `U_future` 重新计算 `z_phys`。使用已在 V0.4/V0.5 训练的 `PhysicalReadout`：
+未来 transition history 只更新：
 
-\[
-\hat z_{t+k}^{phys}=H_{phys}(\hat z_{t+k}^K),
-\]
+```text
+predicted z_k
+known future action
+known future dt
+known/static parameters
+```
 
-并把 `\hat z_k, \hat z_phys, future_action, future_dt` 压回历史队列。正式 forecasting 指标只允许这种 closed-loop 模式。
+不得从 `U_future` 重算任何 transition 输入。
 
 ### 输出
 
@@ -4051,23 +3739,19 @@ z_t^R.
 g_t=\sigma(w_g^Tz_t^R+b_g).
 \]
 
-第一版 shape 固定：
+第一版：
 
 ```text
 z_r        : [B,d_r]
 delta_z_k  : [B,d_k]
-gate       : [B,1]     # scalar gate
+gate       : [B,1]
 ```
 
-初始化要求：
-
-- `W_R` 使用 near-zero small initialization（优先于严格全零，避免第一步完全阻断 memory gradient）；
-- `b_g<0`，建议使初始 gate 落在约 0.05--0.15；
-- vector gate 留到 V2.x。
+Residual head near-zero 初始化；gate 初始较小。
 
 ### 训练
 
-仍然冻结 Koopman branch：
+继续冻结 Koopman branch：
 
 \[
 \mathcal L=\mathcal L_R+\lambda_B\mathcal L_{budget}.
@@ -4075,18 +3759,15 @@ gate       : [B,1]     # scalar gate
 
 ### 验收
 
-必须画出/保存：
+报告：
 
-- `C_closure(t)` 与 `R_closure(t)`；
-- gate 随时间；
-- Koopman base error；
-- corrected error；
-- residual 与瞬态/模态变化的对应关系；
-- teacher-forced 与 closed-loop rollout 的差距。
+- `C_closure(t)`；
+- gate；
+- base vs corrected error；
+- residual 与瞬态/切换事件的关系；
+- teacher-forced diagnostic vs closed-loop rollout gap。
 
-必须通过 causal-mask 与 no-future-leakage 测试。`C_closure` 应被报告为分布/时间序列，不设置跨所有物理系统通用的硬阈值；如果 correction 长期主导全部增量，则标记为结构风险并进入人工科学审查。
-
----
+必须通过 causal mask、no-future-leakage 和 residual-cache compatibility tests。
 
 ## 51. V0.9 — Controlled Joint Fine-Tuning
 
@@ -4113,7 +3794,7 @@ Joint fine-tune 开始加入真正的 closed-loop multi-step curriculum：
 horizon: 1 -> 2 -> 4 -> 8 -> 16
 ```
 
-每一步未来历史都由模型自己的 `z_k_next` 与 `PhysicalReadout(z_k_next)` 更新，禁止 teacher forcing 作为正式 rollout loss 的唯一来源。
+每一步未来历史只由模型自己的 `z_k_next` 与给定 future action/dt/parameters 更新，禁止 teacher forcing 作为正式 rollout loss 的唯一来源。
 
 ### loss
 
@@ -4125,9 +3806,11 @@ horizon: 1 -> 2 -> 4 -> 8 -> 16
 - residual target；
 - residual budget；
 - non-collapse；
-- physical grounding。
+- reconstruction/state sufficiency；
+- decoded PhysicsConstraint；
+- optional PhysicalProbe loss（若配置启用）。
 
-暂不强制加入复杂 PDE residual。
+PDE/BC/守恒约束按 V0.5 已验证的接口继续使用。
 
 ### 必须比较
 
@@ -4144,7 +3827,7 @@ E_{full}(k).
 - full model long-horizon 优于 V0.6；
 - base Koopman 性能不能严重退化；
 - `C_closure/R_closure` 分布受控且 closure 不长期接管主动力学；
-- physical observables 更准确或至少不恶化；
+- decoded physical constraint violation 不恶化；
 - 至少 3 个随机种子。
 
 ---
@@ -4179,7 +3862,8 @@ use_jepa
 use_koopman
 use_residual
 use_gate
-use_physical_grounding
+use_physics_constraints
+use_physical_probe
 freeze_koopman
 ```
 
@@ -4206,7 +3890,7 @@ freeze_koopman
 
 ---
 
-## 53. V1.1 — Selective Physical Projection / Field Decoder
+## 53. V1.1 — High-Fidelity Physical Projection / Field Decoder
 
 ### 目标
 
@@ -4217,7 +3901,7 @@ freeze_koopman
 ### A. 低维 observables
 
 \[
-H_{phys}(z_K,z_R)\rightarrow q.
+H_q(z_K,z_R)\rightarrow q.
 \]
 
 ### B. 完整场
@@ -4275,7 +3959,7 @@ z_{t+1}=Kz_t+Ba_t+\sum_ja_jN_jz_t.
 \[
 \min_{a_{t:t+H-1}}
 \sum_{k=1}^{H}
-\ell(H_{phys}(z_{t+k}),q_{target})
+\ell(H_q(z_{t+k}),q_{target})
 +\lambda_a\|a_{t+k}\|^2.
 \]
 
@@ -4308,7 +3992,7 @@ z_{t+1}=Kz_t+Ba_t+\sum_ja_jN_jz_t.
 
 ```text
 v0.1-contracts
-v0.2-data-anchors
+v0.2-data-physics-contracts
 v0.3-koopman-core
 v0.4-koopman-encoder
 v0.5-pde-koopman
@@ -4385,7 +4069,7 @@ V0.1 验收通过后，再给 V0.2。这样可以最大程度避免 Codex 一次
 
 
 
-## 60. Codex 实施前最终风险审计清单（v2.1 新增）
+## 60. Codex 实施前最终风险审计清单（v2.2 更新）
 
 在把任何一个版本交给 Codex 前，先逐项确认：
 
@@ -4395,7 +4079,7 @@ V0.1 验收通过后，再给 V0.2。这样可以最大程度避免 Codex 一次
 - [ ] context/future window 不跨 trajectory；
 - [ ] future action 第 0 个元素明确对应当前状态到下一状态；
 - [ ] raw/model 两套状态没有混用；
-- [ ] `z_phys` 使用 raw units、坐标和 quadrature weights；
+- [ ] PhysicsConstraint 与 PhysicalProbe（若启用）只读取正确的 raw-unit state/geometry metadata；
 - [ ] train split 先于 normalizer fit 和 window generation；
 - [ ] data fingerprint 与 split manifest 已保存。
 
@@ -4410,7 +4094,8 @@ V0.1 验收通过后，再给 V0.2。这样可以最大程度避免 Codex 一次
 ### C. rollout 是否真的可部署
 
 - [ ] closed-loop future 不访问 `U_future`；
-- [ ] future `z_phys` 由 `PhysicalReadout(z_k_pred)` 产生；
+- [ ] future transition 不读取真实 `U_future` 或真实 PhysicalProbe；
+- [ ] closure 默认只依赖预测 `z_k`、action、dt、parameters；
 - [ ] attention 使用 causal mask；
 - [ ] variable `dt` 已进入 token/transition；
 - [ ] teacher-forced 与 closed-loop 指标分别命名、分别日志；
@@ -4438,7 +4123,7 @@ V0.1 验收通过后，再给 V0.2。这样可以最大程度避免 Codex 一次
 ### F. 研究指标是否没有被实现细节误导
 
 - [ ] latent MSE 只在同一 frozen coordinate system 内比较；
-- [ ] 跨模型比较使用 raw-unit physical observables/field metrics；
+- [ ] 跨模型比较使用 raw-unit physical metrics/probes/field metrics；
 - [ ] closure 使用 `C_closure` + `R_closure`，不是单一不稳定比例；
 - [ ] base Koopman 和 full model 的 error 同时报告；
 - [ ] 至少 3 seeds 的阶段报告不只保留 best run；
@@ -4450,7 +4135,8 @@ V0.1 验收通过后，再给 V0.2。这样可以最大程度避免 Codex 一次
 - [ ] `physics/` 无 trainable NN；
 - [ ] `koopman_core.py` 不依赖 JEPA/Attention；
 - [ ] `residual_memory.py` 不调用 Koopman 内部实现；
-- [ ] `PhysicalReadout` 是独立模块；
+- [ ] `PhysicalProbe` 为可选诊断模块，不属于 LatentState；
+- [ ] `TrainingDecoder` 与高保真 `FieldDecoder` 职责分离；
 - [ ] 后续版本功能没有提前进入当前版本；
 - [ ] public API 统一 snake_case。
 
@@ -4513,5 +4199,5 @@ V0.1 验收通过后，再给 V0.2。这样可以最大程度避免 Codex 一次
 }
 \]
 
-JEPA 决定“学什么表示”，Koopman 决定“主要动力学怎样组织”，Attention 决定“剩余复杂关系怎样闭合”，Physics grounding 决定“这个 latent 是否仍然属于物理世界”。
+PhysicsConstraint 定义“什么状态/演化是物理允许的”，JEPA 与 reconstruction 共同塑造 `z_K` 的 predictive/sufficient representation，Koopman 组织主要动力学，Attention 只学习冻结 Koopman 后仍可预测的 memory/closure residual。
 

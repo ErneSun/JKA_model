@@ -7,9 +7,9 @@ from jka_model.contracts import LatentState, TransitionOutput
 
 
 def test_frozen_public_latent_names() -> None:
-    state = LatentState(z_k=torch.zeros(2, 4), z_phys=torch.zeros(2, 3), z_r=None)
+    state = LatentState(z_k=torch.zeros(2, 4), z_r=torch.zeros(2, 3))
     assert state.z_k.shape == (2, 4)
-    assert state.z_phys is not None
+    assert state.z_r is not None
     output = TransitionOutput(
         z_k_base=torch.zeros(2, 4),
         z_r=torch.zeros(2, 2),
@@ -29,4 +29,3 @@ def test_transition_output_requires_scalar_gate() -> None:
             gate=torch.zeros(2, 4),
             z_k_next=torch.zeros(2, 4),
         )
-

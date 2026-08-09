@@ -19,7 +19,11 @@ class ToyStagedModel(nn.Module):
         self.target_encoder = nn.Linear(2, 2)
         self.residual_memory = nn.Linear(2, 2)
         self.residual_head = nn.Linear(2, 2)
-        self.physical_readout = nn.Linear(2, 1)
+        self.training_decoder = nn.Linear(2, 1)
+
+
+def test_train_stage_members_match_v2_2() -> None:
+    assert {stage.value for stage in TrainStage} == {"koopman", "jepa", "residual", "joint"}
 
 
 @pytest.mark.parametrize("stage", list(TrainStage))
@@ -67,4 +71,3 @@ def test_unowned_parameter_fails_loudly() -> None:
     model.unregistered = nn.Linear(2, 2)
     with pytest.raises(ValueError, match="not owned"):
         configure_train_stage(model, TrainStage.JOINT)
-

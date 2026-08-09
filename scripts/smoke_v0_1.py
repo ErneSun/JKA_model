@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import torch
+from torch import Tensor
 
 from jka_model.config import load_config, save_config
 from jka_model.contracts import (
@@ -20,6 +23,7 @@ from jka_model.contracts import (
     ProblemBatch,
     ProblemSpec,
 )
+from jka_model.physics import PhysicsConstraint
 from jka_model.utils import (
     Checkpoint,
     capture_rng_state,
@@ -29,6 +33,23 @@ from jka_model.utils import (
     save_checkpoint,
     set_global_seed,
 )
+
+
+class SmokeConstraint:
+    """Toy Protocol implementation used only to validate the V0.1 interface."""
+
+    def loss(
+        self,
+        pred_state_raw: Tensor,
+        *,
+        prev_state_raw: Tensor | None = None,
+        action: Tensor | None = None,
+        dt: Tensor | None = None,
+        spec: ProblemSpec | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Tensor]:
+        del prev_state_raw, action, dt, spec, metadata
+        return {"interface_zero": pred_state_raw.sum() * 0.0}
 
 
 def main() -> None:
@@ -72,6 +93,10 @@ def main() -> None:
         cell_weights=torch.full((4,), 0.25),
         trajectory_id=["toy-0", "toy-1"],
     )
+    physics_constraint = SmokeConstraint()
+    if not isinstance(physics_constraint, PhysicsConstraint):
+        raise RuntimeError("PhysicsConstraint Protocol check failed")
+    physics_terms = physics_constraint.loss(batch.future_states_raw[:, 0], spec=spec)
 
     with tempfile.TemporaryDirectory(prefix="jka-v0-1-") as temporary_root:
         run = create_run_directory(
@@ -115,15 +140,18 @@ def main() -> None:
             "config_hash": run.config_hash,
             "git_commit": run.git_commit,
             "train_stage": run.train_stage.value,
-            "states_raw_shape": list(batch.states_raw.shape),
-            "states_model_shape": list(batch.states_model.shape),
-            "actions_shape": None if batch.actions is None else list(batch.actions.shape),
-            "dts_shape": list(batch.dts.shape),
+            "context_states_raw_shape": list(batch.context_states_raw.shape),
+            "future_states_raw_shape": list(batch.future_states_raw.shape),
+            "context_states_model_shape": list(batch.context_states_model.shape),
+            "history_actions_shape": (
+                None if batch.history_actions is None else list(batch.history_actions.shape)
+            ),
+            "future_dts_shape": list(batch.future_dts.shape),
             "checkpoint_roundtrip": True,
+            "physics_constraint_interface": set(physics_terms) == {"interface_zero"},
         }
         print(json.dumps(metadata, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
     main()
-

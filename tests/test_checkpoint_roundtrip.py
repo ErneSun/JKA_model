@@ -25,6 +25,7 @@ def make_checkpoint(toy_config: ProjectConfig, toy_problem_spec: ProblemSpec) ->
         config=toy_config,
         data_fingerprint="sha256:test-data",
         split_manifest={"train": ["a"], "validation": ["b"], "test": ["c"]},
+        physics_constraint_spec=[{"name": "finite_values", "parameters": {}}],
         git_commit=None,
     )
 
@@ -43,6 +44,9 @@ def test_checkpoint_roundtrip(
     assert restored.config == toy_config
     assert restored.config_hash == toy_config.stable_hash
     assert restored.data_fingerprint == "sha256:test-data"
+    assert restored.physics_constraint_spec == [
+        {"name": "finite_values", "parameters": {}}
+    ]
     assert restored.online_model_state is not None
     torch.testing.assert_close(restored.online_model_state["weight"], torch.tensor([1.0, 2.0]))
 
@@ -53,11 +57,11 @@ def test_architecture_revision_guard(
     destination = tmp_path / "checkpoint.pt"
     save_checkpoint(make_checkpoint(toy_config, toy_problem_spec), destination)
     payload = torch.load(destination, weights_only=False)
-    payload["architecture_revision"] = "1.0"
+    payload["architecture_revision"] = "2.1"
     torch.save(payload, destination)
     with pytest.raises(ValueError, match="architecture revision"):
         load_checkpoint(destination)
-    assert ARCHITECTURE_REVISION == "2.1"
+    assert ARCHITECTURE_REVISION == "2.2"
 
 
 def test_checkpoint_rejects_config_hash_tampering(

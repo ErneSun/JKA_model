@@ -1,4 +1,4 @@
-"""Public API for the V0.1 project skeleton and contracts."""
+"""Public API for the V0.2 data and physics-contract foundation."""
 
 from jka_model.constants import (
     ARCHITECTURE_REVISION,
@@ -18,6 +18,7 @@ from jka_model.contracts import (
     TransitionOutput,
     validate_trajectory_alignment,
 )
+from jka_model.physics import PhysicsConstraint
 from jka_model.training import TrainStage, configure_train_stage
 
 __all__ = [
@@ -33,9 +34,9 @@ __all__ = [
     "NormalizationSpec",
     "ProblemBatch",
     "ProblemSpec",
+    "PhysicsConstraint",
     "TrainStage",
     "TransitionOutput",
     "configure_train_stage",
     "validate_trajectory_alignment",
 ]
-

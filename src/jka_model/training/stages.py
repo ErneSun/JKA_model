@@ -20,10 +20,10 @@ class TrainStage(str, Enum):
 
 _STAGE_TRAINABLE_GROUPS: dict[TrainStage, frozenset[str]] = {
     TrainStage.KOOPMAN: frozenset(
-        {"koopman_encoder", "online_encoder", "koopman_core", "physical_readout"}
+        {"koopman_encoder", "online_encoder", "koopman_core", "training_decoder"}
     ),
     TrainStage.JEPA: frozenset(
-        {"koopman_encoder", "online_encoder", "koopman_core", "physical_readout"}
+        {"koopman_encoder", "online_encoder", "koopman_core", "training_decoder"}
     ),
     TrainStage.RESIDUAL: frozenset({"residual_memory", "residual_head", "gate"}),
     TrainStage.JOINT: frozenset(
@@ -34,14 +34,13 @@ _STAGE_TRAINABLE_GROUPS: dict[TrainStage, frozenset[str]] = {
             "residual_memory",
             "residual_head",
             "gate",
-            "physical_readout",
+            "training_decoder",
         }
     ),
 }
 
 _KNOWN_GROUPS = frozenset().union(*_STAGE_TRAINABLE_GROUPS.values()) | {
     "target_encoder",
-    "physical_anchor",
 }
 
 

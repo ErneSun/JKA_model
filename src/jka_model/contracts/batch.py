@@ -59,7 +59,7 @@ class ProblemBatch:
     - ``future_dts``: ``[B, K]``; index 0 belongs to ``U_t -> U_{t+1}``.
     - ``mu_static``: optional ``[B, d_mu]``.
 
-    ``states_raw`` are physical-unit values for future physical anchoring and metrics.
+    ``states_raw`` are physical-unit values for future physics constraints, probes, and metrics.
     ``states_model`` are normalized/preprocessed neural-network values. They are never
     substituted for one another by this contract.
     """
@@ -156,43 +156,12 @@ class ProblemBatch:
         if isinstance(self.trajectory_id, (list, tuple)) and len(self.trajectory_id) != batch_size:
             raise ValueError("trajectory_id sequence length must equal batch size")
 
-        # The concatenated view must always satisfy [T+1] states / [T] transitions.
-        if self.states_raw.shape[1] != self.dts.shape[1] + 1:
+        state_count = history + horizon
+        transition_count = self.history_dts.shape[1] + self.future_dts.shape[1]
+        if state_count != transition_count + 1:
             raise ValueError("states length must equal dts length + 1")
-        if self.actions is not None and self.states_raw.shape[1] != self.actions.shape[1] + 1:
+        if self.history_actions is not None and state_count != transition_count + 1:
             raise ValueError("states length must equal actions length + 1")
-
-    @property
-    def states_raw(self) -> Tensor:
-        """Concatenated physical-unit window, shape ``[B, H+K, *state]``."""
-        return torch.cat((self.context_states_raw, self.future_states_raw), dim=1)
-
-    @property
-    def states_model(self) -> Tensor:
-        """Concatenated model-input window, shape ``[B, H+K, *state]``."""
-        return torch.cat((self.context_states_model, self.future_states_model), dim=1)
-
-    @property
-    def actions(self) -> Tensor | None:
-        """Concatenated aligned transitions, shape ``[B, H-1+K, d_a]``."""
-        if self.history_actions is None or self.future_actions is None:
-            return None
-        return torch.cat((self.history_actions, self.future_actions), dim=1)
-
-    @property
-    def dts(self) -> Tensor:
-        """Concatenated aligned transition intervals, shape ``[B, H-1+K]``."""
-        return torch.cat((self.history_dts, self.future_dts), dim=1)
-
-    @property
-    def parameters(self) -> Tensor | None:
-        """Alias for static physical parameters ``mu_static``."""
-        return self.mu_static
-
-    @property
-    def mask(self) -> Tensor | None:
-        """Alias for the geometry/domain validity mask ``valid_mask``."""
-        return self.valid_mask
 
     def to(self, *args: Any, **kwargs: Any) -> ProblemBatch:
         """Return a new batch with every tensor moved via ``Tensor.to``.
@@ -209,22 +178,26 @@ class ProblemBatch:
 
 @dataclass(slots=True)
 class LatentState:
-    """Public latent naming contract; no encoder is implemented in V0.1.
+    """Core latent-state contract; no encoder is implemented in V0.1.
 
-    Shapes: ``z_k [B,d_k]``, optional ``z_phys [B,d_phys]`` and ``z_r [B,d_r]``.
+    Shapes: ``z_k [B,d_k]`` and optional ``z_r [B,d_r]``.
+
+    ``z_k`` is the future Koopman dynamical state. ``z_r`` is a history-conditioned
+    closure/memory state, not an independent physical-coordinate manifold. Physical
+    laws are represented separately by ``PhysicsConstraint`` and never by a third
+    required latent field.
     """
 
     z_k: Tensor
-    z_phys: Tensor | None = None
     z_r: Tensor | None = None
 
     def __post_init__(self) -> None:
         if self.z_k.ndim != 2:
             raise ValueError("z_k must have shape [B, d_k]")
-        for name in ("z_phys", "z_r"):
-            value = getattr(self, name)
-            if value is not None and (value.ndim != 2 or value.shape[0] != self.z_k.shape[0]):
-                raise ValueError(f"{name} must have shape [B, d_{name[2:]}]")
+        if self.z_r is not None and (
+            self.z_r.ndim != 2 or self.z_r.shape[0] != self.z_k.shape[0]
+        ):
+            raise ValueError("z_r must have shape [B, d_r]")
 
 
 @dataclass(slots=True)

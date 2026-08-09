@@ -1,4 +1,4 @@
-"""Versioned V0.1 checkpoint schema with compatibility guards."""
+"""Versioned checkpoint schema with compatibility guards."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from jka_model.utils.seed import RNGState
 class Checkpoint:
     """Complete epoch-boundary resume envelope.
 
-    Model and optimizer fields are intentionally optional in V0.1 because no model or
+    Model and optimizer fields are intentionally optional in V0.2 because no model or
     trainer exists yet. The schema already reserves their final meanings.
     """
 
@@ -46,6 +46,7 @@ class Checkpoint:
     config_hash: str | None = None
     data_fingerprint: str | None = None
     split_manifest: Any = None
+    physics_constraint_spec: Any = None
     git_commit: str | None = None
     schema_version: int = CHECKPOINT_SCHEMA_VERSION
 
@@ -95,6 +96,7 @@ class Checkpoint:
             "config_hash": self.config_hash,
             "data_fingerprint": self.data_fingerprint,
             "split_manifest": self.split_manifest,
+            "physics_constraint_spec": self.physics_constraint_spec,
             "git_commit": self.git_commit,
         }
 
@@ -118,6 +120,7 @@ class Checkpoint:
             "config_hash",
             "data_fingerprint",
             "split_manifest",
+            "physics_constraint_spec",
             "git_commit",
         }
         missing = required - set(payload)
@@ -164,6 +167,7 @@ class Checkpoint:
                 None if payload["data_fingerprint"] is None else str(payload["data_fingerprint"])
             ),
             split_manifest=payload["split_manifest"],
+            physics_constraint_spec=payload["physics_constraint_spec"],
             git_commit=None if payload["git_commit"] is None else str(payload["git_commit"]),
         )
 

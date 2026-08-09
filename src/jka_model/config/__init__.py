@@ -1,9 +1,12 @@
-"""Strict, serializable V0.1 configuration API."""
+"""Strict, serializable V0.2 configuration API."""
 
 from jka_model.config.schema import (
     ArchitectureConfig,
     DataConfig,
+    NormalizationConfig,
     ProjectConfig,
+    SplitConfig,
+    ToyAdvectionDiffusionConfig,
     TrainingConfig,
     load_config,
     save_config,
@@ -13,10 +16,12 @@ from jka_model.config.schema import (
 __all__ = [
     "ArchitectureConfig",
     "DataConfig",
+    "NormalizationConfig",
     "ProjectConfig",
+    "SplitConfig",
+    "ToyAdvectionDiffusionConfig",
     "TrainingConfig",
     "load_config",
     "save_config",
     "stable_config_hash",
 ]
-

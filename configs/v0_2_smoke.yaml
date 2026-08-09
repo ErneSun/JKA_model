@@ -1,0 +1,41 @@
+architecture:
+  package: jka_model
+  revision: "2.2"
+data:
+  action_dim: 0
+  constant_dt: null
+  dt_mode: variable
+  history: 4
+  horizon: 2
+  normalization:
+    kind: standard
+    eps: 1.0e-6
+  parameter_dim: 2
+  problem_name: toy_periodic_advection_diffusion_1d
+  split:
+    train: 0.67
+    validation: 0.17
+    test: 0.16
+    seed: 23
+  toy_advection_diffusion:
+    num_trajectories: 12
+    num_steps: 16
+    nx: 65
+    length: 6.283185307179586
+    base_dt: 0.03
+    variable_dt: true
+    modes: 3
+    c_min: 0.5
+    c_max: 1.2
+    nu_min: 0.01
+    nu_max: 0.05
+    enable_probe: true
+project_version: 0.2.0
+tags:
+  - v0.2
+  - smoke
+training:
+  deterministic: true
+  run_root: runs
+  seed: 7
+  stage: koopman

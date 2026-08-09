@@ -24,15 +24,15 @@ def make_batch() -> ProblemBatch:
     )
 
 
-def test_problem_batch_contract_and_public_aliases() -> None:
+def test_problem_batch_contract_uses_canonical_names_only() -> None:
     batch = make_batch()
-    assert batch.states_raw.shape == (2, 5, 1, 4)
-    assert batch.states_model.shape == (2, 5, 1, 4)
-    assert batch.actions is not None and batch.actions.shape == (2, 4, 1)
-    assert batch.dts.shape == (2, 4)
-    assert batch.parameters is batch.mu_static
-    assert batch.mask is batch.valid_mask
-    assert not torch.equal(batch.states_raw, batch.states_model)
+    assert batch.context_states_raw.shape == (2, 3, 1, 4)
+    assert batch.future_states_raw.shape == (2, 2, 1, 4)
+    assert batch.history_actions is not None and batch.history_actions.shape == (2, 2, 1)
+    assert batch.future_dts.shape == (2, 2)
+    assert not hasattr(batch, "parameters")
+    assert not hasattr(batch, "mask")
+    assert not hasattr(batch, "states_raw")
 
 
 def test_problem_batch_rejects_misaligned_dts() -> None:
@@ -77,4 +77,3 @@ def test_problem_batch_to_returns_new_batch_without_unit_conversion() -> None:
     assert moved.context_states_raw.dtype is torch.float64
     assert moved.trajectory_id == batch.trajectory_id
     assert torch.equal(moved.context_states_raw, batch.context_states_raw.to(torch.float64))
-

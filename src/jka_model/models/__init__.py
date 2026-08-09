@@ -1,2 +1,1 @@
-"""Reserved for later model versions; V0.1 intentionally implements no neural model."""
-
+"""Reserved for later versions; V0.2 intentionally implements no neural model."""
