@@ -52,7 +52,7 @@ class ChannelStandardizer:
         samples = torch.cat(flattened, dim=1)
         self.mean = samples.mean(dim=1)
         variance = ((samples - self.mean[:, None]) ** 2).mean(dim=1)
-        self.scale = torch.sqrt(variance).clamp_min(self.eps)
+        self.scale = torch.sqrt(variance) + self.eps
         self.spatial_dim = spec.spatial_dim
         self.layout = spec.grid.layout
         self.fitted_trajectory_ids = tuple(manifest.train)
@@ -112,4 +112,3 @@ class ChannelStandardizer:
         self.spatial_dim = int(state["spatial_dim"])
         self.layout = layout
         self.fitted_trajectory_ids = tuple(str(v) for v in state["fitted_trajectory_ids"])
-

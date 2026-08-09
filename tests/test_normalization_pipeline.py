@@ -51,3 +51,26 @@ def test_normalizer_state_roundtrip() -> None:
     torch.testing.assert_close(
         restored.transform(records[2].states_raw), fitted.transform(records[2].states_raw)
     )
+
+
+def test_zero_variance_channel_normalization() -> None:
+    _, spec = generate_advection_diffusion_trajectories(
+        ToyAdvectionDiffusionConfig(num_trajectories=1), seed=15
+    )
+    constant = TrajectoryRecord(
+        "constant",
+        torch.full((4, 1, 8), 7.5, dtype=torch.float32),
+        torch.full((3,), 0.1),
+    )
+    manifest = SplitManifest(
+        train=("constant",), validation=(), test=(), seed=0, ratios=(1.0, 0.0, 0.0)
+    )
+    normalizer = ChannelStandardizer(eps=1e-6).fit([constant], manifest, spec)
+    assert normalizer.scale is not None
+    torch.testing.assert_close(normalizer.scale, torch.tensor([1e-6], dtype=torch.float64))
+    transformed = normalizer.transform(constant.states_raw)
+    assert torch.isfinite(transformed).all()
+    torch.testing.assert_close(transformed, torch.zeros_like(transformed))
+    torch.testing.assert_close(
+        normalizer.inverse_transform(transformed), constant.states_raw
+    )

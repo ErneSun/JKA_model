@@ -115,7 +115,11 @@ def generate_advection_diffusion_trajectories(
                 coordinates=x.clone(),
                 cell_weights=weights.clone(),
                 valid_mask=valid_mask.clone(),
-                metadata={"seed": seed, "analytic": True},
+                metadata={
+                    "seed": seed,
+                    "analytic": True,
+                    "offset_b": float(offset),
+                },
             )
         )
     return TrajectoryDataset(records), make_advection_diffusion_problem_spec(config)

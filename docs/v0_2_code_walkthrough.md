@@ -1,8 +1,10 @@
 # V0.2 Code Walkthrough — Data Windows & Physics Contracts
 
-本文是 V0.2 的代码结构阅读手册，对应仓库中的真实实现。当前软件版本为 `0.2.0`，唯一
-有效架构修订为 `2.2`。本版本的目标不是获得预测能力，而是确保以后模型接收的数据在
-trajectory、时间、单位、split 和物理意义上都正确。
+> 历史导读说明：仓库运行时现为 V0.3/`0.3.0`、checkpoint schema 3；本文保留 V0.2 数据与
+> 物理契约的实现语义。当前整体入口见 `docs/v0_3_code_walkthrough.md`。
+
+本文是 V0.2 的代码结构阅读手册。唯一有效架构修订为 `2.2`。V0.2 的目标不是获得预测
+能力，而是确保以后模型接收的数据在 trajectory、时间、单位、split 和物理意义上都正确。
 
 ## 1. V0.2 相比 V0.1 增加了什么
 
@@ -192,6 +194,9 @@ residual 约 `1.95e-4`。
 | `valid_mask` | grid-specific | dimensionless | 有效物理域 |
 | `metadata` | mapping | — | 可序列化数据 provenance |
 
+解析 toy record 的 metadata 还保存 `offset_b`，使测试可直接验证质量真值 `M=bL`，而不只是
+验证一个可能错误的积分值随时间保持不变。
+
 ### 5.2 `ProblemBatch`
 
 | Field | Shape | Source | Used by |
@@ -219,7 +224,7 @@ residual 约 `1.95e-4`。
 | `kind` | 当前为 `channel_standardizer` |
 | `eps` | 防止 channel scale 为零 |
 | `mean` | 每个 channel 的 train-only mean |
-| `scale` | 每个 channel 的 train-only standard deviation，最小为 `eps` |
+| `scale` | 每个 channel 的 train-only standard deviation 加 `eps` |
 | `spatial_dim` | 用于恢复 channel axis |
 | `layout` | `channels_first` 或 `channels_last` |
 | `fitted_trajectory_ids` | 审计 fit 数据来源 |
@@ -343,7 +348,7 @@ Normalizer 计算：
 
 \[
 \mu_c=\frac{1}{N_c}\sum_jU_{j,c},\qquad
-\sigma_c=\max\left(\sqrt{\frac{1}{N_c}\sum_j(U_{j,c}-\mu_c)^2},\epsilon\right),
+\sigma_c=\sqrt{\frac{1}{N_c}\sum_j(U_{j,c}-\mu_c)^2}+\epsilon,
 \]
 
 \[
@@ -515,6 +520,17 @@ verified metadata and normalization round-trip
 | fingerprint order/content/metadata | identity 不稳定或不敏感 | 使用错误数据却复用 checkpoint |
 | strict V0.2 config | invalid H/K/ratio/nu/Nx 被接受 | 错误推迟到深层 pipeline |
 | V0.1 regression suite/smoke | V0.2 破坏基础契约 | 后续版本失去稳定基线 |
+
+附加数值验证使用 float64 reference：
+
+- `test_first_derivative_against_analytic` 验证 `D1 sin(kx) ≈ k cos(kx)`；
+- `test_second_derivative_against_analytic` 验证 `D2 sin(kx) ≈ -k² sin(kx)`；
+- `test_second_order_grid_convergence` 使用 `Nx=32,64,128`。当前实际 RMS errors 为
+  `3.8414e-2 > 9.3592e-3 > 2.3066e-3`，observed orders 为 `2.0372` 与 `2.0206`，符合二阶
+  centered difference；测试会打印这些 diagnostics；
+- `test_mass_matches_analytic_b_times_length` 同时验证每个时刻 `M(t)=M(0)=bL`；
+- negative/zero/wrong-length transition tests 确认无 truncate、padding 或 silent correction；
+- `test_zero_variance_channel_normalization` 确认 `sigma+epsilon` 产生有限零值并可逆。
 
 运行全部测试：
 

@@ -30,7 +30,7 @@ def _reject_unknown(data: Mapping[str, Any], allowed: set[str], owner: str) -> N
 
 @dataclass(frozen=True, slots=True)
 class ArchitectureConfig:
-    """Architecture identity only; V0.1 has no neural hyperparameters."""
+    """Architecture identity shared by all versioned experiments."""
 
     revision: str = ARCHITECTURE_REVISION
     package: str = "jka_model"
@@ -58,7 +58,7 @@ class ArchitectureConfig:
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
-    """Run controls needed before any trainer exists."""
+    """Run controls shared by all versioned experiments."""
 
     seed: int = 0
     stage: TrainStage = TrainStage.KOOPMAN
@@ -244,8 +244,204 @@ class ToyAdvectionDiffusionConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class KoopmanConfig:
+    """Direct-state continuous-time generator settings."""
+
+    state_dim: int = 2
+    trainable: bool = True
+    dtype: str = "float64"
+
+    def __post_init__(self) -> None:
+        if self.state_dim < 1:
+            raise ValueError("Koopman state_dim must be positive")
+        if self.dtype not in {"float32", "float64"}:
+            raise ValueError("Koopman dtype must be 'float32' or 'float64'")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"state_dim": self.state_dim, "trainable": self.trainable, "dtype": self.dtype}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> KoopmanConfig:
+        _reject_unknown(data, {"state_dim", "trainable", "dtype"}, "Koopman config")
+        return cls(
+            state_dim=int(data.get("state_dim", 2)),
+            trainable=bool(data.get("trainable", True)),
+            dtype=str(data.get("dtype", "float64")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DampedOscillatorConfig:
+    """Reference damped harmonic oscillator data settings."""
+
+    omega0: float = 2.0
+    gamma: float = 0.15
+    base_dt: float = 0.04
+    variable_dt: bool = True
+    dt_jitter: float = 0.25
+    num_steps: int = 160
+    num_trajectories: int = 12
+
+    def __post_init__(self) -> None:
+        if self.omega0 <= 0 or not 0 < self.gamma < self.omega0:
+            raise ValueError("oscillator requires omega0 > gamma > 0")
+        if self.base_dt <= 0 or self.num_steps < 1 or self.num_trajectories < 1:
+            raise ValueError("oscillator dt, steps, and trajectories must be positive")
+        if not 0 <= self.dt_jitter < 1:
+            raise ValueError("oscillator dt_jitter must lie in [0, 1)")
+        if not self.variable_dt and self.dt_jitter != 0:
+            raise ValueError("constant-dt oscillator requires dt_jitter=0")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "omega0": self.omega0,
+            "gamma": self.gamma,
+            "base_dt": self.base_dt,
+            "variable_dt": self.variable_dt,
+            "dt_jitter": self.dt_jitter,
+            "num_steps": self.num_steps,
+            "num_trajectories": self.num_trajectories,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> DampedOscillatorConfig:
+        allowed = {
+            "omega0",
+            "gamma",
+            "base_dt",
+            "variable_dt",
+            "dt_jitter",
+            "num_steps",
+            "num_trajectories",
+        }
+        _reject_unknown(data, allowed, "damped oscillator config")
+        defaults = cls()
+        return cls(
+            omega0=float(data.get("omega0", defaults.omega0)),
+            gamma=float(data.get("gamma", defaults.gamma)),
+            base_dt=float(data.get("base_dt", defaults.base_dt)),
+            variable_dt=bool(data.get("variable_dt", defaults.variable_dt)),
+            dt_jitter=float(data.get("dt_jitter", defaults.dt_jitter)),
+            num_steps=int(data.get("num_steps", defaults.num_steps)),
+            num_trajectories=int(data.get("num_trajectories", defaults.num_trajectories)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DuffingConfig:
+    """Unforced Duffing reference-data settings."""
+
+    delta: float = 0.2
+    alpha: float = 1.0
+    beta: float = 0.5
+    dt: float = 0.02
+    num_steps: int = 160
+    num_trajectories: int = 8
+    rk4_substeps: int = 2
+
+    def __post_init__(self) -> None:
+        if self.delta < 0 or self.alpha <= 0 or self.beta == 0:
+            raise ValueError("Duffing requires delta >= 0, alpha > 0, and beta != 0")
+        if self.dt <= 0 or self.num_steps < 1 or self.num_trajectories < 1:
+            raise ValueError("Duffing dt, steps, and trajectories must be positive")
+        if self.rk4_substeps < 1:
+            raise ValueError("Duffing rk4_substeps must be positive")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "delta": self.delta,
+            "alpha": self.alpha,
+            "beta": self.beta,
+            "dt": self.dt,
+            "num_steps": self.num_steps,
+            "num_trajectories": self.num_trajectories,
+            "rk4_substeps": self.rk4_substeps,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> DuffingConfig:
+        allowed = {
+            "delta",
+            "alpha",
+            "beta",
+            "dt",
+            "num_steps",
+            "num_trajectories",
+            "rk4_substeps",
+        }
+        _reject_unknown(data, allowed, "Duffing config")
+        defaults = cls()
+        return cls(
+            delta=float(data.get("delta", defaults.delta)),
+            alpha=float(data.get("alpha", defaults.alpha)),
+            beta=float(data.get("beta", defaults.beta)),
+            dt=float(data.get("dt", defaults.dt)),
+            num_steps=int(data.get("num_steps", defaults.num_steps)),
+            num_trajectories=int(data.get("num_trajectories", defaults.num_trajectories)),
+            rk4_substeps=int(data.get("rk4_substeps", defaults.rk4_substeps)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DirectIdentificationConfig:
+    """Minimal optimizer settings for learning only the generator matrix."""
+
+    epochs: int = 700
+    learning_rate: float = 0.03
+    init_scale: float = 0.05
+    weight_decay: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.epochs < 1 or self.learning_rate <= 0 or self.init_scale < 0:
+            raise ValueError(
+                "identification epochs/lr must be positive and init_scale non-negative"
+            )
+        if self.weight_decay < 0:
+            raise ValueError("identification weight_decay must be non-negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "epochs": self.epochs,
+            "learning_rate": self.learning_rate,
+            "init_scale": self.init_scale,
+            "weight_decay": self.weight_decay,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> DirectIdentificationConfig:
+        allowed = {"epochs", "learning_rate", "init_scale", "weight_decay"}
+        _reject_unknown(data, allowed, "direct identification config")
+        defaults = cls()
+        return cls(
+            epochs=int(data.get("epochs", defaults.epochs)),
+            learning_rate=float(data.get("learning_rate", defaults.learning_rate)),
+            init_scale=float(data.get("init_scale", defaults.init_scale)),
+            weight_decay=float(data.get("weight_decay", defaults.weight_decay)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class KoopmanEvaluationConfig:
+    """V0.3 deterministic rollout evaluation settings."""
+
+    rollout_horizon: int = 100
+
+    def __post_init__(self) -> None:
+        if self.rollout_horizon < 1:
+            raise ValueError("rollout_horizon must be positive")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"rollout_horizon": self.rollout_horizon}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> KoopmanEvaluationConfig:
+        _reject_unknown(data, {"rollout_horizon"}, "Koopman evaluation config")
+        return cls(rollout_horizon=int(data.get("rollout_horizon", 100)))
+
+
+@dataclass(frozen=True, slots=True)
 class DataConfig:
-    """Static data expectations and V0.2 pipeline settings."""
+    """Static data expectations shared by V0.2+ pipelines."""
 
     problem_name: str
     action_dim: int = 0
@@ -351,11 +547,16 @@ class DataConfig:
 
 @dataclass(frozen=True, slots=True)
 class ProjectConfig:
-    """Resolved V0.2 configuration, split by architecture/training/data concerns."""
+    """Resolved configuration with optional V0.3 direct-state sections."""
 
     architecture: ArchitectureConfig
     training: TrainingConfig
     data: DataConfig
+    koopman: KoopmanConfig | None = None
+    oscillator: DampedOscillatorConfig | None = None
+    duffing: DuffingConfig | None = None
+    identification: DirectIdentificationConfig | None = None
+    evaluation: KoopmanEvaluationConfig | None = None
     project_version: str = PROJECT_VERSION
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -365,12 +566,47 @@ class ProjectConfig:
                 f"config project version {self.project_version!r} does not match "
                 f"runtime version {PROJECT_VERSION!r}"
             )
+        v0_3_sections = (
+            self.koopman,
+            self.oscillator,
+            self.duffing,
+            self.identification,
+            self.evaluation,
+        )
+        if any(section is not None for section in v0_3_sections) and not all(
+            section is not None for section in v0_3_sections
+        ):
+            raise ValueError("V0.3 config must provide all direct-state sections together")
+        if self.koopman is not None and self.koopman.state_dim != 2:
+            raise ValueError("V0.3 oscillator experiments require Koopman state_dim=2")
+        if self.koopman is not None:
+            assert self.oscillator is not None
+            expected_mode = (
+                DtMode.VARIABLE if self.oscillator.variable_dt else DtMode.CONSTANT
+            )
+            if self.data.problem_name != "damped_harmonic_oscillator":
+                raise ValueError("V0.3 data problem_name must be damped_harmonic_oscillator")
+            if self.data.action_dim != 0 or self.data.parameter_dim != 2:
+                raise ValueError("V0.3 oscillator data requires action_dim=0 and parameter_dim=2")
+            if self.data.dt_mode is not expected_mode:
+                raise ValueError("V0.3 data dt_mode must match oscillator variable_dt")
+            if expected_mode is DtMode.CONSTANT:
+                assert self.data.constant_dt is not None
+                if abs(self.data.constant_dt - self.oscillator.base_dt) > 1e-12:
+                    raise ValueError("V0.3 constant_dt must match oscillator base_dt")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "architecture": self.architecture.to_dict(),
             "training": self.training.to_dict(),
             "data": self.data.to_dict(),
+            "koopman": None if self.koopman is None else self.koopman.to_dict(),
+            "oscillator": None if self.oscillator is None else self.oscillator.to_dict(),
+            "duffing": None if self.duffing is None else self.duffing.to_dict(),
+            "identification": (
+                None if self.identification is None else self.identification.to_dict()
+            ),
+            "evaluation": None if self.evaluation is None else self.evaluation.to_dict(),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }
@@ -379,7 +615,18 @@ class ProjectConfig:
     def from_dict(cls, data: Mapping[str, Any]) -> ProjectConfig:
         _reject_unknown(
             data,
-            {"architecture", "training", "data", "project_version", "tags"},
+            {
+                "architecture",
+                "training",
+                "data",
+                "koopman",
+                "oscillator",
+                "duffing",
+                "identification",
+                "evaluation",
+                "project_version",
+                "tags",
+            },
             "project config",
         )
         return cls(
@@ -390,6 +637,37 @@ class ProjectConfig:
                 _ensure_mapping(data.get("training", {}), "training config")
             ),
             data=DataConfig.from_dict(_ensure_mapping(data["data"], "data config")),
+            koopman=(
+                None
+                if data.get("koopman") is None
+                else KoopmanConfig.from_dict(_ensure_mapping(data["koopman"], "Koopman config"))
+            ),
+            oscillator=(
+                None
+                if data.get("oscillator") is None
+                else DampedOscillatorConfig.from_dict(
+                    _ensure_mapping(data["oscillator"], "damped oscillator config")
+                )
+            ),
+            duffing=(
+                None
+                if data.get("duffing") is None
+                else DuffingConfig.from_dict(_ensure_mapping(data["duffing"], "Duffing config"))
+            ),
+            identification=(
+                None
+                if data.get("identification") is None
+                else DirectIdentificationConfig.from_dict(
+                    _ensure_mapping(data["identification"], "direct identification config")
+                )
+            ),
+            evaluation=(
+                None
+                if data.get("evaluation") is None
+                else KoopmanEvaluationConfig.from_dict(
+                    _ensure_mapping(data["evaluation"], "Koopman evaluation config")
+                )
+            ),
             project_version=str(data.get("project_version", PROJECT_VERSION)),
             tags=tuple(str(tag) for tag in data.get("tags", ())),
         )

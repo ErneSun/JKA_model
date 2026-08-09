@@ -1,8 +1,8 @@
 # V0.1 Code Walkthrough
 
-> 历史导读说明：仓库运行时现为 V0.2/`0.2.0`。V0.1 smoke 仍作为回归入口，但
-> `ProblemBatch` 旧聚合别名已在 V0.2 移除，checkpoint schema 已升级为 2。当前实现请以
-> `docs/v0_2_code_walkthrough.md` 为准。
+> 历史导读说明：仓库运行时现为 V0.3/`0.3.0`。V0.1 smoke 仍作为回归入口，但
+> `ProblemBatch` 旧聚合别名已在 V0.2 移除，checkpoint schema 已升级为 3。当前实现请以
+> `docs/v0_3_code_walkthrough.md` 为准。
 
 本文是当前 V0.1 代码的主要阅读入口。内容来自仓库中的实际 Python、YAML、测试和
 `scripts/smoke_v0_1.py`，不描述尚未实现的模型。
@@ -202,7 +202,7 @@ python scripts/smoke_v0_1.py
 - `ArchitectureConfig(revision="2.2", package="jka_model")`
 - `TrainingConfig(seed=7, stage=KOOPMAN, deterministic=True, run_root="runs")`
 - `DataConfig(problem_name="toy_scalar_field", action_dim=1, parameter_dim=1, ...)`
-- 外层 `ProjectConfig(project_version="0.2.0", tags=("v0.1", "smoke"))`
+- 外层 `ProjectConfig(project_version="0.3.0", tags=("v0.1", "smoke"))`
 
 未知字段会失败；revision 或 project version 不兼容也会失败。
 
@@ -536,7 +536,7 @@ ProjectConfig
 | `DataConfig` | `dt_mode`, `constant_dt` | 校验 constant/variable dt 配置组合。 |
 | `DataConfig` | `normalization` | V0.1 字符串由迁移解析器转成 V0.2 `NormalizationConfig`。 |
 | `ProjectConfig` | `architecture`, `training`, `data` | 聚合三类配置。 |
-| `ProjectConfig` | `project_version` | 当前回归运行必须等于运行时 `0.2.0`。 |
+| `ProjectConfig` | `project_version` | 当前回归运行必须等于运行时 `0.3.0`。 |
 | `ProjectConfig` | `tags` | 追踪/分类 metadata。 |
 
 `stable_config_hash()` 的目的，是让 run 和 checkpoint 能证明“使用的是完全相同的 resolved
@@ -601,13 +601,13 @@ conservation loss           = Not implemented in V0.1
 
 ## 10. Checkpoint 完整数据表
 
-`Checkpoint` 是 epoch-boundary resume envelope。当前 schema version 为 2。
+`Checkpoint` 是 epoch-boundary resume envelope。当前 schema version 为 3。
 
 | 字段 | 保存什么 | 为什么保存 | smoke 中的真实值 |
 |---|---|---|---|
-| `schema_version` | checkpoint 格式版本 | 防止字段布局不兼容 | `2` |
+| `schema_version` | checkpoint 格式版本 | 防止字段布局不兼容 | `3` |
 | `architecture_revision` | 模型/契约架构 revision | 拒绝旧架构静默加载 | `"2.2"` |
-| `project_version` | 软件项目版本 | 保证 runtime 兼容 | `"0.2.0"` |
+| `project_version` | 软件项目版本 | 保证 runtime 兼容 | `"0.3.0"` |
 | `train_stage` | `TrainStage` | 知道保存时处于哪个训练阶段 | `KOOPMAN` |
 | `online_model_state` | mapping 或 `None` | 未来 online model 参数 | `None` |
 | `target_model_state` | mapping 或 `None` | 未来 target/EMA model 参数 | `None` |

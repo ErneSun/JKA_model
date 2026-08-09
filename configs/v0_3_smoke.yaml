@@ -1,0 +1,57 @@
+architecture:
+  package: jka_model
+  revision: "2.2"
+data:
+  action_dim: 0
+  constant_dt: null
+  dt_mode: variable
+  history: 2
+  horizon: 1
+  normalization:
+    kind: external
+    eps: 1.0e-6
+  parameter_dim: 2
+  problem_name: damped_harmonic_oscillator
+  split:
+    train: 0.67
+    validation: 0.17
+    test: 0.16
+    seed: 31
+  toy_advection_diffusion: null
+koopman:
+  state_dim: 2
+  trainable: true
+  dtype: float64
+oscillator:
+  omega0: 2.0
+  gamma: 0.15
+  base_dt: 0.04
+  variable_dt: true
+  dt_jitter: 0.25
+  num_steps: 160
+  num_trajectories: 12
+duffing:
+  delta: 0.2
+  alpha: 1.0
+  beta: 0.5
+  dt: 0.02
+  num_steps: 160
+  num_trajectories: 8
+  rk4_substeps: 2
+identification:
+  epochs: 700
+  learning_rate: 0.03
+  init_scale: 0.05
+  weight_decay: 0.0
+evaluation:
+  rollout_horizon: 100
+project_version: 0.3.0
+tags:
+  - v0.3
+  - direct-state
+  - smoke
+training:
+  deterministic: true
+  run_root: runs
+  seed: 13
+  stage: koopman

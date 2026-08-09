@@ -25,8 +25,9 @@ from jka_model.utils.seed import RNGState
 class Checkpoint:
     """Complete epoch-boundary resume envelope.
 
-    Model and optimizer fields are intentionally optional in V0.2 because no model or
-    trainer exists yet. The schema already reserves their final meanings.
+    Model and optimizer fields remain optional so fixed-generator V0.3 diagnostics and
+    historical V0.1/V0.2 artifacts can use the same schema. Trainable V0.3 identification
+    stores the Koopman generator and optimizer state in these fields.
     """
 
     train_stage: TrainStage

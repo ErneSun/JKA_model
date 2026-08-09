@@ -1,8 +1,13 @@
-"""Strict, serializable V0.2 configuration API."""
+"""Strict, serializable versioned configuration API."""
 
 from jka_model.config.schema import (
     ArchitectureConfig,
+    DampedOscillatorConfig,
     DataConfig,
+    DirectIdentificationConfig,
+    DuffingConfig,
+    KoopmanConfig,
+    KoopmanEvaluationConfig,
     NormalizationConfig,
     ProjectConfig,
     SplitConfig,
@@ -16,6 +21,11 @@ from jka_model.config.schema import (
 __all__ = [
     "ArchitectureConfig",
     "DataConfig",
+    "DampedOscillatorConfig",
+    "DirectIdentificationConfig",
+    "DuffingConfig",
+    "KoopmanConfig",
+    "KoopmanEvaluationConfig",
     "NormalizationConfig",
     "ProjectConfig",
     "SplitConfig",

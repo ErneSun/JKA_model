@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0 — Direct-State Continuous-Time KoopmanCore
+
+- Added fixed/trainable continuous generator `A` with exact `torch.matrix_exp` propagation.
+- Added scalar/batch/variable-dt step and closed-loop rollout APIs with column-state convention.
+- Added detached continuous spectrum diagnostics and persistence/rollout metrics.
+- Added reusable relative-frequency and spectral-growth metrics.
+- Added independent analytical damped-oscillator data and reference-only Duffing RK4 data.
+- Reused deterministic trajectory splits and structured run logging for held-out evaluation.
+- Added minimal direct-state matrix-exponential identification that trains only `A`.
+- Added 100-step oscillator evaluation, checkpoint reload, spectrum analyzer, smoke and teaching
+  scripts, mandatory mathematical tests, walkthrough, and completion checklist.
+- Updated project version to 0.3.0 and checkpoint schema to 3; architecture remains revision 2.2.
+- Added no encoder, learned lifting, JEPA, residual, attention, or action conditioning.
+
 ## 0.2.0 — Data Windows & Physics Contracts
 
 - Added strict trajectory records, trajectory-level deterministic splits, stable data

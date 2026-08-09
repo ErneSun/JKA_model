@@ -36,6 +36,24 @@ def test_toy_pipeline_defaults_to_float32() -> None:
     assert records[0].dts.dtype is torch.float32
 
 
+def test_mass_matches_analytic_b_times_length() -> None:
+    config = ToyAdvectionDiffusionConfig(num_trajectories=4, variable_dt=True)
+    records, _ = generate_advection_diffusion_trajectories(
+        config, seed=31, dtype=torch.float64
+    )
+    for record in records:
+        assert record.cell_weights is not None
+        offset_b = float(record.metadata["offset_b"])
+        expected_mass = offset_b * config.length
+        mass = weighted_integral(record.states_raw, record.cell_weights)
+        torch.testing.assert_close(
+            mass,
+            torch.full_like(mass, expected_mass),
+            atol=1e-12,
+            rtol=1e-12,
+        )
+
+
 def test_periodic_finite_difference_operators_are_accurate() -> None:
     nx = 129
     x = torch.linspace(0.0, 2.0 * torch.pi, nx, dtype=torch.float64)
