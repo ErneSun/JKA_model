@@ -34,15 +34,16 @@ def main() -> None:
     )
     cpu = run_v0_5_diagnostic_step(cpu_case, backward_physics=False)
     gpu = run_v0_5_diagnostic_step(gpu_case, backward_physics=False)
-    tolerances = {"rtol": 2e-4, "atol": 2e-5}
+    torch_tol = {"rtol": 2e-4, "atol": 2e-5}
+    math_tol = {"rel_tol": 2e-4, "abs_tol": 2e-5}
     parity: dict[str, float] = {}
     for name in ("encoder_output", "koopman_step_output", "decoder_output"):
         parity[name] = float((cpu[name] - gpu[name]).abs().max())
-        if not torch.allclose(cpu[name], gpu[name], **tolerances):
+        if not torch.allclose(cpu[name], gpu[name], **torch_tol):
             raise RuntimeError(f"CPU/GPU {name} parity failed: max_abs={parity[name]}")
     for name in ("mass_penalty", "operator_penalty"):
         parity[name] = abs(cpu[name] - gpu[name])
-        if not math.isclose(cpu[name], gpu[name], **tolerances):
+        if not math.isclose(cpu[name], gpu[name], **math_tol):
             raise RuntimeError(f"CPU/GPU {name} parity failed: abs={parity[name]}")
     current_device = torch.cuda.current_device()
     properties = torch.cuda.get_device_properties(current_device)
@@ -76,7 +77,7 @@ def main() -> None:
         "bf16_supported": torch.cuda.is_bf16_supported(),
         "fp16_supported": True,
         "configs": {name: str(path) for name, path in configs.items()},
-        "parity_tolerances": tolerances,
+        "parity_tolerances": {"torch": torch_tol, "math": math_tol},
         "component_parity_max_abs": parity,
         "matrix_exp_device": str(torch.matrix_exp(torch.eye(2, device="cuda")).device),
     }

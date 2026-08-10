@@ -14,3 +14,4 @@ runs/
 *.log
 trace.json
 *.kineto.json
+.python-version
