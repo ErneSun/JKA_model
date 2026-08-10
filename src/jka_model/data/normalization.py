@@ -95,6 +95,28 @@ class ChannelStandardizer:
             "fitted_trajectory_ids": list(self.fitted_trajectory_ids),
         }
 
+    def matches_state_dict(self, state: Mapping[str, Any]) -> bool:
+        """Compare fitted statistics exactly after canonicalizing tensors onto the CPU.
+
+        Checkpoints may be loaded with a CUDA ``map_location`` even though normalizer
+        statistics are intentionally device-independent. Direct dictionary equality is
+        invalid for multi-element tensors and can also attempt cross-device comparison.
+        """
+        if not self.is_fitted:
+            raise RuntimeError("normalizer must be fitted before state comparison")
+        candidate = ChannelStandardizer(eps=self.eps)
+        candidate.load_state_dict(state)
+        assert self.mean is not None and self.scale is not None
+        assert candidate.mean is not None and candidate.scale is not None
+        return (
+            self.eps == candidate.eps
+            and self.spatial_dim == candidate.spatial_dim
+            and self.layout == candidate.layout
+            and self.fitted_trajectory_ids == candidate.fitted_trajectory_ids
+            and torch.equal(self.mean.detach().cpu(), candidate.mean)
+            and torch.equal(self.scale.detach().cpu(), candidate.scale)
+        )
+
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if state.get("kind") != "channel_standardizer":
             raise ValueError("unsupported normalizer state kind")

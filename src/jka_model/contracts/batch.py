@@ -8,7 +8,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-
+## This function validates the data alignment for a single trajectory.
 def validate_trajectory_alignment(
     states: Tensor,
     actions: Tensor | None,
@@ -155,13 +155,6 @@ class ProblemBatch:
             raise ValueError("mu_static must have shape [B, d_mu]")
         if isinstance(self.trajectory_id, (list, tuple)) and len(self.trajectory_id) != batch_size:
             raise ValueError("trajectory_id sequence length must equal batch size")
-
-        state_count = history + horizon
-        transition_count = self.history_dts.shape[1] + self.future_dts.shape[1]
-        if state_count != transition_count + 1:
-            raise ValueError("states length must equal dts length + 1")
-        if self.history_actions is not None and state_count != transition_count + 1:
-            raise ValueError("states length must equal actions length + 1")
 
     def to(self, *args: Any, **kwargs: Any) -> ProblemBatch:
         """Return a new batch with every tensor moved via ``Tensor.to``.

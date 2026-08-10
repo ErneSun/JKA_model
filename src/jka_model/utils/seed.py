@@ -41,11 +41,21 @@ class RNGState:
             raise ValueError("Python RNG state must be a tuple")
         if not isinstance(numpy_state, tuple):
             raise ValueError("NumPy RNG state must be a tuple")
+        torch_cpu = data["torch_cpu"]
+        torch_cuda = data["torch_cuda"]
+        if not isinstance(torch_cpu, Tensor):
+            raise ValueError("PyTorch CPU RNG state must be a tensor")
+        if torch_cuda is not None:
+            if not isinstance(torch_cuda, tuple) or any(
+                not isinstance(value, Tensor) for value in torch_cuda
+            ):
+                raise ValueError("PyTorch CUDA RNG state must be a tuple of tensors")
+            torch_cuda = tuple(value.detach().cpu() for value in torch_cuda)
         return cls(
             python=python_state,
             numpy=numpy_state,
-            torch_cpu=data["torch_cpu"],
-            torch_cuda=data["torch_cuda"],
+            torch_cpu=torch_cpu.detach().cpu(),
+            torch_cuda=torch_cuda,
         )
 
 
@@ -79,10 +89,10 @@ def restore_rng_state(state: RNGState) -> None:
     """Restore a previously captured RNG state exactly."""
     random.setstate(state.python)
     np.random.set_state(state.numpy)
-    torch.set_rng_state(state.torch_cpu)
+    torch.set_rng_state(state.torch_cpu.detach().cpu())
     if state.torch_cuda is not None:
         if not torch.cuda.is_available():
             raise RuntimeError("checkpoint contains CUDA RNG state but CUDA is unavailable")
         if len(state.torch_cuda) != torch.cuda.device_count():
             raise RuntimeError("CUDA device count does not match captured RNG state")
-        torch.cuda.set_rng_state_all(list(state.torch_cuda))
+        torch.cuda.set_rng_state_all([value.detach().cpu() for value in state.torch_cuda])

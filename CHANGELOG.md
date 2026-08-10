@@ -6,6 +6,7 @@
 - Added a circular CNN field encoder/decoder around the exact continuous-time core.
 - Added differentiable raw-unit mass and trapezoidal PDE-operator constraints with warmup.
 - Added canonical train/evaluate APIs, complete run records, exact resume, and CSV history.
+- Fixed device-neutral normalizer and RNG restoration for CUDA checkpoint resume.
 - Added CPU numerical/integration tests and a thin-wrapper GPU validation package.
 - GPU validation is not run locally; scientific status remains `PENDING_GPU`.
 

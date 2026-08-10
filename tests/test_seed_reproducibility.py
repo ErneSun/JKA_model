@@ -5,7 +5,7 @@ import random
 import numpy as np
 import torch
 
-from jka_model.utils import capture_rng_state, restore_rng_state, set_global_seed
+from jka_model.utils import RNGState, capture_rng_state, restore_rng_state, set_global_seed
 
 
 def _draw() -> tuple[float, np.ndarray, torch.Tensor]:
@@ -33,3 +33,11 @@ def test_rng_capture_restore() -> None:
     np.testing.assert_array_equal(expected[1], actual[1])
     torch.testing.assert_close(expected[2], actual[2], rtol=0, atol=0)
 
+
+def test_rng_checkpoint_state_is_canonicalized_to_cpu() -> None:
+    state = capture_rng_state()
+    restored = RNGState.from_checkpoint_dict(state.to_checkpoint_dict())
+    assert restored.torch_cpu.device.type == "cpu"
+    assert restored.torch_cuda is None or all(
+        value.device.type == "cpu" for value in restored.torch_cuda
+    )

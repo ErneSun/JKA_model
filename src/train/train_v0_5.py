@@ -229,7 +229,9 @@ def train_v0_5(
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled and amp_dtype is torch.float16)
     start_epoch, global_step = 0, 0
     if resume_from is not None:
-        checkpoint = load_checkpoint(resume_from, map_location=selected)
+        # Load the resume envelope on CPU. Model/optimizer loaders place trainable state on
+        # their target devices, while normalizer and RNG metadata must remain device-neutral.
+        checkpoint = load_checkpoint(resume_from, map_location="cpu")
         if (
             checkpoint.config_hash != resolved.stable_hash
             or checkpoint.data_fingerprint != fingerprint
@@ -246,7 +248,9 @@ def train_v0_5(
         scheduler.load_state_dict(checkpoint.scheduler_state)
         if checkpoint.amp_scaler_state is not None:
             scaler.load_state_dict(checkpoint.amp_scaler_state)
-        if checkpoint.normalizer_state != normalizer.state_dict():
+        if checkpoint.normalizer_state is None or not normalizer.matches_state_dict(
+            checkpoint.normalizer_state
+        ):
             raise ValueError("resume normalizer state mismatch")
         if checkpoint.rng_state is None:
             raise ValueError("resume checkpoint lacks RNG state")

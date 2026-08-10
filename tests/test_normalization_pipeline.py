@@ -15,12 +15,8 @@ def test_normalizer_fits_train_ids_only_and_roundtrips() -> None:
     _, spec = generate_advection_diffusion_trajectories(
         ToyAdvectionDiffusionConfig(num_trajectories=1), seed=1
     )
-    train = TrajectoryRecord(
-        "train", torch.tensor([[[0.0, 2.0]], [[2.0, 4.0]]]), torch.ones(1)
-    )
-    validation = TrajectoryRecord(
-        "validation", torch.full((2, 1, 2), 1e6), torch.ones(1)
-    )
+    train = TrajectoryRecord("train", torch.tensor([[[0.0, 2.0]], [[2.0, 4.0]]]), torch.ones(1))
+    validation = TrajectoryRecord("validation", torch.full((2, 1, 2), 1e6), torch.ones(1))
     manifest = SplitManifest(
         train=("train",), validation=("validation",), test=(), seed=0, ratios=(0.5, 0.5, 0.0)
     )
@@ -48,9 +44,31 @@ def test_normalizer_state_roundtrip() -> None:
     fitted = ChannelStandardizer().fit(records, manifest, spec)
     restored = ChannelStandardizer()
     restored.load_state_dict(fitted.state_dict())
+    assert fitted.matches_state_dict(restored.state_dict())
     torch.testing.assert_close(
         restored.transform(records[2].states_raw), fitted.transform(records[2].states_raw)
     )
+
+
+def test_normalizer_state_comparison_handles_tensor_values_without_dict_equality() -> None:
+    normalizer = ChannelStandardizer()
+    normalizer.load_state_dict(
+        {
+            "kind": "channel_standardizer",
+            "eps": 1e-6,
+            "mean": torch.tensor([1.0, 2.0], dtype=torch.float64),
+            "scale": torch.tensor([0.5, 0.25], dtype=torch.float64),
+            "spatial_dim": 0,
+            "layout": "channels_first",
+            "fitted_trajectory_ids": ["train"],
+        }
+    )
+    equivalent = normalizer.state_dict()
+    equivalent["mean"] = equivalent["mean"].clone()
+    equivalent["scale"] = equivalent["scale"].clone()
+    assert normalizer.matches_state_dict(equivalent)
+    equivalent["mean"][0] += 1.0
+    assert not normalizer.matches_state_dict(equivalent)
 
 
 def test_zero_variance_channel_normalization() -> None:
@@ -71,6 +89,4 @@ def test_zero_variance_channel_normalization() -> None:
     transformed = normalizer.transform(constant.states_raw)
     assert torch.isfinite(transformed).all()
     torch.testing.assert_close(transformed, torch.zeros_like(transformed))
-    torch.testing.assert_close(
-        normalizer.inverse_transform(transformed), constant.states_raw
-    )
+    torch.testing.assert_close(normalizer.inverse_transform(transformed), constant.states_raw)

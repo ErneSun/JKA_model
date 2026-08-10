@@ -45,7 +45,9 @@ def evaluate_v0_5(
     selected = torch.device(
         "cuda" if device is None and torch.cuda.is_available() else (device or "cpu")
     )
-    saved = load_checkpoint(checkpoint, map_location=selected)
+    # Keep device-neutral checkpoint metadata on CPU; load_state_dict copies model
+    # parameters into the already initialized evaluation device.
+    saved = load_checkpoint(checkpoint, map_location="cpu")
     if saved.config_hash != resolved.stable_hash or saved.online_model_state is None:
         raise ValueError("evaluation checkpoint/config mismatch or missing model state")
     model = initialize_v0_5_model(resolved, device=selected)
