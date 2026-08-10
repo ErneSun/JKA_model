@@ -1,0 +1,14 @@
+{
+  "long": {
+    "model_rmse": 0.6361993352572123,
+    "persistence_rmse": 1.0331104066636827
+  },
+  "medium": {
+    "model_rmse": 0.7344656851556566,
+    "persistence_rmse": 0.332117670112186
+  },
+  "short": {
+    "model_rmse": 0.7609166105588278,
+    "persistence_rmse": 0.03339302560521497
+  }
+}

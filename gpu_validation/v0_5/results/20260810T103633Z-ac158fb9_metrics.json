@@ -1,0 +1,45 @@
+{
+  "best_epoch": 4,
+  "checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/20260810T103633Z-ac158fb9/checkpoints/best_forecast.pt",
+  "config": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/20260810T103633Z-ac158fb9/config/resolved_config.yaml",
+  "config_hash": "df8f6645b7674248c4ade767cd5e9523d2f27d2ca2c139e9e2e2c3f66d869ca6",
+  "decay_relative_error": 1.2460931241512299,
+  "forecast": {
+    "long": {
+      "mass_drift": 1.5905838277604845,
+      "operator": 5.517441617117988,
+      "persistence_rmse": 1.0331104066636827,
+      "relative_l2": 0.9735874864790175,
+      "rmse": 0.6361993352572123
+    },
+    "medium": {
+      "mass_drift": 0.909245491027832,
+      "operator": 27.569171481662327,
+      "persistence_rmse": 0.332117670112186,
+      "relative_l2": 0.9974620209799873,
+      "rmse": 0.7344656851556566
+    },
+    "short": {
+      "mass_drift": 0.7449258963267008,
+      "operator": 441.03834025065106,
+      "persistence_rmse": 0.03339302560521497,
+      "relative_l2": 1.0029290450943842,
+      "rmse": 0.7609166105588278
+    }
+  },
+  "frequency_relative_error": 0.9699523144712051,
+  "git_branch": "main",
+  "git_commit": "59aac061e1a3d68342cc3fbc62b1ed74e11b80f1",
+  "git_dirty": false,
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "mass_drift_long": 1.5905838277604845,
+  "max_samples_per_second": 148.51276525192276,
+  "operator_long": 5.517441617117988,
+  "peak_gpu_memory_bytes": 2888410624.0,
+  "persistence_long_rmse": 1.0331104066636827,
+  "precision": "fp32",
+  "run_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/20260810T103633Z-ac158fb9",
+  "run_id": "20260810T103633Z-ac158fb9",
+  "scientific_acceptance": "PENDING_REVIEW",
+  "status": "PASS"
+}
