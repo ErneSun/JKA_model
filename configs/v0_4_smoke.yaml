@@ -68,7 +68,7 @@ duffing:
   num_steps: 120
   num_trajectories: 8
   rk4_substeps: 2
-project_version: 0.4.0
+project_version: 0.5.0
 tags:
   - v0.4
   - learned-representation

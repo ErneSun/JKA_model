@@ -1,0 +1,11 @@
+architecture: {package: jka_model, revision: "2.2"}
+training: {seed: 47, stage: koopman, deterministic: true, run_root: runs}
+data: {problem_name: periodic_advection_diffusion_2d, action_dim: 0, parameter_dim: 3, dt_mode: variable, constant_dt: null, history: 2, horizon: 16, split: {train: 0.7, validation: 0.15, test: 0.15, seed: 47}, normalization: {kind: standard, eps: 1.0e-6}, toy_advection_diffusion: null}
+koopman: {state_dim: 8, trainable: true, dtype: float32}
+advection_diffusion_2d: {num_trajectories: 64, num_steps: 100, nx: 64, ny: 64, cx: 0.7, cy: 0.25, nu: 0.02, mode_x: 1, mode_y: 2, base_dt: 0.04, variable_dt: true, dt_jitter: 0.15}
+field_autoencoder: {input_channels: 1, latent_dim: 8, width: 24, decoder_hidden_dim: 96}
+field_loss: {lambda_k: 1.0, lambda_multi: 2.0, lambda_rec: 2.0, lambda_var: 0.1, lambda_physics: 0.0, lambda_mass: 0.0, lambda_operator: 0.0, min_std: 0.1}
+v0_5_training: {epochs: 150, batch_size: 32, learning_rate: 0.001, weight_decay: 1.0e-6, init_scale: 0.03, physics_warmup_epochs: 10, scheduler_step_size: 40, scheduler_gamma: 0.5, diagnostic_interval: 1, precision: fp32}
+v0_5_evaluation: {short_horizon: 1, medium_horizon: 16, long_horizon: 80, max_frequency_relative_error: 0.05}
+project_version: 0.5.0
+tags: [v0.5, gpu-full, no-physics-ablation]

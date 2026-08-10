@@ -4,6 +4,6 @@ These values live in one module so checkpoints and logs never depend on scattere
 string literals.
 """
 
-PROJECT_VERSION = "0.4.0"
+PROJECT_VERSION = "0.5.0"
 ARCHITECTURE_REVISION = "2.2"
-CHECKPOINT_SCHEMA_VERSION = 4
+CHECKPOINT_SCHEMA_VERSION = 5

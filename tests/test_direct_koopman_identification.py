@@ -163,7 +163,7 @@ def test_koopman_checkpoint_roundtrip(tmp_path, identified_oscillator) -> None:
     assert restored_checkpoint.global_step == result.global_step
     assert restored_checkpoint.config == config
     assert restored_checkpoint.architecture_revision == "2.2"
-    assert restored_checkpoint.project_version == "0.4.0"
+    assert restored_checkpoint.project_version == "0.5.0"
     assert restored_checkpoint.rng_state is not None
     assert restored_checkpoint.rng_state.python == saved_rng.python
     np.testing.assert_array_equal(

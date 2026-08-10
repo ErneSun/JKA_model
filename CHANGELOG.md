@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 — 2-D PDE Koopman and CPU/GPU validation workflow
+
+- Added analytic endpoint-free periodic 2-D advection-diffusion data and a problem adapter.
+- Added a circular CNN field encoder/decoder around the exact continuous-time core.
+- Added differentiable raw-unit mass and trapezoidal PDE-operator constraints with warmup.
+- Added canonical train/evaluate APIs, complete run records, exact resume, and CSV history.
+- Added CPU numerical/integration tests and a thin-wrapper GPU validation package.
+- GPU validation is not run locally; scientific status remains `PENDING_GPU`.
+
 ## 0.4.0 — Learned Koopman Coordinates
 
 - Added deterministic known-latent rotation-decay data with nonlinear five-channel observations

@@ -1,9 +1,9 @@
 # Koopman-Structured Physical JEPA World Model
 
-本仓库当前完成 **V0.4 — Learned Koopman Encoder + Training Decoder**。项目版本为 `0.4.0`，
+本仓库当前完成 **V0.5 — 2-D PDE Koopman + PhysicsConstraint + CPU/GPU Validation Workflow**。项目版本为 `0.5.0`，
 唯一有效架构修订为 `2.2`。
 
-V0.4 在不改变 V0.3 连续时间 core 的前提下学习动力学坐标：
+V0.5 在不改变连续时间 core 的前提下，将学习扩展到二维周期 PDE 场：
 
 \[
 U^{model}\xrightarrow{E_K}z_K\xrightarrow{e^{A\Delta t}}\hat z_K
@@ -11,8 +11,8 @@ U^{model}\xrightarrow{E_K}z_K\xrightarrow{e^{A\Delta t}}\hat z_K
 \]
 
 `ContinuousKoopmanCore` 使用真正的 `torch.matrix_exp`，支持 scalar/batch/variable `dt`、
-closed-loop rollout、continuous spectrum 和通过 matrix exponential 的 gradient。V0.4 新增 learned
-`KoopmanEncoder`、training-only decoder、闭环 multi-step loss、非坍缩诊断与仿射 latent 对齐。
+closed-loop rollout、continuous spectrum 和通过 matrix exponential 的 gradient。V0.5 新增 circular
+CNN encoder/decoder、二维质量守恒与梯形 PDE operator constraint，以及独立 GPU 验证包。
 
 ## 已完成版本
 
@@ -20,22 +20,18 @@ closed-loop rollout、continuous spectrum 和通过 matrix exponential 的 gradi
 V0.1  engineering contracts / config / checkpoint / reproducibility
 V0.2  trajectory windows / train-only normalization / PhysicsConstraint
 V0.3  direct-state continuous-time Koopman generator
-V0.4  learned Koopman coordinates + training decoder（当前）
-V0.5+ PDE field encoder / physics training / JEPA / closure（未实现）
+V0.4  learned Koopman coordinates + training decoder
+V0.5  2-D PDE field encoder + raw-unit physics training（当前）
+V0.6+ JEPA / closure（未实现）
 ```
 
-V0.4 同时包含：
+V0.5 保留全部 V0.1–V0.4 回归能力，并新增：
 
-- known-latent rotation-decay 与 nonlinear observation `U=[q,p,q²,qp,p²]`；
-- trajectory split、train-only normalization 和 V0.2 `ProblemBatch` windows 原样复用；
-- one-step/multi-step latent consistency、model-space reconstruction、variance 与 optional stability loss；
-- train-fit/test-apply affine alignment、similarity-invariant spectrum 与 persistence baseline；
-- held-out one-step/multi-step latent、decoded model/raw prediction diagnostics，以及训练期
-  loss/latent-statistic snapshots；
-- encoder/decoder/A/optimizer/normalizer/split/RNG 完整 checkpoint round-trip；
-- reconstruction-off 与 multi-step-off 实际消融；
-- learned-lifting Duffing 二级诊断，并保留 finite-dimensional closure limitation；
-- CPU-only tests、23-step smoke、17-step教学脚本与 latent analyzer。
+- endpoint-free 二维周期 advection-diffusion Fourier 解析数据与 Problem Adapter；
+- `[B,C,Nx,Ny]` circular CNN encoder、continuous-time Koopman core 与 training decoder；
+- 可微 inverse normalization 后的 raw-unit mass / trapezoidal PDE operator loss；
+- 唯一 `train_v0_5` / `evaluate_v0_5`、CSV/JSON/plot/report 运行记录与精确 resume；
+- CPU numerical/integration/smoke/tiny-overfit 验证和独立 thin-wrapper GPU 验证包。
 
 ## 安装
 
@@ -66,6 +62,9 @@ python scripts/analyze_spectrum.py --checkpoint /tmp/jka_v0_3.pt
 python scripts/smoke_v0_4.py --checkpoint-output /tmp/jka_v0_4.pt
 python scripts/explain_v0_4.py
 python scripts/analyze_latent_v0_4.py --checkpoint /tmp/jka_v0_4.pt
+python scripts/smoke_v0_5.py
+python scripts/explain_v0_5.py
+python scripts/train_v0_5.py --config configs/v0_5/advection_diffusion_2d_cpu_tiny_train.yaml --device cpu
 ruff check .
 MYPYPATH=src mypy
 ```
@@ -85,16 +84,17 @@ core.spectrum()
 `rollout()` 包含初始状态，不使用 ground truth teacher forcing。负 `dt` 被拒绝，`dt=0` 用于
 identity test。
 
-## V0.4 范围边界
+## V0.5 范围边界
 
-V0.4 没有 JEPA、target/EMA encoder、`z_r`、residual closure、Attention、action-conditioned
-dynamics、PDE field encoder、physics loss、MPC 或 RL。当前 primary encoder 是随机初始化并经训练
-得到的线性层；decoder 是两层 Tanh MLP。Duffing 只作为有限维 learned-lifting diagnostic，不能
-据此宣称存在精确有限维线性 closure。
+V0.5 没有 JEPA、target/EMA encoder、`z_r`、residual closure、GRU/Transformer/Attention、
+action-conditioned dynamics、MPC、RL 或 V0.6 功能。本地 CPU 仅做正确性与集成验收；GPU validation
+尚未执行，scientific acceptance 为 `PENDING_GPU`。
 
 文档入口：
 
 - [架构规范](./koopman_structured_physical_jepa_world_model_v2_2.md)
+- [V0.5 文档入口](./docs/v0_5/README.md)
+- [V0.5 状态](./docs/v0_5/status.md)
 - [V0.4 Code Walkthrough](./docs/v0_4_code_walkthrough.md)
 - [V0.4 Implementation Checklist](./docs/v0_4_implementation_checklist.md)
 - [V0.3 Code Walkthrough](./docs/v0_3_code_walkthrough.md)

@@ -1,11 +1,14 @@
 """Strict, serializable versioned configuration API."""
 
 from jka_model.config.schema import (
+    AdvectionDiffusion2DConfig,
     ArchitectureConfig,
     DampedOscillatorConfig,
     DataConfig,
     DirectIdentificationConfig,
     DuffingConfig,
+    FieldAutoencoderConfig,
+    FieldLossConfig,
     KnownLatentConfig,
     KoopmanAutoencoderConfig,
     KoopmanConfig,
@@ -18,6 +21,8 @@ from jka_model.config.schema import (
     SplitConfig,
     ToyAdvectionDiffusionConfig,
     TrainingConfig,
+    V05EvaluationConfig,
+    V05TrainingConfig,
     load_config,
     save_config,
     stable_config_hash,
@@ -25,6 +30,7 @@ from jka_model.config.schema import (
 
 __all__ = [
     "ArchitectureConfig",
+    "AdvectionDiffusion2DConfig",
     "DataConfig",
     "DampedOscillatorConfig",
     "DirectIdentificationConfig",
@@ -33,6 +39,8 @@ __all__ = [
     "KoopmanAutoencoderConfig",
     "KoopmanEvaluationConfig",
     "KnownLatentConfig",
+    "FieldAutoencoderConfig",
+    "FieldLossConfig",
     "NormalizationConfig",
     "ProjectConfig",
     "RepresentationEvaluationConfig",
@@ -41,6 +49,8 @@ __all__ = [
     "SplitConfig",
     "ToyAdvectionDiffusionConfig",
     "TrainingConfig",
+    "V05EvaluationConfig",
+    "V05TrainingConfig",
     "load_config",
     "save_config",
     "stable_config_hash",

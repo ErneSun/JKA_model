@@ -1,5 +1,12 @@
 """Trajectory-safe V0.2 data pipeline."""
 
+from jka_model.data.advection_diffusion_2d import (
+    AdvectionDiffusion2DDataset,
+    AdvectionDiffusion2DReference,
+    analytical_advection_diffusion_2d,
+    generate_advection_diffusion_2d_trajectories,
+    make_advection_diffusion_2d_problem_spec,
+)
 from jka_model.data.datasets import (
     TrajectoryDataset,
     TrajectoryRecord,
@@ -35,23 +42,28 @@ from jka_model.data.windows import TrajectoryWindowDataset, collate_problem_batc
 
 __all__ = [
     "ChannelStandardizer",
+    "AdvectionDiffusion2DDataset",
+    "AdvectionDiffusion2DReference",
     "KnownLatentDataset",
     "SplitManifest",
     "TrajectoryDataset",
     "TrajectoryRecord",
     "TrajectoryWindowDataset",
     "collate_problem_batches",
+    "analytical_advection_diffusion_2d",
     "data_fingerprint",
     "damped_oscillator_analytic_state",
     "damped_oscillator_analytic_transition",
     "damped_oscillator_generator_matrix",
     "generate_advection_diffusion_trajectories",
+    "generate_advection_diffusion_2d_trajectories",
     "generate_damped_oscillator_trajectories",
     "generate_duffing_trajectories",
     "generate_known_latent_trajectories",
     "hidden_rotation_decay_generator",
     "linear_observation_map",
     "make_advection_diffusion_problem_spec",
+    "make_advection_diffusion_2d_problem_spec",
     "make_damped_oscillator_problem_spec",
     "make_duffing_problem_spec",
     "make_known_latent_problem_spec",

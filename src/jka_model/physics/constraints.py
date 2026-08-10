@@ -12,8 +12,11 @@ from torch import Tensor
 from jka_model.contracts import ProblemBatch, ProblemSpec
 from jka_model.physics.operators import (
     periodic_first_derivative,
+    periodic_first_derivative_2d,
+    periodic_laplacian_2d,
     periodic_second_derivative,
     weighted_integral,
+    weighted_integral_2d,
 )
 
 
@@ -147,9 +150,7 @@ class MassConservationConstraint:
         metadata: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Tensor]:
         del action, dt, spec
-        result = self.evaluate(
-            pred_state_raw, prev_state_raw=prev_state_raw, metadata=metadata
-        )
+        result = self.evaluate(pred_state_raw, prev_state_raw=prev_state_raw, metadata=metadata)
         return {result.name: result.penalty}
 
 
@@ -216,6 +217,79 @@ class DiscretePDEResidualConstraint:
         return {result.name: result.penalty}
 
 
+@dataclass(frozen=True, slots=True)
+class MassConservation2DConstraint:
+    """Penalize deviation of the cell-weighted two-dimensional integral."""
+
+    name: str = "mass_conservation_2d"
+
+    def loss(
+        self,
+        pred_state_raw: Tensor,
+        *,
+        prev_state_raw: Tensor | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        **_: Any,
+    ) -> Mapping[str, Tensor]:
+        if prev_state_raw is None:
+            raise ValueError("2-D mass conservation requires prev_state_raw")
+        weights = _metadata_tensor(metadata, "cell_weights")
+        delta = weighted_integral_2d(pred_state_raw, weights) - weighted_integral_2d(
+            prev_state_raw, weights
+        )
+        return {self.name: delta.square().mean()}
+
+
+@dataclass(frozen=True, slots=True)
+class AdvectionDiffusionOperatorConstraint2D:
+    """Trapezoidal residual for the raw-unit continuous PDE operator."""
+
+    name: str = "operator_consistency_2d"
+
+    @staticmethod
+    def _rhs(state: Tensor, mu_static: Tensor, dx: float, dy: float) -> Tensor:
+        if mu_static.ndim != 2 or mu_static.shape[1] != 3:
+            raise ValueError("2-D PDE requires mu_static=[cx,cy,nu] per batch item")
+        parameters = [mu_static[:, index] for index in range(3)]
+        for index, value in enumerate(parameters):
+            while value.ndim < state.ndim:
+                value = value.unsqueeze(-1)
+            parameters[index] = value
+        cx, cy, nu = parameters
+        return (
+            -cx * periodic_first_derivative_2d(state, dx, -2)
+            - cy * periodic_first_derivative_2d(state, dy, -1)
+            + nu * periodic_laplacian_2d(state, dx, dy)
+        )
+
+    def loss(
+        self,
+        pred_state_raw: Tensor,
+        *,
+        prev_state_raw: Tensor | None = None,
+        dt: Tensor | None = None,
+        spec: ProblemSpec | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        **_: Any,
+    ) -> Mapping[str, Tensor]:
+        if prev_state_raw is None or dt is None or spec is None:
+            raise ValueError("2-D operator consistency requires prev state, dt, and spec")
+        if spec.grid.spacing is None or len(spec.grid.spacing) != 2:
+            raise ValueError("2-D operator consistency requires two grid spacings")
+        if torch.any(dt <= 0):
+            raise ValueError("2-D operator consistency requires positive dt")
+        mu_static = _metadata_tensor(metadata, "mu_static")
+        dt_view = dt
+        while dt_view.ndim < pred_state_raw.ndim:
+            dt_view = dt_view.unsqueeze(-1)
+        dx, dy = spec.grid.spacing
+        residual = (pred_state_raw - prev_state_raw) / dt_view - 0.5 * (
+            self._rhs(prev_state_raw, mu_static, dx, dy)
+            + self._rhs(pred_state_raw, mu_static, dx, dy)
+        )
+        return {self.name: residual.square().mean()}
+
+
 def evaluate_constraints(
     constraints: Sequence[PhysicsConstraint],
     batch: ProblemBatch,
@@ -231,9 +305,7 @@ def evaluate_constraints(
         if future_index == 0
         else batch.future_states_raw[:, future_index - 1]
     )
-    action = (
-        None if batch.future_actions is None else batch.future_actions[:, future_index]
-    )
+    action = None if batch.future_actions is None else batch.future_actions[:, future_index]
     metadata = {
         "mu_static": batch.mu_static,
         "coordinates": batch.coordinates,

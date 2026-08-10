@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Validate CUDA environment and seeded component-level CPU/GPU FP32 parity."""
+
+from __future__ import annotations
+
+import json
+import math
+import subprocess
+from pathlib import Path
+
+import torch
+
+from jka_model.evaluation.v0_5_diagnostics import (
+    prepare_v0_5_diagnostic_case,
+    run_v0_5_diagnostic_step,
+)
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def main() -> None:
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable; GPU validation cannot be claimed")
+    configs = {
+        name: ROOT / "gpu_validation" / "v0_5" / "configs" / name
+        for name in ("gpu_smoke.yaml", "gpu_full.yaml", "gpu_full_no_physics.yaml")
+    }
+    missing = [str(path) for path in configs.values() if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"GPU validation config(s) missing: {missing}")
+    cpu_case = prepare_v0_5_diagnostic_case(configs["gpu_smoke.yaml"], device="cpu")
+    gpu_case = prepare_v0_5_diagnostic_case(
+        configs["gpu_smoke.yaml"], device="cuda", state_dict=cpu_case.model.state_dict()
+    )
+    cpu = run_v0_5_diagnostic_step(cpu_case, backward_physics=False)
+    gpu = run_v0_5_diagnostic_step(gpu_case, backward_physics=False)
+    tolerances = {"rtol": 2e-4, "atol": 2e-5}
+    parity: dict[str, float] = {}
+    for name in ("encoder_output", "koopman_step_output", "decoder_output"):
+        parity[name] = float((cpu[name] - gpu[name]).abs().max())
+        if not torch.allclose(cpu[name], gpu[name], **tolerances):
+            raise RuntimeError(f"CPU/GPU {name} parity failed: max_abs={parity[name]}")
+    for name in ("mass_penalty", "operator_penalty"):
+        parity[name] = abs(cpu[name] - gpu[name])
+        if not math.isclose(cpu[name], gpu[name], **tolerances):
+            raise RuntimeError(f"CPU/GPU {name} parity failed: abs={parity[name]}")
+    current_device = torch.cuda.current_device()
+    properties = torch.cuda.get_device_properties(current_device)
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"], cwd=ROOT, capture_output=True, text=True, check=False
+    ).stdout.strip()
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=False
+    ).stdout.strip()
+    dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+    )
+    report = {
+        "status": "FAIL" if dirty else "PASS",
+        "git_commit": commit,
+        "git_branch": branch,
+        "git_dirty": dirty,
+        "cuda_version": torch.version.cuda,
+        "cudnn_version": torch.backends.cudnn.version(),
+        "torch_version": torch.__version__,
+        "device_count": torch.cuda.device_count(),
+        "current_device": current_device,
+        "device": properties.name,
+        "total_memory": properties.total_memory,
+        "bf16_supported": torch.cuda.is_bf16_supported(),
+        "fp16_supported": True,
+        "configs": {name: str(path) for name, path in configs.items()},
+        "parity_tolerances": tolerances,
+        "component_parity_max_abs": parity,
+        "matrix_exp_device": str(torch.matrix_exp(torch.eye(2, device="cuda")).device),
+    }
+    print("=== V0.5 GPU Preflight ===")
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if dirty:
+        raise RuntimeError("GPU preflight requires a clean Git worktree")
+
+
+if __name__ == "__main__":
+    main()

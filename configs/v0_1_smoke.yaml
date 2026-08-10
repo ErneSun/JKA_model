@@ -8,7 +8,7 @@ data:
   normalization: standardize_from_train_split
   parameter_dim: 1
   problem_name: toy_scalar_field
-project_version: 0.4.0
+project_version: 0.5.0
 tags:
   - v0.1
   - smoke

@@ -609,9 +609,7 @@ class RepresentationLossConfig:
             lambda_var=float(data.get("lambda_var", defaults.lambda_var)),
             lambda_spec=float(data.get("lambda_spec", defaults.lambda_spec)),
             min_std=float(data.get("min_std", defaults.min_std)),
-            stability_margin=float(
-                data.get("stability_margin", defaults.stability_margin)
-            ),
+            stability_margin=float(data.get("stability_margin", defaults.stability_margin)),
         )
 
 
@@ -674,9 +672,7 @@ class RepresentationTrainingConfig:
             init_scale=float(data.get("init_scale", defaults.init_scale)),
             ablation_epochs=int(data.get("ablation_epochs", defaults.ablation_epochs)),
             duffing_epochs=int(data.get("duffing_epochs", defaults.duffing_epochs)),
-            diagnostic_interval=int(
-                data.get("diagnostic_interval", defaults.diagnostic_interval)
-            ),
+            diagnostic_interval=int(data.get("diagnostic_interval", defaults.diagnostic_interval)),
         )
 
 
@@ -728,17 +724,259 @@ class RepresentationEvaluationConfig:
                     defaults.max_test_reconstruction_mse,
                 )
             ),
-            min_alignment_r2=float(
-                data.get("min_alignment_r2", defaults.min_alignment_r2)
-            ),
+            min_alignment_r2=float(data.get("min_alignment_r2", defaults.min_alignment_r2)),
             max_frequency_relative_error=float(
                 data.get(
                     "max_frequency_relative_error",
                     defaults.max_frequency_relative_error,
                 )
             ),
-            min_latent_std=float(
-                data.get("min_latent_std", defaults.min_latent_std)
+            min_latent_std=float(data.get("min_latent_std", defaults.min_latent_std)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AdvectionDiffusion2DConfig:
+    """Analytic periodic 2-D advection-diffusion data settings for V0.5."""
+
+    num_trajectories: int = 12
+    num_steps: int = 24
+    nx: int = 16
+    ny: int = 16
+    length_x: float = 6.283185307179586
+    length_y: float = 6.283185307179586
+    cx: float = 0.7
+    cy: float = 0.25
+    nu: float = 0.02
+    mode_x: int = 1
+    mode_y: int = 2
+    base_dt: float = 0.05
+    variable_dt: bool = True
+    dt_jitter: float = 0.15
+    amplitude_min: float = 0.7
+    amplitude_max: float = 1.3
+    mean_min: float = -0.25
+    mean_max: float = 0.25
+
+    def __post_init__(self) -> None:
+        if self.num_trajectories < 3 or self.num_steps < 2:
+            raise ValueError("V0.5 data requires at least 3 trajectories and 2 steps")
+        if self.nx < 8 or self.ny < 8:
+            raise ValueError("V0.5 periodic grids require nx, ny >= 8")
+        if self.length_x <= 0 or self.length_y <= 0 or self.base_dt <= 0:
+            raise ValueError("V0.5 lengths and base_dt must be positive")
+        if self.nu < 0:
+            raise ValueError("V0.5 diffusivity must be non-negative")
+        if self.mode_x < 0 or self.mode_y < 0 or self.mode_x + self.mode_y == 0:
+            raise ValueError("V0.5 Fourier mode must be non-negative and nonzero")
+        if 2 * self.mode_x >= self.nx or 2 * self.mode_y >= self.ny:
+            raise ValueError("V0.5 Fourier mode must be below each Nyquist limit")
+        if not 0 <= self.dt_jitter < 1:
+            raise ValueError("V0.5 dt_jitter must lie in [0,1)")
+        if not self.variable_dt and self.dt_jitter != 0:
+            raise ValueError("constant-dt V0.5 data requires dt_jitter=0")
+        if self.amplitude_min <= 0 or self.amplitude_min > self.amplitude_max:
+            raise ValueError("V0.5 amplitude range is invalid")
+        if self.mean_min > self.mean_max:
+            raise ValueError("V0.5 mean range is invalid")
+
+    def to_dict(self) -> dict[str, Any]:
+        integer_fields = {"num_trajectories", "num_steps", "nx", "ny", "mode_x", "mode_y"}
+        return {
+            name: (
+                bool(value)
+                if name == "variable_dt"
+                else int(value)
+                if name in integer_fields
+                else float(value)
+            )
+            for name in self.__dataclass_fields__
+            for value in (getattr(self, name),)
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> AdvectionDiffusion2DConfig:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.5 advection-diffusion config")
+        values = {name: data.get(name, getattr(defaults, name)) for name in allowed}
+        for name in {"num_trajectories", "num_steps", "nx", "ny", "mode_x", "mode_y"}:
+            values[name] = int(values[name])
+        values["variable_dt"] = bool(values["variable_dt"])
+        for name in allowed - {
+            "num_trajectories",
+            "num_steps",
+            "nx",
+            "ny",
+            "mode_x",
+            "mode_y",
+            "variable_dt",
+        }:
+            values[name] = float(values[name])
+        return cls(**values)
+
+
+@dataclass(frozen=True, slots=True)
+class FieldAutoencoderConfig:
+    """Small circular-CNN field autoencoder used by V0.5."""
+
+    input_channels: int = 1
+    latent_dim: int = 4
+    width: int = 8
+    decoder_hidden_dim: int = 32
+
+    def __post_init__(self) -> None:
+        if min(self.input_channels, self.latent_dim, self.width, self.decoder_hidden_dim) < 1:
+            raise ValueError("V0.5 field autoencoder dimensions must be positive")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {name: int(getattr(self, name)) for name in self.__dataclass_fields__}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> FieldAutoencoderConfig:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.5 field autoencoder config")
+        return cls(**{name: int(data.get(name, getattr(defaults, name))) for name in allowed})
+
+
+@dataclass(frozen=True, slots=True)
+class FieldLossConfig:
+    """Independent V0.5 representation and raw-physics loss weights."""
+
+    lambda_k: float = 1.0
+    lambda_multi: float = 1.0
+    lambda_rec: float = 1.0
+    lambda_var: float = 0.1
+    lambda_physics: float = 0.05
+    lambda_mass: float = 0.1
+    lambda_operator: float = 0.05
+    min_std: float = 0.1
+
+    def __post_init__(self) -> None:
+        weights = tuple(
+            getattr(self, name) for name in self.__dataclass_fields__ if name.startswith("lambda_")
+        )
+        if any(value < 0 for value in weights) or sum(weights) <= 0 or self.min_std <= 0:
+            raise ValueError("V0.5 loss weights must be non-negative/nonzero and min_std positive")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {name: float(getattr(self, name)) for name in self.__dataclass_fields__}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> FieldLossConfig:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.5 field loss config")
+        return cls(**{name: float(data.get(name, getattr(defaults, name))) for name in allowed})
+
+
+@dataclass(frozen=True, slots=True)
+class V05TrainingConfig:
+    """CPU/GPU-portable V0.5 optimizer and precision controls."""
+
+    epochs: int = 20
+    batch_size: int = 16
+    learning_rate: float = 0.002
+    weight_decay: float = 0.0
+    init_scale: float = 0.03
+    physics_warmup_epochs: int = 5
+    scheduler_step_size: int = 10
+    scheduler_gamma: float = 0.7
+    diagnostic_interval: int = 5
+    precision: str = "fp32"
+
+    def __post_init__(self) -> None:
+        if self.epochs < 1 or self.batch_size < 1 or self.learning_rate <= 0:
+            raise ValueError("V0.5 epochs/batch_size/lr must be positive")
+        if self.weight_decay < 0 or self.init_scale < 0:
+            raise ValueError("V0.5 weight_decay/init_scale must be non-negative")
+        if not 0 <= self.physics_warmup_epochs <= self.epochs:
+            raise ValueError("V0.5 physics warmup must lie in [0, epochs]")
+        if self.scheduler_step_size < 1 or not 0 < self.scheduler_gamma <= 1:
+            raise ValueError("V0.5 scheduler settings are invalid")
+        if self.diagnostic_interval < 1:
+            raise ValueError("V0.5 diagnostic_interval must be positive")
+        if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
+            raise ValueError("V0.5 precision must be fp32, amp_fp16, or amp_bf16")
+
+    def to_dict(self) -> dict[str, Any]:
+        integer_fields = {
+            "epochs",
+            "batch_size",
+            "physics_warmup_epochs",
+            "scheduler_step_size",
+            "diagnostic_interval",
+        }
+        return {
+            name: (
+                str(value)
+                if name == "precision"
+                else int(value)
+                if name in integer_fields
+                else float(value)
+            )
+            for name in self.__dataclass_fields__
+            for value in (getattr(self, name),)
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V05TrainingConfig:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.5 training config")
+        return cls(
+            epochs=int(data.get("epochs", defaults.epochs)),
+            batch_size=int(data.get("batch_size", defaults.batch_size)),
+            learning_rate=float(data.get("learning_rate", defaults.learning_rate)),
+            weight_decay=float(data.get("weight_decay", defaults.weight_decay)),
+            init_scale=float(data.get("init_scale", defaults.init_scale)),
+            physics_warmup_epochs=int(
+                data.get("physics_warmup_epochs", defaults.physics_warmup_epochs)
+            ),
+            scheduler_step_size=int(data.get("scheduler_step_size", defaults.scheduler_step_size)),
+            scheduler_gamma=float(data.get("scheduler_gamma", defaults.scheduler_gamma)),
+            diagnostic_interval=int(data.get("diagnostic_interval", defaults.diagnostic_interval)),
+            precision=str(data.get("precision", defaults.precision)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class V05EvaluationConfig:
+    """Fixed held-out field-rollout horizons and scientific thresholds."""
+
+    short_horizon: int = 1
+    medium_horizon: int = 4
+    long_horizon: int = 12
+    max_frequency_relative_error: float = 0.05
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.short_horizon <= self.medium_horizon <= self.long_horizon:
+            raise ValueError("V0.5 evaluation horizons must be positive and ordered")
+        if self.max_frequency_relative_error <= 0:
+            raise ValueError("V0.5 frequency tolerance must be positive")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            name: (
+                float(getattr(self, name))
+                if name == "max_frequency_relative_error"
+                else int(getattr(self, name))
+            )
+            for name in self.__dataclass_fields__
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V05EvaluationConfig:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.5 evaluation config")
+        return cls(
+            short_horizon=int(data.get("short_horizon", defaults.short_horizon)),
+            medium_horizon=int(data.get("medium_horizon", defaults.medium_horizon)),
+            long_horizon=int(data.get("long_horizon", defaults.long_horizon)),
+            max_frequency_relative_error=float(
+                data.get("max_frequency_relative_error", defaults.max_frequency_relative_error)
             ),
         )
 
@@ -835,9 +1073,7 @@ class DataConfig:
             constant_dt=(None if data.get("constant_dt") is None else float(data["constant_dt"])),
             history=int(data.get("history", 4)),
             horizon=int(data.get("horizon", 2)),
-            split=SplitConfig.from_dict(
-                _ensure_mapping(data.get("split", {}), "split config")
-            ),
+            split=SplitConfig.from_dict(_ensure_mapping(data.get("split", {}), "split config")),
             normalization=NormalizationConfig.from_value(data.get("normalization", "external")),
             toy_advection_diffusion=(
                 None
@@ -851,7 +1087,7 @@ class DataConfig:
 
 @dataclass(frozen=True, slots=True)
 class ProjectConfig:
-    """Resolved configuration with optional V0.3 and V0.4 experiment sections."""
+    """Resolved configuration with optional versioned experiment sections."""
 
     architecture: ArchitectureConfig
     training: TrainingConfig
@@ -866,6 +1102,11 @@ class ProjectConfig:
     representation_loss: RepresentationLossConfig | None = None
     representation_training: RepresentationTrainingConfig | None = None
     representation_evaluation: RepresentationEvaluationConfig | None = None
+    advection_diffusion_2d: AdvectionDiffusion2DConfig | None = None
+    field_autoencoder: FieldAutoencoderConfig | None = None
+    field_loss: FieldLossConfig | None = None
+    v0_5_training: V05TrainingConfig | None = None
+    v0_5_evaluation: V05EvaluationConfig | None = None
     project_version: str = PROJECT_VERSION
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -891,17 +1132,28 @@ class ProjectConfig:
             section is not None for section in v0_4_sections
         ):
             raise ValueError("V0.4 config must provide all representation sections together")
-        if (any(section is not None for section in v0_3_sections) or any(
-            section is not None for section in v0_4_sections
-        )) and self.koopman is None:
+        v0_5_sections = (
+            self.advection_diffusion_2d,
+            self.field_autoencoder,
+            self.field_loss,
+            self.v0_5_training,
+            self.v0_5_evaluation,
+        )
+        if any(section is not None for section in v0_5_sections) and not all(
+            section is not None for section in v0_5_sections
+        ):
+            raise ValueError("V0.5 config must provide all field-learning sections together")
+        if (
+            any(section is not None for section in v0_3_sections)
+            or any(section is not None for section in v0_4_sections)
+            or any(section is not None for section in v0_5_sections)
+        ) and self.koopman is None:
             raise ValueError("versioned Koopman experiments require a Koopman config")
         if self.oscillator is not None:
             assert self.koopman is not None
             if self.koopman.state_dim != 2:
                 raise ValueError("V0.3 oscillator experiments require Koopman state_dim=2")
-            expected_mode = (
-                DtMode.VARIABLE if self.oscillator.variable_dt else DtMode.CONSTANT
-            )
+            expected_mode = DtMode.VARIABLE if self.oscillator.variable_dt else DtMode.CONSTANT
             if self.data.problem_name != "damped_harmonic_oscillator":
                 raise ValueError("V0.3 data problem_name must be damped_harmonic_oscillator")
             if self.data.action_dim != 0 or self.data.parameter_dim != 2:
@@ -926,9 +1178,7 @@ class ProjectConfig:
                 raise ValueError("V0.4 data problem_name is incompatible")
             if self.data.action_dim != 0 or self.data.parameter_dim != 2:
                 raise ValueError("V0.4 known-latent data requires action_dim=0/parameter_dim=2")
-            expected_mode = (
-                DtMode.VARIABLE if self.known_latent.variable_dt else DtMode.CONSTANT
-            )
+            expected_mode = DtMode.VARIABLE if self.known_latent.variable_dt else DtMode.CONSTANT
             if self.data.dt_mode is not expected_mode:
                 raise ValueError("V0.4 data dt_mode must match known_latent variable_dt")
             if expected_mode is DtMode.CONSTANT:
@@ -943,11 +1193,38 @@ class ProjectConfig:
                 raise ValueError("V0.4 multi-step training requires data horizon > 1")
             if self.known_latent.num_steps < self.data.history + self.data.horizon - 1:
                 raise ValueError("V0.4 trajectories are too short for history/horizon")
-            if (
-                self.representation_evaluation.rollout_horizon
-                > self.known_latent.num_steps
-            ):
+            if self.representation_evaluation.rollout_horizon > self.known_latent.num_steps:
                 raise ValueError("V0.4 rollout horizon exceeds known-latent trajectory length")
+        if self.advection_diffusion_2d is not None:
+            assert self.koopman is not None
+            assert self.field_autoencoder is not None
+            assert self.v0_5_evaluation is not None
+            pde = self.advection_diffusion_2d
+            if self.data.problem_name != "periodic_advection_diffusion_2d":
+                raise ValueError("V0.5 data problem_name is incompatible")
+            if self.data.action_dim != 0 or self.data.parameter_dim != 3:
+                raise ValueError("V0.5 data requires action_dim=0/parameter_dim=3")
+            if self.field_autoencoder.input_channels != 1:
+                raise ValueError("V0.5 scalar PDE requires one field channel")
+            if self.koopman.state_dim != self.field_autoencoder.latent_dim:
+                raise ValueError("V0.5 Koopman state_dim must equal field latent_dim")
+            if not self.koopman.trainable or self.koopman.dtype != "float32":
+                raise ValueError("V0.5 requires a trainable float32 Koopman core")
+            expected_mode = DtMode.VARIABLE if pde.variable_dt else DtMode.CONSTANT
+            if self.data.dt_mode is not expected_mode:
+                raise ValueError("V0.5 data dt_mode must match PDE variable_dt")
+            if expected_mode is DtMode.CONSTANT:
+                assert self.data.constant_dt is not None
+                if abs(self.data.constant_dt - pde.base_dt) > 1e-12:
+                    raise ValueError("V0.5 constant_dt must match PDE base_dt")
+            if self.data.normalization.kind != "standard":
+                raise ValueError("V0.5 requires train-only standard normalization")
+            if self.data.horizon < 2:
+                raise ValueError("V0.5 multi-step training requires horizon > 1")
+            if pde.num_steps < self.data.history + self.data.horizon - 1:
+                raise ValueError("V0.5 trajectories are too short for history/horizon")
+            if self.v0_5_evaluation.long_horizon > pde.num_steps:
+                raise ValueError("V0.5 long evaluation horizon exceeds trajectory length")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -961,9 +1238,7 @@ class ProjectConfig:
                 None if self.identification is None else self.identification.to_dict()
             ),
             "evaluation": None if self.evaluation is None else self.evaluation.to_dict(),
-            "known_latent": (
-                None if self.known_latent is None else self.known_latent.to_dict()
-            ),
+            "known_latent": (None if self.known_latent is None else self.known_latent.to_dict()),
             "autoencoder": None if self.autoencoder is None else self.autoencoder.to_dict(),
             "representation_loss": (
                 None if self.representation_loss is None else self.representation_loss.to_dict()
@@ -978,6 +1253,19 @@ class ProjectConfig:
                 if self.representation_evaluation is None
                 else self.representation_evaluation.to_dict()
             ),
+            "advection_diffusion_2d": (
+                None
+                if self.advection_diffusion_2d is None
+                else self.advection_diffusion_2d.to_dict()
+            ),
+            "field_autoencoder": (
+                None if self.field_autoencoder is None else self.field_autoencoder.to_dict()
+            ),
+            "field_loss": None if self.field_loss is None else self.field_loss.to_dict(),
+            "v0_5_training": None if self.v0_5_training is None else self.v0_5_training.to_dict(),
+            "v0_5_evaluation": None
+            if self.v0_5_evaluation is None
+            else self.v0_5_evaluation.to_dict(),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }
@@ -1000,6 +1288,11 @@ class ProjectConfig:
                 "representation_loss",
                 "representation_training",
                 "representation_evaluation",
+                "advection_diffusion_2d",
+                "field_autoencoder",
+                "field_loss",
+                "v0_5_training",
+                "v0_5_evaluation",
                 "project_version",
                 "tags",
             },
@@ -1081,6 +1374,43 @@ class ProjectConfig:
                     _ensure_mapping(
                         data["representation_evaluation"], "representation evaluation config"
                     )
+                )
+            ),
+            advection_diffusion_2d=(
+                None
+                if data.get("advection_diffusion_2d") is None
+                else AdvectionDiffusion2DConfig.from_dict(
+                    _ensure_mapping(
+                        data["advection_diffusion_2d"], "V0.5 advection-diffusion config"
+                    )
+                )
+            ),
+            field_autoencoder=(
+                None
+                if data.get("field_autoencoder") is None
+                else FieldAutoencoderConfig.from_dict(
+                    _ensure_mapping(data["field_autoencoder"], "V0.5 field autoencoder config")
+                )
+            ),
+            field_loss=(
+                None
+                if data.get("field_loss") is None
+                else FieldLossConfig.from_dict(
+                    _ensure_mapping(data["field_loss"], "V0.5 field loss config")
+                )
+            ),
+            v0_5_training=(
+                None
+                if data.get("v0_5_training") is None
+                else V05TrainingConfig.from_dict(
+                    _ensure_mapping(data["v0_5_training"], "V0.5 training config")
+                )
+            ),
+            v0_5_evaluation=(
+                None
+                if data.get("v0_5_evaluation") is None
+                else V05EvaluationConfig.from_dict(
+                    _ensure_mapping(data["v0_5_evaluation"], "V0.5 evaluation config")
                 )
             ),
             project_version=str(data.get("project_version", PROJECT_VERSION)),

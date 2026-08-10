@@ -95,16 +95,20 @@ class ContinuousKoopmanCore(nn.Module):
     def step(self, z: Tensor, dt: Tensor | Real) -> Tensor:
         """Propagate one exact matrix-exponential step using column-state semantics."""
         self._validate_state(z)
-        transition = self.transition_matrix(dt)
-        if z.ndim == 1:
-            if transition.ndim != 2:
-                raise ValueError("single state requires scalar dt")
-            return transition @ z
-        if transition.ndim == 2:
-            return z @ transition.transpose(-1, -2)
-        if transition.shape[0] != z.shape[0]:
-            raise ValueError("batch dt length must equal state batch size")
-        return torch.einsum("bij,bj->bi", transition, z)
+        # Keep both matrix_exp and its application in the generator dtype. Without this
+        # outer island, AMP can downcast matmul/einsum and the next rollout step no longer
+        # satisfies the core's explicit dtype contract.
+        with torch.autocast(device_type=self.A.device.type, enabled=False):
+            transition = self.transition_matrix(dt)
+            if z.ndim == 1:
+                if transition.ndim != 2:
+                    raise ValueError("single state requires scalar dt")
+                return transition @ z
+            if transition.ndim == 2:
+                return z @ transition.transpose(-1, -2)
+            if transition.shape[0] != z.shape[0]:
+                raise ValueError("batch dt length must equal state batch size")
+            return torch.einsum("bij,bj->bi", transition, z)
 
     def rollout(
         self,

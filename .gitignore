@@ -8,4 +8,9 @@ __pycache__/
 build/
 dist/
 runs/
-
+*.pt
+*.pth
+*.ckpt
+*.log
+trace.json
+*.kineto.json
