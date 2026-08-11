@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import subprocess
@@ -19,6 +20,13 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=ROOT / "gpu_validation/v0_5/results",
+    )
+    args = parser.parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable; GPU validation cannot be claimed")
     configs = {
@@ -81,6 +89,22 @@ def main() -> None:
         "component_parity_max_abs": parity,
         "matrix_exp_device": str(torch.matrix_exp(torch.eye(2, device="cuda")).device),
     }
+    args.results_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = args.results_dir / "preflight.json"
+    summary_path = args.results_dir / "preflight.md"
+    metrics_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    summary_path.write_text(
+        "# V0.5 GPU preflight\n\n"
+        f"- status: **{report['status']}**\n"
+        f"- commit: `{report['git_commit']}`; dirty: `{report['git_dirty']}`\n"
+        f"- device: `{report['device']}`; count: {report['device_count']}\n"
+        f"- CUDA / cuDNN / PyTorch: `{report['cuda_version']}` / "
+        f"`{report['cudnn_version']}` / `{report['torch_version']}`\n"
+        f"- BF16 supported: `{report['bf16_supported']}`\n"
+        f"- component parity max abs: `{report['component_parity_max_abs']}`\n"
+        f"- matrix_exp device: `{report['matrix_exp_device']}`\n",
+        encoding="utf-8",
+    )
     print("=== V0.5 GPU Preflight ===")
     print(json.dumps(report, indent=2, sort_keys=True))
     if dirty:

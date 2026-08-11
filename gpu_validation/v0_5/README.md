@@ -6,6 +6,33 @@ model, loss, trainer, checkpoint, or evaluator implementation.
 Run only from a clean checkout of the reviewed commit. The GPU package wraps the canonical
 trainer/evaluator and contains no alternate model implementation.
 
+## One-command complete validation (recommended)
+
+Activate an existing CUDA-enabled Python environment, verify that `git status --short` is
+empty, and run:
+
+```bash
+python gpu_validation/v0_5/scripts/gpu_validate_all.py
+```
+
+The command runs the local regression gates, GPU preflight/parity, FP32 and capability-selected
+AMP smoke, the full physics run, an exact epoch-75 resume, the full no-physics ablation,
+`best_forecast`, post-warmup forecast, `best_physics`, post-warmup physics, and `last`
+evaluation for both full runs, and the bounded profiler. The final scientific gate uses the
+post-warmup forecast checkpoints so an early checkpoint cannot bypass the physics objective.
+It retains only the numbered epoch checkpoint required for resume instead of all 150 numbered
+checkpoints. Large checkpoints and traces remain under ignored `runs/`; compact JSON/Markdown
+evidence is exported to `gpu_validation/v0_5/results/<validation-id>/`.
+
+Every subprocess has a persistent log and state entry. If a step fails, the final console output
+prints an exact continuation command containing `--validation-id`; rerunning it skips all prior
+PASS steps and preserves the failed run rather than deleting it. A completed command exits zero
+when the workflow executed correctly even when `scientific_status=FAIL`; read
+`final_validation.md` for the acceptance decision.
+
+Do not use `--skip-local-gates` unless pytest, ruff, mypy, and diff-check already passed on the
+exact same commit.
+
 ## 1. Update and verify revision
 
 ```bash

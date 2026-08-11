@@ -21,6 +21,20 @@ def main() -> None:
     )
     parser.add_argument("--resume-from", type=Path, default=None)
     parser.add_argument("--precision", choices=("fp32", "amp_fp16", "amp_bf16"), default=None)
+    parser.add_argument("--run-name", default=None)
+    checkpoint_group = parser.add_mutually_exclusive_group()
+    checkpoint_group.add_argument(
+        "--checkpoint-epoch",
+        type=int,
+        action="append",
+        default=None,
+        help="Retain only the requested numbered epoch checkpoint(s); may be repeated",
+    )
+    checkpoint_group.add_argument(
+        "--no-epoch-checkpoints",
+        action="store_true",
+        help="Retain latest/last/best checkpoints but no numbered epoch checkpoints",
+    )
     args = parser.parse_args()
     config = load_config(args.config)
     if args.precision is not None:
@@ -30,7 +44,22 @@ def main() -> None:
             config,
             v0_5_training=replace(config.v0_5_training, precision=args.precision),
         )
-    result = train_v0_5(config, device="cuda", resume_from=args.resume_from)
+    checkpoint_epochs = (
+        set()
+        if args.no_epoch_checkpoints
+        else None
+        if args.checkpoint_epoch is None
+        else set(args.checkpoint_epoch)
+    )
+    if checkpoint_epochs is not None and any(epoch <= 0 for epoch in checkpoint_epochs):
+        raise ValueError("checkpoint epochs must be positive")
+    result = train_v0_5(
+        config,
+        device="cuda",
+        resume_from=args.resume_from,
+        run_name=args.run_name,
+        checkpoint_epochs=checkpoint_epochs,
+    )
     print(
         json.dumps(
             {"run_dir": str(result.run_dir), "checkpoint": str(result.latest_checkpoint)}, indent=2

@@ -17,13 +17,22 @@ from train.train_v0_5 import train_v0_5
 def test_v0_5_training_resume_is_exact_and_records_are_complete(tmp_path) -> None:
     config = load_config("configs/v0_5/advection_diffusion_2d_cpu_smoke.yaml")
     config = replace(config, training=replace(config.training, run_root=str(tmp_path)))
-    uninterrupted = train_v0_5(config, device="cpu", run_name="uninterrupted")
+    uninterrupted = train_v0_5(
+        config,
+        device="cpu",
+        run_name="uninterrupted",
+        checkpoint_epochs={1},
+    )
     resumed = train_v0_5(
         config,
         device="cpu",
         resume_from=uninterrupted.run_dir / "checkpoints" / "epoch_0001.pt",
         run_name="resumed",
+        checkpoint_epochs=set(),
     )
+    assert (uninterrupted.run_dir / "checkpoints" / "epoch_0001.pt").is_file()
+    assert not (uninterrupted.run_dir / "checkpoints" / "epoch_0002.pt").exists()
+    assert not list((resumed.run_dir / "checkpoints").glob("epoch_*.pt"))
     left = load_checkpoint(uninterrupted.latest_checkpoint)
     right = load_checkpoint(resumed.latest_checkpoint)
     assert left.epoch == right.epoch == 2
@@ -49,7 +58,9 @@ def test_v0_5_training_resume_is_exact_and_records_are_complete(tmp_path) -> Non
         "logs/step_metrics.jsonl",
         "checkpoints/last.pt",
         "checkpoints/best_forecast.pt",
+        "checkpoints/best_forecast_post_warmup.pt",
         "checkpoints/best_physics.pt",
+        "checkpoints/best_physics_post_warmup.pt",
         "evaluation/final_metrics.json",
         "evaluation/rollout_by_horizon.csv",
         "evaluation/spectrum.json",

@@ -174,6 +174,7 @@ def train_v0_5(
     device: str | torch.device | None = None,
     resume_from: str | Path | None = None,
     run_name: str | None = None,
+    checkpoint_epochs: set[int] | None = None,
 ) -> V05TrainingResult:
     """Train the complete V0.5 model and emit a reproducible run directory."""
     training_started = datetime.now(timezone.utc).isoformat()
@@ -421,8 +422,24 @@ def train_v0_5(
     latest_path = run.run_dir / "checkpoints" / "latest.pt"
     best_path = run.run_dir / "checkpoints" / "best_forecast.pt"
     best_physics_path = run.run_dir / "checkpoints" / "best_physics.pt"
+    best_post_warmup_path = run.run_dir / "checkpoints" / "best_forecast_post_warmup.pt"
+    best_physics_post_warmup_path = (
+        run.run_dir / "checkpoints" / "best_physics_post_warmup.pt"
+    )
     best_physics_value = min(
         (float(row["val_mass"]) + float(row["val_operator"]) for row in prior_rows),
+        default=float("inf"),
+    )
+    first_full_physics_epoch = resolved.v0_5_training.physics_warmup_epochs + 1
+    post_warmup_rows = [
+        row for row in prior_rows if int(row["epoch"]) >= first_full_physics_epoch
+    ]
+    best_post_warmup_value = min(
+        (float(row["val_rollout"]) for row in post_warmup_rows),
+        default=float("inf"),
+    )
+    best_physics_post_warmup_value = min(
+        (float(row["val_mass"]) + float(row["val_operator"]) for row in post_warmup_rows),
         default=float("inf"),
     )
     if resume_from is not None:
@@ -430,6 +447,8 @@ def train_v0_5(
         for name, destination in (
             ("best_forecast.pt", best_path),
             ("best_physics.pt", best_physics_path),
+            ("best_forecast_post_warmup.pt", best_post_warmup_path),
+            ("best_physics_post_warmup.pt", best_physics_post_warmup_path),
         ):
             source = source_checkpoints / name
             if source.is_file():
@@ -573,7 +592,12 @@ def train_v0_5(
             )
             save_checkpoint(checkpoint, latest_path)
             save_checkpoint(checkpoint, run.run_dir / "checkpoints" / "last.pt")
-            save_checkpoint(checkpoint, run.run_dir / "checkpoints" / f"epoch_{epoch + 1:04d}.pt")
+            completed_epoch = epoch + 1
+            if checkpoint_epochs is None or completed_epoch in checkpoint_epochs:
+                save_checkpoint(
+                    checkpoint,
+                    run.run_dir / "checkpoints" / f"epoch_{completed_epoch:04d}.pt",
+                )
             if validation["forecast_model_mse"] < best_value:
                 best_value = validation["forecast_model_mse"]
                 save_checkpoint(checkpoint, best_path)
@@ -581,6 +605,13 @@ def train_v0_5(
             if physics_value < best_physics_value:
                 best_physics_value = physics_value
                 save_checkpoint(checkpoint, best_physics_path)
+            if scale >= 1.0:
+                if validation["forecast_model_mse"] < best_post_warmup_value:
+                    best_post_warmup_value = validation["forecast_model_mse"]
+                    save_checkpoint(checkpoint, best_post_warmup_path)
+                if physics_value < best_physics_post_warmup_value:
+                    best_physics_post_warmup_value = physics_value
+                    save_checkpoint(checkpoint, best_physics_post_warmup_path)
     if start_epoch >= resolved.v0_5_training.epochs:
         raise ValueError("resume checkpoint already reached configured epochs")
     if not best_path.exists():

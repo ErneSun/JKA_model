@@ -4,6 +4,14 @@ GPU is required to validate the actual CUDA kernels, AMP behavior, memory use, t
 and server resume workflow; CPU already validates contracts, analytic numerics, gradient
 connectivity, deterministic training, evaluation integration, and artifact structure.
 
+The recommended execution entrypoint is:
+
+```bash
+python gpu_validation/v0_5/scripts/gpu_validate_all.py
+```
+
+It implements every gate below, persists per-step logs/state, and emits a compact final report.
+
 | Gate | Config | Pass criterion |
 |---|---|---|
 | Preflight/parity | `gpu_smoke.yaml` | CUDA/cuDNN/device/configs present; encoder, Koopman step, decoder, mass, and operator FP32 parity within recorded tolerances |

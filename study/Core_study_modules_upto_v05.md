@@ -77,7 +77,7 @@ future states:  U[t+1], ..., U[t+4]
 future dt:      dt[t], ..., dt[t+3]
 ```
 
-- [x] 能解释 `ProblemBatch` 中每个 tensor 的 shape。
+- [ ] 能解释 `ProblemBatch` 中每个 tensor 的 shape。
 - [x] 能指出 `future_dts[:, 0]` 对应哪一次状态转移。
 - [x] 能构造 negative/zero/wrong-length dt 并说明为何应报错。
 

@@ -8,6 +8,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
+
 ## This function validates the data alignment for a single trajectory.
 def validate_trajectory_alignment(
     states: Tensor,
