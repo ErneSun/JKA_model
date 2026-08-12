@@ -63,7 +63,29 @@ def test_constraints_run_on_raw_state_and_remain_differentiable() -> None:
         "discrete_pde_residual",
     }
     assert terms["periodic_boundary"] < 1e-20
-    assert terms["mass_conservation"] < 1e-20
+    # The two conserved masses are independent FP32 reductions. Their exact rounding can
+    # vary with the CPU/PyTorch reduction kernel, so compare the squared penalty against a
+    # scale-aware roundoff bound instead of requiring an effectively bitwise-zero result.
+    raw_state = batch.future_states_raw[:, 0]
+    mass_scale = raw_state.abs().amax() * batch.cell_weights.abs().sum(dim=-1).amax()
+    mass_delta_atol = 32.0 * torch.finfo(raw_state.dtype).eps * mass_scale
+    mass_penalty_atol = float(mass_delta_atol.detach().square())
+    torch.testing.assert_close(
+        terms["mass_conservation"],
+        torch.zeros_like(terms["mass_conservation"]),
+        rtol=0.0,
+        atol=mass_penalty_atol,
+    )
+    shifted = raw_state.detach().clone().add_(0.1)
+    shifted_mass_penalty = MassConservationConstraint().loss(
+        shifted,
+        prev_state_raw=batch.context_states_raw[:, -1],
+        metadata={
+            "cell_weights": batch.cell_weights,
+            "valid_mask": batch.valid_mask,
+        },
+    )["mass_conservation"]
+    assert shifted_mass_penalty > 0.01
     sum(terms.values()).backward()
     assert batch.future_states_raw.grad is not None
 
