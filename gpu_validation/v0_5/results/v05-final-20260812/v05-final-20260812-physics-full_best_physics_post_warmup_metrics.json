@@ -1,0 +1,57 @@
+{
+  "checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260812-physics-full/checkpoints/best_physics_post_warmup.pt",
+  "checkpoint_name": "best_physics_post_warmup",
+  "config": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260812-physics-full/config/resolved_config.yaml",
+  "config_hash": "df8f6645b7674248c4ade767cd5e9523d2f27d2ca2c139e9e2e2c3f66d869ca6",
+  "decay_relative_error": 1.2555232681334019,
+  "forecast": {
+    "long": {
+      "mass_drift": 1.3826263745625813,
+      "operator": 6.454896026187473,
+      "persistence_rmse": 1.0331104066636827,
+      "relative_l2": 0.9965507056978014,
+      "rmse": 0.6456190413898892
+    },
+    "medium": {
+      "mass_drift": 1.2200384669833713,
+      "operator": 32.12123945024278,
+      "persistence_rmse": 0.332117670112186,
+      "relative_l2": 1.0413558814260695,
+      "rmse": 0.7657707863383822
+    },
+    "short": {
+      "mass_drift": 1.1384757889641657,
+      "operator": 512.787353515625,
+      "persistence_rmse": 0.03339302560521497,
+      "relative_l2": 1.0680322183503046,
+      "rmse": 0.8137133518854777
+    }
+  },
+  "frequency_gate_pass": false,
+  "frequency_relative_error": 0.9502569095542034,
+  "frequency_threshold": 0.05,
+  "git_branch": "gpu_validation",
+  "git_commit": "f1ecfc0d60fc88d9cf994b3bb26c400b9ee4bf21",
+  "git_dirty": false,
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "latent_max_std": 1.9318879842758179,
+  "latent_min_std": 1.249616265296936,
+  "learned_angular_frequency": 0.05969170853495598,
+  "learned_decay_rate": -0.025552326813340187,
+  "long_beats_persistence": true,
+  "mass_drift_long": 1.3826263745625813,
+  "max_samples_per_second": 146.98463955125393,
+  "operator_long": 6.454896026187473,
+  "peak_gpu_memory_bytes": 2888410624.0,
+  "persistence_long_rmse": 1.0331104066636827,
+  "precision": "fp32",
+  "reconstruction_rmse": 0.8200490805837843,
+  "run_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260812-physics-full",
+  "run_id": "v05-final-20260812-physics-full",
+  "scientific_acceptance": "PENDING_REVIEW",
+  "selection_epoch": 54,
+  "selection_rule": "minimum validation mass plus operator penalty after physics warmup",
+  "status": "PASS",
+  "true_angular_frequency": 1.2,
+  "true_decay_rate": 0.1
+}

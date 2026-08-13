@@ -1,0 +1,38 @@
+{
+  "bf16_supported": true,
+  "component_parity_max_abs": {
+    "decoder_output": 1.1546319456101628e-14,
+    "encoder_output": 3.2741809263825417e-11,
+    "koopman_step_output": 3.2741809263825417e-11,
+    "mass_penalty": 0.0,
+    "operator_penalty": 0.0
+  },
+  "configs": {
+    "gpu_full.yaml": "/home/ai_group/Documents/files/SQ/JKA_model/gpu_validation/v0_5/configs/gpu_full.yaml",
+    "gpu_full_no_physics.yaml": "/home/ai_group/Documents/files/SQ/JKA_model/gpu_validation/v0_5/configs/gpu_full_no_physics.yaml",
+    "gpu_smoke.yaml": "/home/ai_group/Documents/files/SQ/JKA_model/gpu_validation/v0_5/configs/gpu_smoke.yaml"
+  },
+  "cuda_version": "12.8",
+  "cudnn_version": 91900,
+  "current_device": 0,
+  "device": "NVIDIA GeForce RTX 5080",
+  "device_count": 1,
+  "fp16_supported": true,
+  "git_branch": "gpu_validation",
+  "git_commit": "f1ecfc0d60fc88d9cf994b3bb26c400b9ee4bf21",
+  "git_dirty": false,
+  "matrix_exp_device": "cuda:0",
+  "parity_tolerances": {
+    "math": {
+      "abs_tol": 2e-05,
+      "rel_tol": 0.0002
+    },
+    "torch": {
+      "atol": 2e-05,
+      "rtol": 0.0002
+    }
+  },
+  "status": "PASS",
+  "torch_version": "2.11.0+cu128",
+  "total_memory": 16585523200
+}

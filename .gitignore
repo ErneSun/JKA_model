@@ -17,3 +17,4 @@ matplotlib/
 *.log
 *.kineto.json
 .python-version
+.idea/

@@ -1,0 +1,57 @@
+{
+  "checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260812-no-physics/checkpoints/best_physics.pt",
+  "checkpoint_name": "best_physics",
+  "config": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260812-no-physics/config/resolved_config.yaml",
+  "config_hash": "707c50ec1c32718ef91eea2934dc6ffd93bbe69412f258e610f71deb90bcba4e",
+  "decay_relative_error": 1.2693942748010159,
+  "forecast": {
+    "long": {
+      "mass_drift": 0.6708683967590332,
+      "operator": 5.488337092929417,
+      "persistence_rmse": 1.0331104066636827,
+      "relative_l2": 0.9594698150952657,
+      "rmse": 0.6269013848569658
+    },
+    "medium": {
+      "mass_drift": 0.6321122381422255,
+      "operator": 27.408202277289497,
+      "persistence_rmse": 0.332117670112186,
+      "relative_l2": 0.9831573367118835,
+      "rmse": 0.7238687541749742
+    },
+    "short": {
+      "mass_drift": 0.6251633167266846,
+      "operator": 438.4020690917969,
+      "persistence_rmse": 0.03339302560521497,
+      "relative_l2": 0.9969214863247342,
+      "rmse": 0.7565029793315463
+    }
+  },
+  "frequency_gate_pass": false,
+  "frequency_relative_error": 0.9727809894829988,
+  "frequency_threshold": 0.05,
+  "git_branch": "gpu_validation",
+  "git_commit": "f1ecfc0d60fc88d9cf994b3bb26c400b9ee4bf21",
+  "git_dirty": false,
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "latent_max_std": 1.1462360620498657,
+  "latent_min_std": 0.9592809677124023,
+  "learned_angular_frequency": 0.03266281262040138,
+  "learned_decay_rate": -0.026939427480101585,
+  "long_beats_persistence": true,
+  "mass_drift_long": 0.6708683967590332,
+  "max_samples_per_second": 148.24212445201877,
+  "operator_long": 5.488337092929417,
+  "peak_gpu_memory_bytes": 2888410624.0,
+  "persistence_long_rmse": 1.0331104066636827,
+  "precision": "fp32",
+  "reconstruction_rmse": 0.7604696684413486,
+  "run_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260812-no-physics",
+  "run_id": "v05-final-20260812-no-physics",
+  "scientific_acceptance": "PENDING_REVIEW",
+  "selection_epoch": 2,
+  "selection_rule": "minimum validation mass plus operator penalty",
+  "status": "PASS",
+  "true_angular_frequency": 1.2,
+  "true_decay_rate": 0.1
+}

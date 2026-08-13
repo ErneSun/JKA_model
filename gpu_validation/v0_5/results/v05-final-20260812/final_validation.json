@@ -1,0 +1,99 @@
+{
+  "all_checklist_items_complete": true,
+  "checklist": {
+    "A_git_state": true,
+    "B_cuda_environment": true,
+    "C_gpu_identity": true,
+    "D_matrix_exp_preflight": true,
+    "E_cpu_gpu_parity": true,
+    "F_amp_finite": true,
+    "G_smoke_gradients": true,
+    "H_gpu_short_training": true,
+    "I_no_physics_full": true,
+    "J_physics_full": true,
+    "K_exact_resume": true,
+    "L_held_out_long_rollout": true,
+    "M_spectrum_reviewed": true,
+    "N_physics_reviewed": true,
+    "O_performance_recorded": true,
+    "P_peak_memory_recorded": true,
+    "Q_artifacts_saved": true,
+    "R_acceptance_reviewed": true
+  },
+  "generated_at": "2026-08-12T10:17:35.081759+00:00",
+  "hard_gates": {
+    "frequency": {
+      "pass": false,
+      "relative_error": 0.9630975071340799,
+      "threshold": 0.05
+    },
+    "long_beats_persistence": {
+      "model_rmse": 0.6295323703024123,
+      "pass": true,
+      "persistence_rmse": 1.0331104066636827
+    }
+  },
+  "overall_acceptance": "NOT_ACCEPTED",
+  "physics_vs_no_physics": {
+    "long": {
+      "mass_drift": {
+        "no_physics": 2.6947661770714655,
+        "physics": 1.560897085401747,
+        "relative_change": -0.42076715275606946
+      },
+      "operator": {
+        "no_physics": 5.788904719882542,
+        "physics": 5.322328064176771,
+        "relative_change": -0.08059843412230794
+      },
+      "rmse": {
+        "no_physics": 0.6365131934483846,
+        "physics": 0.6295323703024123,
+        "relative_change": -0.010967287430686201
+      }
+    },
+    "medium": {
+      "mass_drift": {
+        "no_physics": 2.4565911293029785,
+        "physics": 1.2882431877983942,
+        "relative_change": -0.475597232102717
+      },
+      "operator": {
+        "no_physics": 28.835164811876083,
+        "physics": 26.591638988918728,
+        "relative_change": -0.07780520200229046
+      },
+      "rmse": {
+        "no_physics": 0.7397601869371202,
+        "physics": 0.7217628757158915,
+        "relative_change": -0.024328575042331213
+      }
+    },
+    "short": {
+      "mass_drift": {
+        "no_physics": 2.2632845772637262,
+        "physics": 1.2572684817843967,
+        "relative_change": -0.4444938588746036
+      },
+      "operator": {
+        "no_physics": 460.8069881863064,
+        "physics": 425.3790690104167,
+        "relative_change": -0.0768823392095912
+      },
+      "rmse": {
+        "no_physics": 0.7775009539392259,
+        "physics": 0.7513775295681424,
+        "relative_change": -0.03359921841732616
+      }
+    }
+  },
+  "runs": {
+    "no_physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260812-no-physics",
+    "physics_full": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260812-physics-full",
+    "resumed": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260812-resume"
+  },
+  "scientific_checkpoint": "best_forecast_post_warmup",
+  "scientific_status": "FAIL",
+  "validation_id": "v05-final-20260812",
+  "workflow_status": "PASS"
+}

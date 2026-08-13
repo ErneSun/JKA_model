@@ -1,0 +1,10 @@
+{
+  "device": "NVIDIA GeForce RTX 5080",
+  "git_commit": "f1ecfc0d60fc88d9cf994b3bb26c400b9ee4bf21",
+  "output_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/profile_20260812T101729Z",
+  "status": "PASS",
+  "steps": 3,
+  "summary": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/profile_20260812T101729Z/summary.txt",
+  "trace": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/profile_20260812T101729Z/trace.json",
+  "trace_bytes": 18274343
+}
