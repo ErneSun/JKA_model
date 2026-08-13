@@ -5,8 +5,8 @@ data: {problem_name: periodic_advection_diffusion_2d, action_dim: 0, parameter_d
 koopman: {state_dim: 4, trainable: true, dtype: float32}
 advection_diffusion_2d: {num_trajectories: 9, num_steps: 12, nx: 16, ny: 16, cx: 0.7, cy: 0.25, nu: 0.02, mode_x: 1, mode_y: 2, base_dt: 0.05, variable_dt: true, dt_jitter: 0.1}
 field_autoencoder: {input_channels: 1, latent_dim: 4, width: 8, decoder_hidden_dim: 32}
-field_loss: {lambda_k: 1.0, lambda_multi: 1.0, lambda_rec: 2.0, lambda_var: 0.1, lambda_physics: 0.02, lambda_mass: 0.1, lambda_operator: 0.05, min_std: 0.05}
-v0_5_training: {epochs: 2, batch_size: 16, learning_rate: 0.002, weight_decay: 0.0, init_scale: 0.03, physics_warmup_epochs: 1, scheduler_step_size: 2, scheduler_gamma: 0.8, diagnostic_interval: 1, precision: fp32}
-v0_5_evaluation: {short_horizon: 1, medium_horizon: 4, long_horizon: 10, max_frequency_relative_error: 0.05}
+field_loss: {lambda_k: 1.0, lambda_generator: 1.0, lambda_multi: 1.0, lambda_rec: 2.0, lambda_forecast: 1.0, lambda_var: 0.1, lambda_stability: 0.1, lambda_physics: 0.02, lambda_mass: 0.1, lambda_operator: 0.05, min_std: 0.05}
+v0_5_training: {epochs: 2, batch_size: 16, learning_rate: 0.002, generator_lr_multiplier: 5.0, weight_decay: 0.0, init_scale: 0.03, physics_warmup_epochs: 1, scheduler_step_size: 2, scheduler_gamma: 0.8, diagnostic_interval: 1, precision: fp32}
+v0_5_evaluation: {short_horizon: 1, medium_horizon: 4, long_horizon: 10, max_frequency_relative_error: 0.05, max_decay_relative_error: 0.2, max_spectral_abscissa: 0.001}
 project_version: 0.5.0
 tags: [v0.5, gpu-smoke]

@@ -119,7 +119,10 @@ def evaluate_v0_5(
                 weights = weights_raw.unsqueeze(0)
                 initial_mass = weighted_integral_2d(initial_raw, weights)
                 masses = weighted_integral_2d(predicted_raw, weights_raw)
-                aggregates[name]["mass_drift"].append(float((masses - initial_mass).abs().max()))
+                mass_scale = initial_raw.abs().mul(weights).sum(dim=(-2, -1)).clamp_min(1e-12)
+                aggregates[name]["mass_drift"].append(
+                    float(((masses - initial_mass).abs() / mass_scale).max())
+                )
                 previous = initial_raw
                 terms: list[torch.Tensor] = []
                 metadata = {
@@ -145,6 +148,7 @@ def evaluate_v0_5(
         for name, metrics in aggregates.items()
     }
     eigenvalues = torch.linalg.eigvals(model.core.A.detach().cpu())
+    spectral_abscissa = float(eigenvalues.real.max())
     true_frequency = abs(reference["angular_frequency"])
     candidates = eigenvalues.imag.abs()
     selected_index = int((candidates - true_frequency).abs().argmin())
@@ -171,10 +175,13 @@ def evaluate_v0_5(
         "learned_decay_rate": learned_decay,
         "true_decay_rate": true_decay,
         "decay_relative_error": decay_error,
+        "spectral_abscissa": spectral_abscissa,
         "selected_eigenvalue": [float(selected_eigenvalue.real), float(selected_eigenvalue.imag)],
         "latent_min_std": float(latent_std.min()),
         "latent_max_std": float(latent_std.max()),
         "frequency_threshold": resolved.v0_5_evaluation.max_frequency_relative_error,
+        "decay_threshold": resolved.v0_5_evaluation.max_decay_relative_error,
+        "spectral_abscissa_threshold": resolved.v0_5_evaluation.max_spectral_abscissa,
         "scientific_acceptance": "PENDING_GPU"
         if selected.type != "cuda"
         else "MEASURED_NOT_AUTOMATICALLY_ACCEPTED",
@@ -222,6 +229,7 @@ def evaluate_v0_5(
                     "learned_decay_rate": learned_decay,
                     "true_decay_rate": true_decay,
                     "decay_relative_error": decay_error,
+                    "spectral_abscissa": spectral_abscissa,
                     "selected_eigenvalue": [
                         float(selected_eigenvalue.real),
                         float(selected_eigenvalue.imag),

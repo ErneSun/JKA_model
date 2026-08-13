@@ -22,6 +22,7 @@ def main() -> None:
     parser.add_argument("--resume-from", type=Path, default=None)
     parser.add_argument("--precision", choices=("fp32", "amp_fp16", "amp_bf16"), default=None)
     parser.add_argument("--run-name", default=None)
+    parser.add_argument("--seed", type=int, default=None)
     checkpoint_group = parser.add_mutually_exclusive_group()
     checkpoint_group.add_argument(
         "--checkpoint-epoch",
@@ -37,6 +38,14 @@ def main() -> None:
     )
     args = parser.parse_args()
     config = load_config(args.config)
+    if args.seed is not None:
+        if args.seed < 0:
+            raise ValueError("seed must be non-negative")
+        config = replace(
+            config,
+            training=replace(config.training, seed=args.seed),
+            data=replace(config.data, split=replace(config.data.split, seed=args.seed)),
+        )
     if args.precision is not None:
         if config.v0_5_training is None:
             raise ValueError("GPU training requires a V0.5 training section")

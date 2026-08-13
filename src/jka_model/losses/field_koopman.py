@@ -11,7 +11,7 @@ from torch import Tensor
 from jka_model.config import FieldLossConfig
 from jka_model.contracts import ProblemBatch, ProblemSpec
 from jka_model.data import ChannelStandardizer
-from jka_model.losses.koopman import variance_loss
+from jka_model.losses.koopman import stability_regularizer, variance_loss
 from jka_model.models import FieldKoopmanAutoencoder
 from jka_model.physics import PhysicsConstraint
 
@@ -20,10 +20,12 @@ from jka_model.physics import PhysicsConstraint
 class FieldLossBreakdown:
     total: Tensor
     koopman_one_step: Tensor
+    generator_consistency: Tensor
     koopman_multi_step: Tensor
     reconstruction: Tensor
     forecast_model: Tensor
     variance: Tensor
+    stability: Tensor
     mass: Tensor
     operator: Tensor
     physics_scale: float
@@ -32,10 +34,12 @@ class FieldLossBreakdown:
         return {
             "total_loss": float(self.total.detach()),
             "koopman_one_step_loss": float(self.koopman_one_step.detach()),
+            "generator_consistency_loss": float(self.generator_consistency.detach()),
             "koopman_multi_step_loss": float(self.koopman_multi_step.detach()),
             "reconstruction_loss": float(self.reconstruction.detach()),
             "forecast_model_mse": float(self.forecast_model.detach()),
             "variance_loss": float(self.variance.detach()),
+            "stability_loss": float(self.stability.detach()),
             "mass_loss": float(self.mass.detach()),
             "operator_loss": float(self.operator.detach()),
             "physics_scale": self.physics_scale,
@@ -65,10 +69,15 @@ def compute_field_koopman_loss(
     predicted_model = model.decode(latent_rollout[:, 1:])
     reconstructed_model = model.decode(latent_targets)
     one_step = (latent_rollout[:, 1] - latent_targets[:, 1]).square().mean()
+    dt = batch.future_dts.to(dtype=latent_targets.dtype).unsqueeze(-1)
+    latent_derivative = (latent_targets[:, 1:] - latent_targets[:, :-1]) / dt
+    predicted_derivative = latent_targets[:, :-1] @ model.core.A.transpose(-1, -2)
+    generator_consistency = (predicted_derivative - latent_derivative).square().mean()
     multi_step = (latent_rollout[:, 1:] - latent_targets[:, 1:]).square().mean()
     reconstruction = (reconstructed_model - sequence).square().mean()
     forecast_model = (predicted_model - future).square().mean()
     variance = variance_loss(latent_targets, min_std=config.min_std)
+    stability = stability_regularizer(model.core.A)
 
     # AMP is useful for the CNNs, but raw-unit differences, quadrature, and reductions
     # remain FP32 to avoid half-precision cancellation and overflow.
@@ -87,11 +96,14 @@ def compute_field_koopman_loss(
             raise ValueError("V0.5 requires named 'mass' and 'operator' constraints") from error
         mass_terms: list[Tensor] = []
         operator_terms: list[Tensor] = []
-        previous = batch.context_states_raw[:, -1].float()
+        initial = batch.context_states_raw[:, -1].float()
+        previous = initial
         for index in range(predicted_raw.shape[1]):
             prediction = predicted_raw[:, index]
+            # The PDE conserves the initial integral. Comparing only consecutive
+            # predictions permits small step errors to accumulate over the rollout.
             mass_result = mass_constraint.loss(
-                prediction, prev_state_raw=previous, metadata=metadata
+                prediction, prev_state_raw=initial, metadata=metadata
             )
             operator_result = operator_constraint.loss(
                 prediction,
@@ -110,18 +122,23 @@ def compute_field_koopman_loss(
     physics = config.lambda_mass * mass + config.lambda_operator * operator
     total = (
         config.lambda_k * one_step
+        + config.lambda_generator * generator_consistency
         + config.lambda_multi * multi_step
         + config.lambda_rec * reconstruction
+        + config.lambda_forecast * forecast_model
         + config.lambda_var * variance
+        + config.lambda_stability * stability
         + physics_scale * config.lambda_physics * physics
     )
     return FieldLossBreakdown(
         total,
         one_step,
+        generator_consistency,
         multi_step,
         reconstruction,
         forecast_model,
         variance,
+        stability,
         mass,
         operator,
         physics_scale,

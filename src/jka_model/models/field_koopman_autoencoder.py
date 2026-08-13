@@ -10,12 +10,20 @@ from jka_model.models.koopman_core import ContinuousKoopmanCore
 class KoopmanEncoder2D(nn.Module):
     """Encode ``[...,C,Nx,Ny]`` fields with circular spatial padding."""
 
-    def __init__(self, input_channels: int, latent_dim: int, width: int) -> None:
+    def __init__(
+        self,
+        input_channels: int,
+        latent_dim: int,
+        width: int,
+        nx: int,
+        ny: int,
+    ) -> None:
         super().__init__()
-        if min(input_channels, latent_dim, width) < 1:
+        if min(input_channels, latent_dim, width, nx, ny) < 1:
             raise ValueError("encoder dimensions must be positive")
         self.input_channels = input_channels
         self.latent_dim = latent_dim
+        self.nx, self.ny = nx, ny
         self.network = nn.Sequential(
             nn.Conv2d(input_channels, width, 3, padding=1, padding_mode="circular"),
             nn.SiLU(),
@@ -23,13 +31,17 @@ class KoopmanEncoder2D(nn.Module):
             nn.SiLU(),
             nn.Conv2d(2 * width, 2 * width, 3, stride=2, padding=1, padding_mode="circular"),
             nn.SiLU(),
-            nn.AdaptiveAvgPool2d(1),
         )
-        self.projection = nn.Linear(2 * width, latent_dim)
+        # Keep the coarse spatial feature map. Global average pooling would make the
+        # code translation invariant and therefore erase the phase of travelling waves.
+        coarse_nx, coarse_ny = (nx + 3) // 4, (ny + 3) // 4
+        self.projection = nn.Linear(2 * width * coarse_nx * coarse_ny, latent_dim)
 
     def forward(self, field: Tensor) -> Tensor:
         if field.ndim < 4 or field.shape[-3] != self.input_channels:
             raise ValueError("field must have shape [...,C,Nx,Ny]")
+        if field.shape[-2:] != (self.nx, self.ny):
+            raise ValueError(f"field grid must be {(self.nx, self.ny)}")
         leading = field.shape[:-3]
         flattened = field.reshape(-1, *field.shape[-3:])
         features = self.network(flattened).flatten(1)

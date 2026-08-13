@@ -97,7 +97,11 @@ def initialize_v0_5_model(
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(config.training.seed)
         encoder = KoopmanEncoder2D(
-            architecture.input_channels, architecture.latent_dim, architecture.width
+            architecture.input_channels,
+            architecture.latent_dim,
+            architecture.width,
+            nx,
+            ny,
         )
         decoder = TrainingDecoder2D(
             architecture.latent_dim,
@@ -113,10 +117,14 @@ def initialize_v0_5_model(
                     nn.init.normal_(layer.weight, std=config.v0_5_training.init_scale)
                     if layer.bias is not None:
                         nn.init.zeros_(layer.bias)
-    generator = config.v0_5_training.init_scale * torch.randn(
+    generator_random = torch.randn(
         architecture.latent_dim,
         architecture.latent_dim,
         generator=torch.Generator(device="cpu").manual_seed(config.training.seed + 1),
+    )
+    # Start from a stable continuous generator while retaining rotational modes.
+    generator = config.v0_5_training.init_scale * (
+        generator_random - generator_random.T - torch.eye(architecture.latent_dim)
     )
     core = ContinuousKoopmanCore(
         architecture.latent_dim, generator=generator, trainable=True, dtype=torch.float32
@@ -214,9 +222,16 @@ def train_v0_5(
     )
     model = initialize_v0_5_model(resolved, device=selected)
     configure_train_stage(model, TrainStage.KOOPMAN)
+    base_parameters = list(model.encoder.parameters()) + list(model.decoder.parameters())
     optimizer = Adam(
-        model.parameters(),
-        lr=resolved.v0_5_training.learning_rate,
+        [
+            {"params": base_parameters, "lr": resolved.v0_5_training.learning_rate},
+            {
+                "params": model.core.parameters(),
+                "lr": resolved.v0_5_training.learning_rate
+                * resolved.v0_5_training.generator_lr_multiplier,
+            },
+        ],
         weight_decay=resolved.v0_5_training.weight_decay,
     )
     scheduler = StepLR(
@@ -373,11 +388,15 @@ def train_v0_5(
         "epoch",
         "global_step",
         "learning_rate",
+        "generator_learning_rate",
         "L_total",
         "L_K",
+        "L_generator",
         "L_multi",
         "L_rec",
+        "L_forecast",
         "L_var",
+        "L_stability",
         "L_physics",
         "L_mass",
         "L_operator",
@@ -426,8 +445,17 @@ def train_v0_5(
     best_physics_post_warmup_path = (
         run.run_dir / "checkpoints" / "best_physics_post_warmup.pt"
     )
+    field_loss_config = resolved.field_loss
+    assert field_loss_config is not None
+
+    def physics_selection_value(row: dict[str, Any]) -> float:
+        return (
+            field_loss_config.lambda_mass * float(row["val_mass"])
+            + field_loss_config.lambda_operator * float(row["val_operator"])
+        )
+
     best_physics_value = min(
-        (float(row["val_mass"]) + float(row["val_operator"]) for row in prior_rows),
+        (physics_selection_value(row) for row in prior_rows),
         default=float("inf"),
     )
     first_full_physics_epoch = resolved.v0_5_training.physics_warmup_epochs + 1
@@ -439,7 +467,7 @@ def train_v0_5(
         default=float("inf"),
     )
     best_physics_post_warmup_value = min(
-        (float(row["val_mass"]) + float(row["val_operator"]) for row in post_warmup_rows),
+        (physics_selection_value(row) for row in post_warmup_rows),
         default=float("inf"),
     )
     if resume_from is not None:
@@ -516,6 +544,7 @@ def train_v0_5(
                             "epoch": epoch + 1,
                             "global_step": global_step,
                             "learning_rate": optimizer.param_groups[0]["lr"],
+                            "generator_learning_rate": optimizer.param_groups[1]["lr"],
                             **losses.as_scalars(),
                         },
                         sort_keys=True,
@@ -539,11 +568,15 @@ def train_v0_5(
                 "epoch": epoch + 1,
                 "global_step": global_step,
                 "learning_rate": optimizer.param_groups[0]["lr"],
+                "generator_learning_rate": optimizer.param_groups[1]["lr"],
                 "L_total": train_mean["total_loss"],
                 "L_K": train_mean["koopman_one_step_loss"],
+                "L_generator": train_mean["generator_consistency_loss"],
                 "L_multi": train_mean["koopman_multi_step_loss"],
                 "L_rec": train_mean["reconstruction_loss"],
+                "L_forecast": train_mean["forecast_model_mse"],
                 "L_var": train_mean["variance_loss"],
+                "L_stability": train_mean["stability_loss"],
                 "L_physics": scale
                 * resolved.field_loss.lambda_physics
                 * (
@@ -601,7 +634,12 @@ def train_v0_5(
             if validation["forecast_model_mse"] < best_value:
                 best_value = validation["forecast_model_mse"]
                 save_checkpoint(checkpoint, best_path)
-            physics_value = validation["mass_loss"] + validation["operator_loss"]
+            physics_value = physics_selection_value(
+                {
+                    "val_mass": validation["mass_loss"],
+                    "val_operator": validation["operator_loss"],
+                }
+            )
             if physics_value < best_physics_value:
                 best_physics_value = physics_value
                 save_checkpoint(checkpoint, best_physics_path)

@@ -10,6 +10,7 @@ from gpu_validation.v0_5.scripts.gpu_validate_all import (
     _build_final_report,
     _write_final_markdown,
 )
+from gpu_validation.v0_5.scripts.gpu_validate_science import _build_report as build_science_report
 
 
 def _write_json(path: Path, value: dict[str, object]) -> None:
@@ -23,12 +24,21 @@ def _evaluation(*, frequency_pass: bool, rmse_scale: float) -> dict[str, object]
         "frequency_gate_pass": frequency_pass,
         "frequency_relative_error": 0.97,
         "frequency_threshold": 0.05,
+        "decay_gate_pass": True,
+        "decay_relative_error": 0.1,
+        "decay_threshold": 0.2,
+        "stability_gate_pass": True,
+        "spectral_abscissa": -0.01,
+        "spectral_abscissa_threshold": 0.001,
+        "beats_persistence": {name: True for name in ("short", "medium", "long")},
         "long_beats_persistence": True,
+        "reconstruction_rmse": 0.5,
         "max_samples_per_second": 100.0,
         "peak_gpu_memory_bytes": 1024.0,
         "forecast": {
             horizon: {
                 "rmse": rmse_scale * multiplier,
+                "relative_l2": rmse_scale * multiplier / 4.0,
                 "persistence_rmse": 2.0,
                 "mass_drift": rmse_scale * multiplier * 2.0,
                 "operator": rmse_scale * multiplier * 3.0,
@@ -90,3 +100,21 @@ def test_final_report_separates_workflow_pass_from_scientific_failure(tmp_path) 
     rendered = output.read_text(encoding="utf-8")
     assert "workflow status: **PASS**" in rendered
     assert "scientific status: **FAIL**" in rendered
+
+
+def test_three_seed_science_report_requires_every_seed_and_consistent_ablation() -> None:
+    seeds = [47, 53, 59]
+    results: dict[int, dict[str, dict[str, object]]] = {}
+    for seed in seeds:
+        physics = _evaluation(frequency_pass=True, rmse_scale=0.5)
+        no_physics = _evaluation(frequency_pass=True, rmse_scale=1.0)
+        physics["run_dir"] = f"physics-{seed}"
+        no_physics["run_dir"] = f"no-physics-{seed}"
+        results[seed] = {"physics": physics, "no_physics": no_physics}
+    report = build_science_report(validation_id="test", seeds=seeds, results=results)
+    assert report["scientific_status"] == "PENDING_REVIEW"
+    assert report["all_seed_gates_pass"] is True
+    assert report["physics_ablation_consistent"] is True
+    results[53]["physics"]["frequency_gate_pass"] = False
+    failed = build_science_report(validation_id="test", seeds=seeds, results=results)
+    assert failed["scientific_status"] == "FAIL"

@@ -845,9 +845,12 @@ class FieldLossConfig:
     """Independent V0.5 representation and raw-physics loss weights."""
 
     lambda_k: float = 1.0
+    lambda_generator: float = 1.0
     lambda_multi: float = 1.0
     lambda_rec: float = 1.0
+    lambda_forecast: float = 1.0
     lambda_var: float = 0.1
+    lambda_stability: float = 0.1
     lambda_physics: float = 0.05
     lambda_mass: float = 0.1
     lambda_operator: float = 0.05
@@ -878,6 +881,7 @@ class V05TrainingConfig:
     epochs: int = 20
     batch_size: int = 16
     learning_rate: float = 0.002
+    generator_lr_multiplier: float = 5.0
     weight_decay: float = 0.0
     init_scale: float = 0.03
     physics_warmup_epochs: int = 5
@@ -887,7 +891,12 @@ class V05TrainingConfig:
     precision: str = "fp32"
 
     def __post_init__(self) -> None:
-        if self.epochs < 1 or self.batch_size < 1 or self.learning_rate <= 0:
+        if (
+            self.epochs < 1
+            or self.batch_size < 1
+            or self.learning_rate <= 0
+            or self.generator_lr_multiplier <= 0
+        ):
             raise ValueError("V0.5 epochs/batch_size/lr must be positive")
         if self.weight_decay < 0 or self.init_scale < 0:
             raise ValueError("V0.5 weight_decay/init_scale must be non-negative")
@@ -929,6 +938,9 @@ class V05TrainingConfig:
             epochs=int(data.get("epochs", defaults.epochs)),
             batch_size=int(data.get("batch_size", defaults.batch_size)),
             learning_rate=float(data.get("learning_rate", defaults.learning_rate)),
+            generator_lr_multiplier=float(
+                data.get("generator_lr_multiplier", defaults.generator_lr_multiplier)
+            ),
             weight_decay=float(data.get("weight_decay", defaults.weight_decay)),
             init_scale=float(data.get("init_scale", defaults.init_scale)),
             physics_warmup_epochs=int(
@@ -949,18 +961,29 @@ class V05EvaluationConfig:
     medium_horizon: int = 4
     long_horizon: int = 12
     max_frequency_relative_error: float = 0.05
+    max_decay_relative_error: float = 0.2
+    max_spectral_abscissa: float = 1.0e-3
 
     def __post_init__(self) -> None:
         if not 1 <= self.short_horizon <= self.medium_horizon <= self.long_horizon:
             raise ValueError("V0.5 evaluation horizons must be positive and ordered")
-        if self.max_frequency_relative_error <= 0:
-            raise ValueError("V0.5 frequency tolerance must be positive")
+        if (
+            self.max_frequency_relative_error <= 0
+            or self.max_decay_relative_error <= 0
+            or self.max_spectral_abscissa < 0
+        ):
+            raise ValueError("V0.5 frequency and decay tolerances must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             name: (
                 float(getattr(self, name))
-                if name == "max_frequency_relative_error"
+                if name
+                in {
+                    "max_frequency_relative_error",
+                    "max_decay_relative_error",
+                    "max_spectral_abscissa",
+                }
                 else int(getattr(self, name))
             )
             for name in self.__dataclass_fields__
@@ -977,6 +1000,12 @@ class V05EvaluationConfig:
             long_horizon=int(data.get("long_horizon", defaults.long_horizon)),
             max_frequency_relative_error=float(
                 data.get("max_frequency_relative_error", defaults.max_frequency_relative_error)
+            ),
+            max_decay_relative_error=float(
+                data.get("max_decay_relative_error", defaults.max_decay_relative_error)
+            ),
+            max_spectral_abscissa=float(
+                data.get("max_spectral_abscissa", defaults.max_spectral_abscissa)
             ),
         )
 

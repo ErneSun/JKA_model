@@ -242,8 +242,24 @@ def _build_final_report(
         and all(item.get("status") == "PASS" for item in state.get("steps", {}).values())
     )
     frequency_pass = bool(full["frequency_gate_pass"])
-    long_baseline_pass = bool(full["long_beats_persistence"])
-    scientific_status = "FAIL" if not (frequency_pass and long_baseline_pass) else "PENDING_REVIEW"
+    decay_pass = bool(full["decay_gate_pass"])
+    stability_pass = bool(full["stability_gate_pass"])
+    baseline_pass = {
+        horizon: bool(full["beats_persistence"][horizon])
+        for horizon in ("short", "medium", "long")
+    }
+    reconstruction_pass = (
+        float(full["reconstruction_rmse"])
+        < float(full["forecast"]["short"]["persistence_rmse"])
+    )
+    all_scientific_gates = (
+        frequency_pass
+        and decay_pass
+        and stability_pass
+        and all(baseline_pass.values())
+        and reconstruction_pass
+    )
+    scientific_status = "PENDING_REVIEW" if all_scientific_gates else "FAIL"
     physics_comparison = {
         horizon: {
             metric: {
@@ -303,10 +319,28 @@ def _build_final_report(
                 "relative_error": full["frequency_relative_error"],
                 "threshold": full["frequency_threshold"],
             },
-            "long_beats_persistence": {
-                "pass": long_baseline_pass,
-                "model_rmse": full["forecast"]["long"]["rmse"],
-                "persistence_rmse": full["forecast"]["long"]["persistence_rmse"],
+            "decay": {
+                "pass": decay_pass,
+                "relative_error": full["decay_relative_error"],
+                "threshold": full["decay_threshold"],
+            },
+            "stability": {
+                "pass": stability_pass,
+                "spectral_abscissa": full["spectral_abscissa"],
+                "threshold": full["spectral_abscissa_threshold"],
+            },
+            "beats_persistence": {
+                horizon: {
+                    "pass": baseline_pass[horizon],
+                    "model_rmse": full["forecast"][horizon]["rmse"],
+                    "persistence_rmse": full["forecast"][horizon]["persistence_rmse"],
+                }
+                for horizon in ("short", "medium", "long")
+            },
+            "reconstruction": {
+                "pass": reconstruction_pass,
+                "rmse": full["reconstruction_rmse"],
+                "threshold": full["forecast"]["short"]["persistence_rmse"],
             },
         },
         "physics_vs_no_physics": physics_comparison,
@@ -331,16 +365,37 @@ def _write_final_markdown(path: Path, report: dict[str, Any]) -> None:
         f"- frequency: **{'PASS' if report['hard_gates']['frequency']['pass'] else 'FAIL'}**; "
         f"relative error {report['hard_gates']['frequency']['relative_error']:.6g}, "
         f"threshold {report['hard_gates']['frequency']['threshold']:.6g}",
-        f"- long rollout vs persistence: "
-        f"**{'PASS' if report['hard_gates']['long_beats_persistence']['pass'] else 'FAIL'}**; "
-        f"{report['hard_gates']['long_beats_persistence']['model_rmse']:.6g} vs "
-        f"{report['hard_gates']['long_beats_persistence']['persistence_rmse']:.6g}",
+        f"- decay: **{'PASS' if report['hard_gates']['decay']['pass'] else 'FAIL'}**; "
+        f"relative error {report['hard_gates']['decay']['relative_error']:.6g}, "
+        f"threshold {report['hard_gates']['decay']['threshold']:.6g}",
+        f"- stability: **{'PASS' if report['hard_gates']['stability']['pass'] else 'FAIL'}**; "
+        f"spectral abscissa {report['hard_gates']['stability']['spectral_abscissa']:.6g}, "
+        f"threshold {report['hard_gates']['stability']['threshold']:.6g}",
+        f"- reconstruction: "
+        f"**{'PASS' if report['hard_gates']['reconstruction']['pass'] else 'FAIL'}**; "
+        f"{report['hard_gates']['reconstruction']['rmse']:.6g} vs "
+        f"threshold {report['hard_gates']['reconstruction']['threshold']:.6g}",
         "",
-        "## Physics vs no-physics",
+        "### Rollout vs persistence",
         "",
-        "| Horizon | Metric | Physics | No physics | Relative change |",
-        "|---|---:|---:|---:|---:|",
+        "| Horizon | Pass | Model RMSE | Persistence RMSE |",
+        "|---|---:|---:|---:|",
     ]
+    for horizon in ("short", "medium", "long"):
+        gate = report["hard_gates"]["beats_persistence"][horizon]
+        lines.append(
+            f"| {horizon} | {'PASS' if gate['pass'] else 'FAIL'} | "
+            f"{gate['model_rmse']:.6g} | {gate['persistence_rmse']:.6g} |"
+        )
+    lines.extend(
+        (
+            "",
+            "## Physics vs no-physics",
+            "",
+            "| Horizon | Metric | Physics | No physics | Relative change |",
+            "|---|---:|---:|---:|---:|",
+        )
+    )
     for horizon in ("short", "medium", "long"):
         for metric in ("rmse", "mass_drift", "operator"):
             values = comparison[horizon][metric]

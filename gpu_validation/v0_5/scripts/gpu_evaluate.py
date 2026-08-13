@@ -27,6 +27,8 @@ def main() -> None:
     args = parser.parse_args()
     checkpoint_name = args.checkpoint.removesuffix(".pt")
     resolved = load_config(args.run_dir / "config/resolved_config.yaml")
+    if resolved.field_loss is None:
+        raise ValueError("V0.5 GPU evaluation requires field_loss configuration")
     result = evaluate_v0_5(
         resolved,
         checkpoint=args.run_dir / "checkpoints" / f"{checkpoint_name}.pt",
@@ -51,15 +53,17 @@ def main() -> None:
     elif checkpoint_name == "best_physics":
         selected = min(
             history,
-            key=lambda row: float(row["val_mass"]) + float(row["val_operator"]),
+            key=lambda row: resolved.field_loss.lambda_mass * float(row["val_mass"])
+            + resolved.field_loss.lambda_operator * float(row["val_operator"]),
         )
-        selection_rule = "minimum validation mass plus operator penalty"
+        selection_rule = "minimum weighted validation physics objective"
     elif checkpoint_name == "best_physics_post_warmup":
         selected = min(
             post_warmup_history,
-            key=lambda row: float(row["val_mass"]) + float(row["val_operator"]),
+            key=lambda row: resolved.field_loss.lambda_mass * float(row["val_mass"])
+            + resolved.field_loss.lambda_operator * float(row["val_operator"]),
         )
-        selection_rule = "minimum validation mass plus operator penalty after physics warmup"
+        selection_rule = "minimum weighted validation physics objective after physics warmup"
     elif checkpoint_name in {"last", "latest"}:
         selected = history[-1]
         selection_rule = "final epoch"
@@ -98,6 +102,16 @@ def main() -> None:
         "frequency_threshold": result["frequency_threshold"],
         "frequency_gate_pass": result["frequency_relative_error"]
         <= result["frequency_threshold"],
+        "decay_threshold": result["decay_threshold"],
+        "decay_gate_pass": result["decay_relative_error"] <= result["decay_threshold"],
+        "spectral_abscissa": result["spectral_abscissa"],
+        "spectral_abscissa_threshold": result["spectral_abscissa_threshold"],
+        "stability_gate_pass": result["spectral_abscissa"]
+        <= result["spectral_abscissa_threshold"],
+        "beats_persistence": {
+            horizon: values["rmse"] < values["persistence_rmse"]
+            for horizon, values in result["rollout"].items()
+        },
         "long_beats_persistence": result["rollout"]["long"]["rmse"]
         < result["rollout"]["long"]["persistence_rmse"],
         "reconstruction_rmse": result["reconstruction_rmse"],
@@ -134,6 +148,11 @@ def main() -> None:
         f"{summary['decay_relative_error']:.6g}\n"
         f"- frequency hard gate: **{'PASS' if summary['frequency_gate_pass'] else 'FAIL'}** "
         f"(threshold {summary['frequency_threshold']:.6g})\n"
+        f"- decay hard gate: **{'PASS' if summary['decay_gate_pass'] else 'FAIL'}** "
+        f"(threshold {summary['decay_threshold']:.6g})\n"
+        f"- stability hard gate: **{'PASS' if summary['stability_gate_pass'] else 'FAIL'}**; "
+        f"spectral abscissa {summary['spectral_abscissa']:.6g}\n"
+        f"- beats persistence by horizon: {summary['beats_persistence']}\n"
         f"- long mass drift / operator: {summary['mass_drift_long']:.6g} / "
         f"{summary['operator_long']:.6g}\n"
         f"- peak VRAM bytes / max samples s^-1: {peak_memory:.0f} / {samples_per_second:.6g}\n"

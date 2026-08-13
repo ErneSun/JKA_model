@@ -33,6 +33,20 @@ when the workflow executed correctly even when `scientific_status=FAIL`; read
 Do not use `--skip-local-gates` unless pytest, ruff, mypy, and diff-check already passed on the
 exact same commit.
 
+## One-command incremental scientific revalidation
+
+After the original CUDA parity, profiler, and exact-resume gates have passed, model/loss changes
+do not require repeating those environment gates. From a clean checkout, run:
+
+```bash
+python gpu_validation/v0_5/scripts/gpu_validate_science.py --validation-id v05-science-final
+```
+
+This runs the affected FP32/AMP model smoke and paired physics/no-physics training for seeds
+47, 53, and 59, evaluates only `best_forecast_post_warmup`, and exports mean/median/std plus
+per-seed hard gates. A failed/interrupted session prints the same command for resumable
+continuation and skips steps that already passed.
+
 ## 1. Update and verify revision
 
 ```bash

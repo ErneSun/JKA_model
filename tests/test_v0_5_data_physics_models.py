@@ -134,6 +134,23 @@ def test_v0_5_model_shapes_circular_padding_and_physics_gradients() -> None:
         physics_scale=1.0,
     )
     assert torch.isfinite(losses.total)
+    expected_without_forecast = (
+        config.field_loss.lambda_k * losses.koopman_one_step
+        + config.field_loss.lambda_generator * losses.generator_consistency
+        + config.field_loss.lambda_multi * losses.koopman_multi_step
+        + config.field_loss.lambda_rec * losses.reconstruction
+        + config.field_loss.lambda_var * losses.variance
+        + config.field_loss.lambda_stability * losses.stability
+        + config.field_loss.lambda_physics
+        * (
+            config.field_loss.lambda_mass * losses.mass
+            + config.field_loss.lambda_operator * losses.operator
+        )
+    )
+    assert torch.allclose(
+        losses.total - expected_without_forecast,
+        config.field_loss.lambda_forecast * losses.forecast_model,
+    )
     physics_only = (
         config.field_loss.lambda_mass * losses.mass
         + config.field_loss.lambda_operator * losses.operator
@@ -163,6 +180,20 @@ def test_v0_5_model_shapes_circular_padding_and_physics_gradients() -> None:
     assert amp_losses.operator.dtype == torch.float32
     amp_losses.total.backward()
     assert model.core.A.grad is not None and torch.isfinite(model.core.A.grad).all()
+
+
+def test_v0_5_encoder_preserves_periodic_phase_and_generator_starts_stable() -> None:
+    config = load_config(CONFIG)
+    assert config.advection_diffusion_2d is not None
+    dataset = generate_advection_diffusion_2d_trajectories(
+        config.advection_diffusion_2d, seed=config.training.seed
+    )
+    model = initialize_v0_5_model(config, device="cpu")
+    field = dataset.records[0].states_raw[0:1].to(torch.float32)
+    shifted = torch.roll(field, shifts=1, dims=-1)
+    assert not torch.allclose(model.encode(field), model.encode(shifted))
+    eigenvalues = torch.linalg.eigvals(model.core.A.detach())
+    assert float(eigenvalues.real.max()) < 0
 
 
 def test_v0_5_true_transition_operator_residual_is_finite_and_small() -> None:
