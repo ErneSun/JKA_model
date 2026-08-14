@@ -1,0 +1,272 @@
+{
+  "all_seed_gates_pass": true,
+  "gates_by_seed": {
+    "47": {
+      "decay": true,
+      "frequency": true,
+      "long_beats_persistence": true,
+      "medium_beats_persistence": true,
+      "reconstruction": true,
+      "short_beats_persistence": true,
+      "stability": true
+    },
+    "53": {
+      "decay": true,
+      "frequency": true,
+      "long_beats_persistence": true,
+      "medium_beats_persistence": true,
+      "reconstruction": true,
+      "short_beats_persistence": true,
+      "stability": true
+    },
+    "59": {
+      "decay": true,
+      "frequency": true,
+      "long_beats_persistence": true,
+      "medium_beats_persistence": true,
+      "reconstruction": true,
+      "short_beats_persistence": true,
+      "stability": true
+    }
+  },
+  "generated_at": "2026-08-13T08:44:49.584544+00:00",
+  "overall_acceptance": "NOT_ACCEPTED",
+  "physics_ablation_consistent": false,
+  "physics_aggregate": {
+    "decay_relative_error": {
+      "max": 0.15791678428649897,
+      "mean": 0.15645055969556168,
+      "median": 0.15593194961547846,
+      "min": 0.15550294518470759,
+      "std": 0.001051466313838978
+    },
+    "forecast": {
+      "long": {
+        "mass_drift": {
+          "max": 0.0020091342998461593,
+          "mean": 0.0010511875109471107,
+          "median": 0.000612038598370014,
+          "min": 0.0005323896346251584,
+          "std": 0.0006781506848913478
+        },
+        "operator": {
+          "max": 0.00017395503770482415,
+          "mean": 0.00017146276567709046,
+          "median": 0.00017023664178042155,
+          "min": 0.00017019661754602566,
+          "std": 1.7623782000472392e-06
+        },
+        "persistence_rmse": {
+          "max": 1.0331104066636827,
+          "mean": 0.9582742982440525,
+          "median": 0.925665921635098,
+          "min": 0.9160465664333768,
+          "std": 0.05306263808726567
+        },
+        "relative_l2": {
+          "max": 0.02265330797268285,
+          "mean": 0.022327047324290982,
+          "median": 0.022288205102086067,
+          "min": 0.02203962889810403,
+          "std": 0.00025203444250517366
+        },
+        "rmse": {
+          "max": 0.014845875919693045,
+          "mean": 0.01358006511711412,
+          "median": 0.01298365948928727,
+          "min": 0.012910659942362044,
+          "std": 0.0008955594059606728
+        }
+      },
+      "medium": {
+        "mass_drift": {
+          "max": 0.001618069305550307,
+          "mean": 0.0008483743154943955,
+          "median": 0.0004785154435214483,
+          "min": 0.00044853819741143123,
+          "std": 0.0005443941232287275
+        },
+        "operator": {
+          "max": 0.0005572665637979904,
+          "mean": 0.0005175618716748431,
+          "median": 0.000529413921564507,
+          "min": 0.00046600512966203195,
+          "std": 3.818826743978036e-05
+        },
+        "persistence_rmse": {
+          "max": 0.332117670112186,
+          "mean": 0.3061010605759091,
+          "median": 0.2938987331257926,
+          "min": 0.29228677848974866,
+          "std": 0.018408287594803365
+        },
+        "relative_l2": {
+          "max": 0.0033561242485625874,
+          "mean": 0.0032066782350065534,
+          "median": 0.003160550336663922,
+          "min": 0.00310336011979315,
+          "std": 0.00010822280552106156
+        },
+        "rmse": {
+          "max": 0.0023245281513987314,
+          "mean": 0.002184350078028661,
+          "median": 0.0021873056992060607,
+          "min": 0.0020412163834811915,
+          "std": 0.00011568042540421067
+        }
+      },
+      "short": {
+        "mass_drift": {
+          "max": 0.0014250694463650386,
+          "mean": 0.0007215237491672504,
+          "median": 0.000438620500467045,
+          "min": 0.00030088130066966795,
+          "std": 0.0005006498662234561
+        },
+        "operator": {
+          "max": 0.007206548057082627,
+          "mean": 0.006476302001694287,
+          "median": 0.006803829067697127,
+          "min": 0.005418528880303104,
+          "std": 0.0007658148724751313
+        },
+        "persistence_rmse": {
+          "max": 0.03339302560521497,
+          "mean": 0.03190934954694024,
+          "median": 0.031891308517919645,
+          "min": 0.030443714517686103,
+          "std": 0.0012041187875513684
+        },
+        "relative_l2": {
+          "max": 0.004797549142191808,
+          "mean": 0.0043252774910932336,
+          "median": 0.004630406930421789,
+          "min": 0.0035478764006661046,
+          "std": 0.000553924466142458
+        },
+        "rmse": {
+          "max": 0.003174030739400122,
+          "mean": 0.002994343345225961,
+          "median": 0.003130336059257388,
+          "min": 0.0026786632370203733,
+          "std": 0.0002239311714280568
+        }
+      }
+    },
+    "frequency_relative_error": {
+      "max": 0.002428154150644901,
+      "mean": 0.0023921264542473317,
+      "median": 0.0023956696192423133,
+      "min": 0.002352555592854781,
+      "std": 3.0964506547796307e-05
+    },
+    "reconstruction_rmse": {
+      "max": 0.003580725234415796,
+      "mean": 0.003414640655844576,
+      "median": 0.0035461809020489454,
+      "min": 0.003117015831068986,
+      "std": 0.00021092452041222907
+    },
+    "spectral_abscissa": {
+      "max": -7.58274836698547e-05,
+      "mean": -7.956008145508046e-05,
+      "median": -8.041421824600548e-05,
+      "min": -8.24385424493812e-05,
+      "std": 2.765705068609374e-06
+    }
+  },
+  "physics_vs_no_physics_paired_relative_change": {
+    "long": {
+      "mass_drift": {
+        "max": 9.287208557789109,
+        "mean": 3.0271262985939256,
+        "median": 0.5429823665007136,
+        "min": -0.7488120285080456,
+        "std": 4.457851172082929
+      },
+      "operator": {
+        "max": 0.2511606341977328,
+        "mean": 0.2140277563547416,
+        "median": 0.2482742116369261,
+        "min": 0.14264842322956595,
+        "std": 0.05048656426447195
+      },
+      "rmse": {
+        "max": 0.3290938024657104,
+        "mean": 0.06775439714702962,
+        "median": -0.03131842231943249,
+        "min": -0.09451218870518907,
+        "std": 0.18658702456985174
+      }
+    },
+    "medium": {
+      "mass_drift": {
+        "max": 10.303861972324103,
+        "mean": 3.357864689658277,
+        "median": 0.3889164206287745,
+        "min": -0.6191843239780462,
+        "std": 4.928774388961214
+      },
+      "operator": {
+        "max": 0.43930652218972854,
+        "mean": 0.3310988686482293,
+        "median": 0.38520841055948196,
+        "min": 0.16878167319547743,
+        "std": 0.11688115153215764
+      },
+      "rmse": {
+        "max": 0.21929138511767432,
+        "mean": 0.052728386002359885,
+        "median": -0.005164365043440533,
+        "min": -0.055941862067154124,
+        "std": 0.119588218641343
+      }
+    },
+    "short": {
+      "mass_drift": {
+        "max": 11.108262552166275,
+        "mean": 3.5977869410128185,
+        "median": 0.3776494159269197,
+        "min": -0.6925511450547407,
+        "std": 5.32864993780348
+      },
+      "operator": {
+        "max": 0.6407248427622636,
+        "mean": 0.4324895721128968,
+        "median": 0.6095357770117664,
+        "min": 0.04720809656466041,
+        "std": 0.2727325319870085
+      },
+      "rmse": {
+        "max": 0.29361107523306806,
+        "mean": 0.2066149657452426,
+        "median": 0.2672992615646166,
+        "min": 0.058934560438043126,
+        "std": 0.10497683702736478
+      }
+    }
+  },
+  "runs": {
+    "47": {
+      "no_physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260813-no_physics-seed47",
+      "physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260813-physics-seed47"
+    },
+    "53": {
+      "no_physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260813-no_physics-seed53",
+      "physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260813-physics-seed53"
+    },
+    "59": {
+      "no_physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260813-no_physics-seed59",
+      "physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260813-physics-seed59"
+    }
+  },
+  "scientific_checkpoint": "best_forecast_post_warmup",
+  "scientific_status": "FAIL",
+  "seeds": [
+    47,
+    53,
+    59
+  ],
+  "validation_id": "v05-final-20260813",
+  "workflow_status": "PASS"
+}

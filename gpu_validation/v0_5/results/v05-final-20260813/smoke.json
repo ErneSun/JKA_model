@@ -1,0 +1,28 @@
+{
+  "amp_precision": "amp_bf16",
+  "amp_run": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/20260813T015119Z-5a9608a8",
+  "amp_training_gradient_norms": {
+    "decoder": 0.3170907497406006,
+    "encoder": 0.0006798153626732528,
+    "generator": 3.183978333254345e-05
+  },
+  "fp32_run": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/20260813T015116Z-7dd02305",
+  "fp32_training_gradient_norms": {
+    "decoder": 0.3170258700847626,
+    "encoder": 0.0006900927401147783,
+    "generator": 3.253317845519632e-05
+  },
+  "isolated_physics_gradient_norms": {
+    "amp": {
+      "decoder": 31.178997039794922,
+      "encoder": 0.000778517103753984,
+      "generator": 7.748615615810195e-08
+    },
+    "fp32": {
+      "decoder": 31.149864196777344,
+      "encoder": 0.0007769782096147537,
+      "generator": 7.746857733081924e-08
+    }
+  },
+  "status": "PASS"
+}
