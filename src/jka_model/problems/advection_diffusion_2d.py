@@ -14,7 +14,7 @@ from jka_model.data.advection_diffusion_2d import (
 )
 from jka_model.data.datasets import TrajectoryDataset
 from jka_model.physics.constraints import (
-    AdvectionDiffusionOperatorConstraint2D,
+    AdvectionDiffusionSpectralStepConstraint2D,
     MassConservation2DConstraint,
     PhysicsConstraint,
 )
@@ -33,7 +33,7 @@ class AdvectionDiffusion2DProblemAdapter:
     def build_physics_constraints(self) -> Mapping[str, PhysicsConstraint]:
         return {
             "mass": MassConservation2DConstraint(),
-            "operator": AdvectionDiffusionOperatorConstraint2D(),
+            "operator": AdvectionDiffusionSpectralStepConstraint2D(),
         }
 
     def compute_reference_metrics(self) -> Mapping[str, float]:

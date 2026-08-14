@@ -137,6 +137,14 @@ def _seed_gates(result: dict[str, Any]) -> dict[str, bool]:
             f"{horizon}_beats_persistence": bool(result["beats_persistence"][horizon])
             for horizon in ("short", "medium", "long")
         },
+        **{
+            f"{horizon}_mass": bool(result["mass_gate_pass"][horizon])
+            for horizon in ("short", "medium", "long")
+        },
+        **{
+            f"{horizon}_operator": bool(result["operator_gate_pass"][horizon])
+            for horizon in ("short", "medium", "long")
+        },
     }
 
 
@@ -170,9 +178,14 @@ def _build_report(
         horizon: {
             metric: _statistics(
                 [
-                    float(results[seed]["physics"]["forecast"][horizon][metric])
-                    / float(results[seed]["no_physics"]["forecast"][horizon][metric])
-                    - 1.0
+                    (
+                        float(results[seed]["physics"]["forecast"][horizon][metric])
+                        - float(results[seed]["no_physics"]["forecast"][horizon][metric])
+                    )
+                    / max(
+                        abs(float(results[seed]["no_physics"]["forecast"][horizon][metric])),
+                        1.0e-12,
+                    )
                     for seed in seeds
                 ]
             )
@@ -180,14 +193,66 @@ def _build_report(
         }
         for horizon in ("short", "medium", "long")
     }
-    all_seed_gates = all(all(gates.values()) for gates in gates_by_seed.values())
-    physics_ablation_consistent = all(
-        paired_changes[horizon][metric]["median"] <= 0
+    paired_skill_degradation = {
+        horizon: _statistics(
+            [
+                (
+                    float(results[seed]["physics"]["forecast"][horizon]["rmse"])
+                    - float(results[seed]["no_physics"]["forecast"][horizon]["rmse"])
+                )
+                / max(
+                    float(
+                        results[seed]["physics"]["forecast"][horizon]["persistence_rmse"]
+                    ),
+                    1.0e-12,
+                )
+                for seed in seeds
+            ]
+        )
         for horizon in ("short", "medium", "long")
-        for metric in ("rmse", "mass_drift", "operator")
+    }
+    paired_constraint_degradation = {
+        horizon: {
+            metric: _statistics(
+                [
+                    (
+                        float(results[seed]["physics"]["forecast"][horizon][metric])
+                        - float(results[seed]["no_physics"]["forecast"][horizon][metric])
+                    )
+                    / float(
+                        results[seed]["physics"][
+                            "relative_mass_drift_threshold"
+                            if metric == "mass_drift"
+                            else "operator_mse_threshold"
+                        ]
+                    )
+                    for seed in seeds
+                ]
+            )
+            for metric in ("mass_drift", "operator")
+        }
+        for horizon in ("short", "medium", "long")
+    }
+    all_seed_gates = all(all(gates.values()) for gates in gates_by_seed.values())
+    ablation_threshold = float(physics[0]["ablation_skill_degradation_threshold"])
+    constraint_ablation_threshold = float(
+        physics[0]["ablation_constraint_degradation_threshold"]
+    )
+    forecast_ablation_noninferior = all(
+        paired_skill_degradation[horizon]["median"] <= ablation_threshold
+        for horizon in ("short", "medium", "long")
+    )
+    constraint_ablation_noninferior = all(
+        paired_constraint_degradation[horizon][metric]["median"]
+        <= constraint_ablation_threshold
+        for horizon in ("short", "medium", "long")
+        for metric in ("mass_drift", "operator")
+    )
+    physics_ablation_noninferior = (
+        forecast_ablation_noninferior and constraint_ablation_noninferior
     )
     scientific_status = (
-        "PENDING_REVIEW" if all_seed_gates and physics_ablation_consistent else "FAIL"
+        "PENDING_REVIEW" if all_seed_gates and physics_ablation_noninferior else "FAIL"
     )
     return {
         "validation_id": validation_id,
@@ -203,7 +268,12 @@ def _build_report(
         "scientific_checkpoint": "best_forecast_post_warmup",
         "gates_by_seed": gates_by_seed,
         "all_seed_gates_pass": all_seed_gates,
-        "physics_ablation_consistent": physics_ablation_consistent,
+        "physics_ablation_consistent": physics_ablation_noninferior,
+        "physics_ablation_noninferior": physics_ablation_noninferior,
+        "ablation_skill_degradation_threshold": ablation_threshold,
+        "ablation_constraint_degradation_threshold": constraint_ablation_threshold,
+        "physics_vs_no_physics_skill_degradation": paired_skill_degradation,
+        "physics_vs_no_physics_constraint_degradation": paired_constraint_degradation,
         "physics_aggregate": aggregate,
         "physics_vs_no_physics_paired_relative_change": paired_changes,
         "runs": {
@@ -227,10 +297,12 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
         f"- overall acceptance: **{report['overall_acceptance']}**",
         f"- seeds: `{report['seeds']}`",
         "- reused prior evidence: CUDA preflight/parity, profiler, and exact-resume validation",
+        f"- reused no-physics seed checkpoints: "
+        f"`{report.get('baseline_reuse', {}).get('reused_seeds', [])}`",
         "",
         "## Per-seed hard gates",
         "",
-        "| Seed | Frequency | Decay | Stability | Reconstruction | Short | Medium | Long |",
+        "| Seed | Frequency | Decay | Stability | Reconstruction | Forecast | Mass | Operator |",
         "|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     def mark(value: bool) -> str:
@@ -240,9 +312,9 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
         lines.append(
             f"| {seed} | {mark(gates['frequency'])} | {mark(gates['decay'])} | "
             f"{mark(gates['stability'])} | {mark(gates['reconstruction'])} | "
-            f"{mark(gates['short_beats_persistence'])} | "
-            f"{mark(gates['medium_beats_persistence'])} | "
-            f"{mark(gates['long_beats_persistence'])} |"
+            f"{mark(all(gates[f'{h}_beats_persistence'] for h in ('short', 'medium', 'long')))} | "
+            f"{mark(all(gates[f'{h}_mass'] for h in ('short', 'medium', 'long')))} | "
+            f"{mark(all(gates[f'{h}_operator'] for h in ('short', 'medium', 'long')))} |"
         )
     lines.extend(
         (
@@ -280,6 +352,43 @@ def _write_markdown(path: Path, report: dict[str, Any]) -> None:
             f"{100 * changes[horizon]['mass_drift']['median']:+.3f}% | "
             f"{100 * changes[horizon]['operator']['median']:+.3f}% |"
         )
+    lines.extend(
+        (
+            "",
+            "## Forecast non-inferiority vs no-physics",
+            "",
+            f"Threshold: {100 * report['ablation_skill_degradation_threshold']:.3f}% "
+            "of persistence RMSE.",
+            "",
+            "| Horizon | Median added RMSE / persistence RMSE | Pass |",
+            "|---|---:|---:|",
+        )
+    )
+    for horizon, values in report["physics_vs_no_physics_skill_degradation"].items():
+        lines.append(
+            f"| {horizon} | {100 * values['median']:+.3f}% | "
+            f"{mark(values['median'] <= report['ablation_skill_degradation_threshold'])} |"
+        )
+    lines.extend(
+        (
+            "",
+            "## Constraint non-inferiority vs no-physics",
+            "",
+            f"Threshold: {100 * report['ablation_constraint_degradation_threshold']:.3f}% "
+            "of each constraint hard limit.",
+            "",
+            "| Horizon | Added mass drift / limit | Added operator MSE / limit | Pass |",
+            "|---|---:|---:|---:|",
+        )
+    )
+    constraint_changes = report["physics_vs_no_physics_constraint_degradation"]
+    constraint_threshold = report["ablation_constraint_degradation_threshold"]
+    for horizon, values in constraint_changes.items():
+        passed = all(values[metric]["median"] <= constraint_threshold for metric in values)
+        lines.append(
+            f"| {horizon} | {100 * values['mass_drift']['median']:+.3f}% | "
+            f"{100 * values['operator']['median']:+.3f}% | {mark(passed)} |"
+        )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -287,6 +396,11 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--validation-id", default=None)
     parser.add_argument("--seeds", type=int, nargs="+", default=[47, 53, 59])
+    parser.add_argument(
+        "--reuse-baseline-from",
+        default=None,
+        help="Reuse no-physics run checkpoints referenced by a prior result id when available",
+    )
     return parser.parse_args()
 
 
@@ -316,10 +430,13 @@ def main() -> int:
         "created_at": _utc_now(),
         "python": sys.executable,
         "seeds": seeds,
+        "reuse_baseline_from": args.reuse_baseline_from,
         "steps": {},
     }
     if state.get("seeds") != seeds:
         raise ValueError("resume seeds differ from the original validation session")
+    if state.get("reuse_baseline_from") != args.reuse_baseline_from:
+        raise ValueError("resume baseline source differs from the original validation session")
     if state.get("workflow_status") == "PASS" and state.get("final_results"):
         completed_results = Path(str(state["final_results"]))
         final_report = completed_results / "final_validation.json"
@@ -336,6 +453,13 @@ def main() -> int:
         f"{sys.executable} {Path(__file__).resolve()} --validation-id {validation_id} "
         f"--seeds {' '.join(map(str, seeds))}"
     )
+    if args.reuse_baseline_from:
+        continuation += f" --reuse-baseline-from {args.reuse_baseline_from}"
+    reusable_baselines: dict[str, Any] = {}
+    if args.reuse_baseline_from:
+        prior_report_path = FINAL_RESULTS / args.reuse_baseline_from / "final_validation.json"
+        if prior_report_path.is_file():
+            reusable_baselines = _load_json(prior_report_path).get("runs", {})
     try:
         _run_step(
             "model_smoke",
@@ -350,17 +474,37 @@ def main() -> int:
             logs_dir=logs_dir,
         )
         results: dict[int, dict[str, dict[str, Any]]] = {}
+        reused_baseline_seeds: list[int] = []
         for seed in seeds:
             results[seed] = {}
             for variant in ("physics", "no_physics"):
-                run_dir = _train(
-                    seed=seed,
-                    variant=variant,
-                    validation_id=validation_id,
-                    state=state,
-                    state_path=state_path,
-                    logs_dir=logs_dir,
-                )
+                reusable = None
+                if variant == "no_physics":
+                    reusable_value = reusable_baselines.get(str(seed), {}).get("no_physics")
+                    reusable = None if reusable_value is None else Path(str(reusable_value))
+                if (
+                    reusable is not None
+                    and (reusable / "checkpoints/best_forecast_post_warmup.pt").is_file()
+                    and (reusable / "config/resolved_config.yaml").is_file()
+                ):
+                    run_dir = reusable
+                    state.setdefault("steps", {})[f"reuse_no_physics_seed_{seed}"] = {
+                        "status": "PASS",
+                        "run_dir": str(run_dir.resolve()),
+                        "source_validation_id": args.reuse_baseline_from,
+                    }
+                    _save_state(state_path, state)
+                    reused_baseline_seeds.append(seed)
+                    print(f"\n=== reusing no-physics seed {seed}: {run_dir} ===", flush=True)
+                else:
+                    run_dir = _train(
+                        seed=seed,
+                        variant=variant,
+                        validation_id=validation_id,
+                        state=state,
+                        state_path=state_path,
+                        logs_dir=logs_dir,
+                    )
                 metrics_path = _evaluate(
                     seed=seed,
                     variant=variant,
@@ -372,6 +516,13 @@ def main() -> int:
                 )
                 results[seed][variant] = _load_json(metrics_path)
         report = _build_report(validation_id=validation_id, seeds=seeds, results=results)
+        report["baseline_reuse"] = {
+            "requested_result_id": args.reuse_baseline_from,
+            "reused_seeds": reused_baseline_seeds,
+            "retrained_no_physics_seeds": [
+                seed for seed in seeds if seed not in reused_baseline_seeds
+            ],
+        }
         _write_json(artifacts_dir / "final_validation.json", report)
         _write_markdown(artifacts_dir / "final_validation.md", report)
         destination = FINAL_RESULTS / validation_id

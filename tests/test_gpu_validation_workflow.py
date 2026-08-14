@@ -31,6 +31,12 @@ def _evaluation(*, frequency_pass: bool, rmse_scale: float) -> dict[str, object]
         "spectral_abscissa": -0.01,
         "spectral_abscissa_threshold": 0.001,
         "beats_persistence": {name: True for name in ("short", "medium", "long")},
+        "mass_gate_pass": {name: True for name in ("short", "medium", "long")},
+        "operator_gate_pass": {name: True for name in ("short", "medium", "long")},
+        "relative_mass_drift_threshold": 0.01,
+        "operator_mse_threshold": 0.0001,
+        "ablation_skill_degradation_threshold": 0.05,
+        "ablation_constraint_degradation_threshold": 0.10,
         "long_beats_persistence": True,
         "reconstruction_rmse": 0.5,
         "max_samples_per_second": 100.0,
@@ -108,6 +114,10 @@ def test_three_seed_science_report_requires_every_seed_and_consistent_ablation()
     for seed in seeds:
         physics = _evaluation(frequency_pass=True, rmse_scale=0.5)
         no_physics = _evaluation(frequency_pass=True, rmse_scale=1.0)
+        # A tiny raw RMSE regression is acceptable when it is negligible relative to
+        # the persistence baseline; this avoids unstable ratios near the error floor.
+        physics["forecast"]["short"]["rmse"] = 1.02
+        no_physics["forecast"]["short"]["rmse"] = 1.0
         physics["run_dir"] = f"physics-{seed}"
         no_physics["run_dir"] = f"no-physics-{seed}"
         results[seed] = {"physics": physics, "no_physics": no_physics}
@@ -118,3 +128,8 @@ def test_three_seed_science_report_requires_every_seed_and_consistent_ablation()
     results[53]["physics"]["frequency_gate_pass"] = False
     failed = build_science_report(validation_id="test", seeds=seeds, results=results)
     assert failed["scientific_status"] == "FAIL"
+    results[53]["physics"]["frequency_gate_pass"] = True
+    for seed in seeds:
+        results[seed]["physics"]["forecast"]["short"]["operator"] = 4.0
+    constraint_failed = build_science_report(validation_id="test", seeds=seeds, results=results)
+    assert constraint_failed["scientific_status"] == "FAIL"

@@ -39,13 +39,16 @@ After the original CUDA parity, profiler, and exact-resume gates have passed, mo
 do not require repeating those environment gates. From a clean checkout, run:
 
 ```bash
-python gpu_validation/v0_5/scripts/gpu_validate_science.py --validation-id v05-science-final
+python gpu_validation/v0_5/scripts/gpu_validate_science.py --validation-id v05-spectral-final-20260814 --reuse-baseline-from v05-final-20260813
 ```
 
 This runs the affected FP32/AMP model smoke and paired physics/no-physics training for seeds
 47, 53, and 59, evaluates only `best_forecast_post_warmup`, and exports mean/median/std plus
 per-seed hard gates. A failed/interrupted session prints the same command for resumable
-continuation and skips steps that already passed.
+continuation and skips steps that already passed. `--reuse-baseline-from` re-evaluates compatible
+no-physics checkpoints from the earlier result because their zero physics weights make them
+unaffected by the constraint change; if any referenced checkpoint is unavailable, that seed is
+trained again automatically. Omit this option when an entirely fresh paired experiment is wanted.
 
 ## 1. Update and verify revision
 

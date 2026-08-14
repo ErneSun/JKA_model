@@ -182,6 +182,14 @@ def evaluate_v0_5(
         "frequency_threshold": resolved.v0_5_evaluation.max_frequency_relative_error,
         "decay_threshold": resolved.v0_5_evaluation.max_decay_relative_error,
         "spectral_abscissa_threshold": resolved.v0_5_evaluation.max_spectral_abscissa,
+        "relative_mass_drift_threshold": resolved.v0_5_evaluation.max_relative_mass_drift,
+        "operator_mse_threshold": resolved.v0_5_evaluation.max_operator_mse,
+        "ablation_skill_degradation_threshold": (
+            resolved.v0_5_evaluation.max_ablation_skill_degradation
+        ),
+        "ablation_constraint_degradation_threshold": (
+            resolved.v0_5_evaluation.max_ablation_constraint_degradation
+        ),
         "scientific_acceptance": "PENDING_GPU"
         if selected.type != "cuda"
         else "MEASURED_NOT_AUTOMATICALLY_ACCEPTED",

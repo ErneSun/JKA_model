@@ -55,7 +55,7 @@ GPU 与 Scientific 状态必须独立报告；本地未执行 GPU full training 
 
 - [x] differentiable inverse normalization 后在 raw units 计算 physics。
 - [x] mass loss 使用 cell_weights。
-- [x] operator consistency 使用 periodic finite differences 与 trapezoidal residual。
+- [x] periodic linear reference 的 operator consistency 使用可微 exact Fourier step；保留 finite-difference 回归测试。
 - [x] physics gradient 到 encoder、decoder、A，且 finite/nonzero。
 - [x] 支持 physics_warmup_epochs 与 lambda_physics=0 ablation。
 

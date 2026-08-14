@@ -963,6 +963,10 @@ class V05EvaluationConfig:
     max_frequency_relative_error: float = 0.05
     max_decay_relative_error: float = 0.2
     max_spectral_abscissa: float = 1.0e-3
+    max_relative_mass_drift: float = 0.01
+    max_operator_mse: float = 1.0e-4
+    max_ablation_skill_degradation: float = 0.05
+    max_ablation_constraint_degradation: float = 0.10
 
     def __post_init__(self) -> None:
         if not 1 <= self.short_horizon <= self.medium_horizon <= self.long_horizon:
@@ -971,8 +975,15 @@ class V05EvaluationConfig:
             self.max_frequency_relative_error <= 0
             or self.max_decay_relative_error <= 0
             or self.max_spectral_abscissa < 0
+            or self.max_relative_mass_drift <= 0
+            or self.max_operator_mse <= 0
+            or self.max_ablation_skill_degradation < 0
+            or self.max_ablation_constraint_degradation < 0
         ):
-            raise ValueError("V0.5 frequency and decay tolerances must be positive")
+            raise ValueError(
+                "V0.5 error tolerances must be positive; stability and ablation margins "
+                "must be non-negative"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -983,6 +994,10 @@ class V05EvaluationConfig:
                     "max_frequency_relative_error",
                     "max_decay_relative_error",
                     "max_spectral_abscissa",
+                    "max_relative_mass_drift",
+                    "max_operator_mse",
+                    "max_ablation_skill_degradation",
+                    "max_ablation_constraint_degradation",
                 }
                 else int(getattr(self, name))
             )
@@ -1006,6 +1021,22 @@ class V05EvaluationConfig:
             ),
             max_spectral_abscissa=float(
                 data.get("max_spectral_abscissa", defaults.max_spectral_abscissa)
+            ),
+            max_relative_mass_drift=float(
+                data.get("max_relative_mass_drift", defaults.max_relative_mass_drift)
+            ),
+            max_operator_mse=float(data.get("max_operator_mse", defaults.max_operator_mse)),
+            max_ablation_skill_degradation=float(
+                data.get(
+                    "max_ablation_skill_degradation",
+                    defaults.max_ablation_skill_degradation,
+                )
+            ),
+            max_ablation_constraint_degradation=float(
+                data.get(
+                    "max_ablation_constraint_degradation",
+                    defaults.max_ablation_constraint_degradation,
+                )
             ),
         )
 

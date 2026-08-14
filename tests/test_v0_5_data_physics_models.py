@@ -21,6 +21,7 @@ from jka_model.data import (
 from jka_model.losses import compute_field_koopman_loss
 from jka_model.physics import (
     AdvectionDiffusionOperatorConstraint2D,
+    AdvectionDiffusionSpectralStepConstraint2D,
     periodic_first_derivative_2d,
     periodic_second_derivative_2d,
     weighted_integral_2d,
@@ -214,3 +215,23 @@ def test_v0_5_true_transition_operator_residual_is_finite_and_small() -> None:
     )[constraint.name]
     assert torch.isfinite(value)
     assert float(value) < 0.05
+
+
+def test_v0_5_spectral_step_is_exact_for_reference_and_differentiable() -> None:
+    config = load_config(CONFIG)
+    assert config.advection_diffusion_2d
+    dataset = generate_advection_diffusion_2d_trajectories(config.advection_diffusion_2d, seed=2)
+    record = dataset.records[0]
+    prediction = record.states_raw[1:2].clone().requires_grad_(True)
+    constraint = AdvectionDiffusionSpectralStepConstraint2D()
+    value = constraint.loss(
+        prediction,
+        prev_state_raw=record.states_raw[0:1],
+        dt=record.dts[0:1],
+        spec=dataset.problem_spec,
+        metadata={"mu_static": record.mu_static.unsqueeze(0)},
+    )[constraint.name]
+    assert torch.isfinite(value)
+    assert float(value.detach()) < 1e-24
+    value.backward()
+    assert prediction.grad is not None and torch.isfinite(prediction.grad).all()

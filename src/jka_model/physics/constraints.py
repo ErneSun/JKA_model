@@ -219,7 +219,7 @@ class DiscretePDEResidualConstraint:
 
 @dataclass(frozen=True, slots=True)
 class MassConservation2DConstraint:
-    """Penalize deviation of the cell-weighted two-dimensional integral."""
+    """Penalize relative deviation of the cell-weighted two-dimensional integral."""
 
     name: str = "mass_conservation_2d"
 
@@ -234,10 +234,10 @@ class MassConservation2DConstraint:
         if prev_state_raw is None:
             raise ValueError("2-D mass conservation requires prev_state_raw")
         weights = _metadata_tensor(metadata, "cell_weights")
-        delta = weighted_integral_2d(pred_state_raw, weights) - weighted_integral_2d(
-            prev_state_raw, weights
-        )
-        return {self.name: delta.square().mean()}
+        mass_pred = weighted_integral_2d(pred_state_raw, weights)
+        mass_prev = weighted_integral_2d(prev_state_raw, weights)
+        scale = weighted_integral_2d(prev_state_raw.abs(), weights).clamp_min(1.0e-12)
+        return {self.name: ((mass_pred - mass_prev) / scale).square().mean()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +288,62 @@ class AdvectionDiffusionOperatorConstraint2D:
             + self._rhs(pred_state_raw, mu_static, dx, dy)
         )
         return {self.name: residual.square().mean()}
+
+
+@dataclass(frozen=True, slots=True)
+class AdvectionDiffusionSpectralStepConstraint2D:
+    """Exact Fourier-step consistency for constant-coefficient periodic advection-diffusion."""
+
+    name: str = "spectral_step_consistency_2d"
+
+    def loss(
+        self,
+        pred_state_raw: Tensor,
+        *,
+        prev_state_raw: Tensor | None = None,
+        dt: Tensor | None = None,
+        spec: ProblemSpec | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        **_: Any,
+    ) -> Mapping[str, Tensor]:
+        if prev_state_raw is None or dt is None or spec is None:
+            raise ValueError("2-D spectral step requires prev state, dt, and spec")
+        if spec.grid.spacing is None or len(spec.grid.spacing) != 2:
+            raise ValueError("2-D spectral step requires two grid spacings")
+        if pred_state_raw.shape != prev_state_raw.shape or pred_state_raw.ndim != 4:
+            raise ValueError("2-D spectral step states must share shape [B,C,Nx,Ny]")
+        if dt.shape != (pred_state_raw.shape[0],) or torch.any(dt <= 0):
+            raise ValueError("2-D spectral step requires positive dt[B]")
+        mu_static = _metadata_tensor(metadata, "mu_static")
+        if mu_static.shape != (pred_state_raw.shape[0], 3):
+            raise ValueError("2-D spectral step requires mu_static=[cx,cy,nu] per batch")
+
+        nx, ny = pred_state_raw.shape[-2:]
+        dx, dy = spec.grid.spacing
+        real_dtype = prev_state_raw.dtype
+        device = prev_state_raw.device
+        angular_x = 2.0 * torch.pi * torch.fft.fftfreq(
+            nx, d=dx, device=device, dtype=real_dtype
+        )
+        angular_y = 2.0 * torch.pi * torch.fft.fftfreq(
+            ny, d=dy, device=device, dtype=real_dtype
+        )
+        wave_x = angular_x.view(1, 1, nx, 1)
+        wave_y = angular_y.view(1, 1, 1, ny)
+        cx = mu_static[:, 0].to(device=device, dtype=real_dtype).view(-1, 1, 1, 1)
+        cy = mu_static[:, 1].to(device=device, dtype=real_dtype).view(-1, 1, 1, 1)
+        nu = mu_static[:, 2].to(device=device, dtype=real_dtype).view(-1, 1, 1, 1)
+        generator = (
+            -nu * (wave_x.square() + wave_y.square())
+        ).to(torch.complex128 if real_dtype == torch.float64 else torch.complex64) - 1j * (
+            cx * wave_x + cy * wave_y
+        )
+        dt_view = dt.to(device=device, dtype=real_dtype).view(-1, 1, 1, 1)
+        previous_spectrum = torch.fft.fftn(prev_state_raw, dim=(-2, -1))
+        evolved = torch.fft.ifftn(
+            previous_spectrum * torch.exp(generator * dt_view), dim=(-2, -1)
+        ).real
+        return {self.name: (pred_state_raw - evolved).square().mean()}
 
 
 def evaluate_constraints(

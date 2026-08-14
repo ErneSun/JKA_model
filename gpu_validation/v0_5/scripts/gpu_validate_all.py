@@ -248,6 +248,8 @@ def _build_final_report(
         horizon: bool(full["beats_persistence"][horizon])
         for horizon in ("short", "medium", "long")
     }
+    mass_pass = all(bool(full["mass_gate_pass"][horizon]) for horizon in baseline_pass)
+    operator_pass = all(bool(full["operator_gate_pass"][horizon]) for horizon in baseline_pass)
     reconstruction_pass = (
         float(full["reconstruction_rmse"])
         < float(full["forecast"]["short"]["persistence_rmse"])
@@ -257,6 +259,8 @@ def _build_final_report(
         and decay_pass
         and stability_pass
         and all(baseline_pass.values())
+        and mass_pass
+        and operator_pass
         and reconstruction_pass
     )
     scientific_status = "PENDING_REVIEW" if all_scientific_gates else "FAIL"
@@ -342,6 +346,14 @@ def _build_final_report(
                 "rmse": full["reconstruction_rmse"],
                 "threshold": full["forecast"]["short"]["persistence_rmse"],
             },
+            "mass": {
+                "pass": mass_pass,
+                "threshold": full["relative_mass_drift_threshold"],
+            },
+            "operator": {
+                "pass": operator_pass,
+                "threshold": full["operator_mse_threshold"],
+            },
         },
         "physics_vs_no_physics": physics_comparison,
         "checklist": checklist,
@@ -375,6 +387,11 @@ def _write_final_markdown(path: Path, report: dict[str, Any]) -> None:
         f"**{'PASS' if report['hard_gates']['reconstruction']['pass'] else 'FAIL'}**; "
         f"{report['hard_gates']['reconstruction']['rmse']:.6g} vs "
         f"threshold {report['hard_gates']['reconstruction']['threshold']:.6g}",
+        f"- mass drift: **{'PASS' if report['hard_gates']['mass']['pass'] else 'FAIL'}**; "
+        f"threshold {report['hard_gates']['mass']['threshold']:.6g}",
+        f"- operator MSE: "
+        f"**{'PASS' if report['hard_gates']['operator']['pass'] else 'FAIL'}**; "
+        f"threshold {report['hard_gates']['operator']['threshold']:.6g}",
         "",
         "### Rollout vs persistence",
         "",

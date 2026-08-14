@@ -14,6 +14,10 @@
 6. PyTorch, [Profiler documentation](https://docs.pytorch.org/docs/stable/profiler).
 7. PyTorch, [CircularPad2d API index](https://docs.pytorch.org/docs/stable/nn.aliases.html).
 8. NVIDIA, [PhysicsNeMo overview](https://docs.nvidia.com/physicsnemo/latest/overview.html).
+9. Tadmor, *The Exponential Accuracy of Fourier and Chebyshev Differencing Methods*.
+   [SIAM DOI:10.1137/0723001](https://doi.org/10.1137/0723001)
+10. PyTorch, [`torch.fft.fftn` documentation](https://docs.pytorch.org/docs/stable/generated/torch.fft.fftn.html)
+    and [`torch.fft.fftfreq` documentation](https://docs.pytorch.org/docs/stable/generated/torch.fft.fftfreq.html).
 
 这些来源只支撑设计判断；V0.5 的 scientific acceptance 仍必须由本项目固定 commit 的 GPU
 ablation 和实际 metrics 决定。

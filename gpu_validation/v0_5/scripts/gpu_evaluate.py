@@ -112,6 +112,22 @@ def main() -> None:
             horizon: values["rmse"] < values["persistence_rmse"]
             for horizon, values in result["rollout"].items()
         },
+        "mass_gate_pass": {
+            horizon: values["mass_drift"] <= result["relative_mass_drift_threshold"]
+            for horizon, values in result["rollout"].items()
+        },
+        "operator_gate_pass": {
+            horizon: values["operator"] <= result["operator_mse_threshold"]
+            for horizon, values in result["rollout"].items()
+        },
+        "relative_mass_drift_threshold": result["relative_mass_drift_threshold"],
+        "operator_mse_threshold": result["operator_mse_threshold"],
+        "ablation_skill_degradation_threshold": result[
+            "ablation_skill_degradation_threshold"
+        ],
+        "ablation_constraint_degradation_threshold": result[
+            "ablation_constraint_degradation_threshold"
+        ],
         "long_beats_persistence": result["rollout"]["long"]["rmse"]
         < result["rollout"]["long"]["persistence_rmse"],
         "reconstruction_rmse": result["reconstruction_rmse"],
@@ -153,6 +169,8 @@ def main() -> None:
         f"- stability hard gate: **{'PASS' if summary['stability_gate_pass'] else 'FAIL'}**; "
         f"spectral abscissa {summary['spectral_abscissa']:.6g}\n"
         f"- beats persistence by horizon: {summary['beats_persistence']}\n"
+        f"- mass hard gates by horizon: {summary['mass_gate_pass']}\n"
+        f"- operator hard gates by horizon: {summary['operator_gate_pass']}\n"
         f"- long mass drift / operator: {summary['mass_drift_long']:.6g} / "
         f"{summary['operator_long']:.6g}\n"
         f"- peak VRAM bytes / max samples s^-1: {peak_memory:.0f} / {samples_per_second:.6g}\n"

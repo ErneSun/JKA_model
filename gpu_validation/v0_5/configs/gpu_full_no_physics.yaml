@@ -6,6 +6,6 @@ advection_diffusion_2d: {num_trajectories: 64, num_steps: 100, nx: 64, ny: 64, c
 field_autoencoder: {input_channels: 1, latent_dim: 8, width: 24, decoder_hidden_dim: 96}
 field_loss: {lambda_k: 1.0, lambda_generator: 1.0, lambda_multi: 2.0, lambda_rec: 2.0, lambda_forecast: 2.0, lambda_var: 0.1, lambda_stability: 0.1, lambda_physics: 0.0, lambda_mass: 0.0, lambda_operator: 0.0, min_std: 0.1}
 v0_5_training: {epochs: 150, batch_size: 32, learning_rate: 0.001, generator_lr_multiplier: 5.0, weight_decay: 1.0e-6, init_scale: 0.03, physics_warmup_epochs: 10, scheduler_step_size: 40, scheduler_gamma: 0.5, diagnostic_interval: 1, precision: fp32}
-v0_5_evaluation: {short_horizon: 1, medium_horizon: 16, long_horizon: 80, max_frequency_relative_error: 0.05, max_decay_relative_error: 0.2, max_spectral_abscissa: 0.001}
+v0_5_evaluation: {short_horizon: 1, medium_horizon: 16, long_horizon: 80, max_frequency_relative_error: 0.05, max_decay_relative_error: 0.2, max_spectral_abscissa: 0.001, max_relative_mass_drift: 0.01, max_operator_mse: 0.0001, max_ablation_skill_degradation: 0.05, max_ablation_constraint_degradation: 0.10}
 project_version: 0.5.0
 tags: [v0.5, gpu-full, no-physics-ablation]

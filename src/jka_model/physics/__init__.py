@@ -2,6 +2,7 @@
 
 from jka_model.physics.constraints import (
     AdvectionDiffusionOperatorConstraint2D,
+    AdvectionDiffusionSpectralStepConstraint2D,
     ConstraintResult,
     DiscretePDEResidualConstraint,
     FiniteValueConstraint,
@@ -36,6 +37,7 @@ from jka_model.physics.registry import (
 
 __all__ = [
     "AdvectionDiffusionOperatorConstraint2D",
+    "AdvectionDiffusionSpectralStepConstraint2D",
     "ChannelMeanProbe",
     "ChannelRMSProbe",
     "ConstraintResult",
