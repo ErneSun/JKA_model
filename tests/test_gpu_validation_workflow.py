@@ -5,12 +5,23 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import torch
+import yaml
+
 from gpu_validation.v0_5.scripts.gpu_validate_all import (
     EVALUATION_CHECKPOINTS,
     _build_final_report,
     _write_final_markdown,
 )
-from gpu_validation.v0_5.scripts.gpu_validate_science import _build_report as build_science_report
+from gpu_validation.v0_5.scripts.gpu_validate_science import (
+    _build_report as build_science_report,
+)
+from gpu_validation.v0_5.scripts.gpu_validate_science import (
+    _reusable_baseline_compatibility,
+)
+from jka_model.config import ProjectConfig
+from jka_model.training import TrainStage
+from jka_model.utils import Checkpoint, save_checkpoint
 
 
 def _write_json(path: Path, value: dict[str, object]) -> None:
@@ -133,3 +144,26 @@ def test_three_seed_science_report_requires_every_seed_and_consistent_ablation()
         results[seed]["physics"]["forecast"]["short"]["operator"] = 4.0
     constraint_failed = build_science_report(validation_id="test", seeds=seeds, results=results)
     assert constraint_failed["scientific_status"] == "FAIL"
+
+
+def test_science_workflow_rejects_reusable_checkpoint_with_stale_hash(
+    tmp_path: Path, toy_config: ProjectConfig
+) -> None:
+    run_dir = tmp_path / "old-no-physics"
+    config_path = run_dir / "config/resolved_config.yaml"
+    checkpoint_path = run_dir / "checkpoints/best_forecast_post_warmup.pt"
+    config_path.parent.mkdir(parents=True)
+    checkpoint_path.parent.mkdir(parents=True)
+    config_path.write_text(yaml.safe_dump(toy_config.to_dict()), encoding="utf-8")
+    save_checkpoint(
+        Checkpoint(train_stage=TrainStage.KOOPMAN, epoch=1, global_step=1, config=toy_config),
+        checkpoint_path,
+    )
+    payload = torch.load(checkpoint_path, weights_only=False)
+    payload["config_hash"] = "stale-config-hash"
+    torch.save(payload, checkpoint_path)
+
+    compatible, reason = _reusable_baseline_compatibility(run_dir)
+
+    assert compatible is False
+    assert "config_hash" in reason

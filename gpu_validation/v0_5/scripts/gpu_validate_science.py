@@ -42,6 +42,7 @@ else:
         _write_json,
     )
 from jka_model.config import load_config
+from jka_model.utils import load_checkpoint
 
 
 def _default_validation_id() -> str:
@@ -124,6 +125,31 @@ def _evaluate(
         logs_dir=logs_dir,
     )
     return artifacts_dir / f"{run_dir.name}_best_forecast_post_warmup_metrics.json"
+
+
+def _reusable_baseline_compatibility(run_dir: Path) -> tuple[bool, str]:
+    """Check the same guards used by evaluation before promising checkpoint reuse."""
+    checkpoint_path = run_dir / "checkpoints/best_forecast_post_warmup.pt"
+    config_path = run_dir / "config/resolved_config.yaml"
+    if not checkpoint_path.is_file() or not config_path.is_file():
+        return False, "checkpoint or resolved config is missing"
+    try:
+        resolved = load_config(config_path)
+        saved = load_checkpoint(checkpoint_path, map_location="cpu")
+    except Exception as error:
+        return False, f"checkpoint compatibility guard rejected it: {error}"
+    if saved.config_hash != resolved.stable_hash:
+        return False, "checkpoint hash differs from the resolved run config"
+    if resolved.field_loss is None or any(
+        value != 0.0
+        for value in (
+            resolved.field_loss.lambda_physics,
+            resolved.field_loss.lambda_mass,
+            resolved.field_loss.lambda_operator,
+        )
+    ):
+        return False, "referenced run is not a zero-physics baseline"
+    return True, "compatible zero-physics checkpoint"
 
 
 def _seed_gates(result: dict[str, Any]) -> dict[str, bool]:
@@ -482,11 +508,11 @@ def main() -> int:
                 if variant == "no_physics":
                     reusable_value = reusable_baselines.get(str(seed), {}).get("no_physics")
                     reusable = None if reusable_value is None else Path(str(reusable_value))
-                if (
-                    reusable is not None
-                    and (reusable / "checkpoints/best_forecast_post_warmup.pt").is_file()
-                    and (reusable / "config/resolved_config.yaml").is_file()
-                ):
+                reuse_compatible = False
+                reuse_reason = "no reusable baseline was requested"
+                if reusable is not None:
+                    reuse_compatible, reuse_reason = _reusable_baseline_compatibility(reusable)
+                if reusable is not None and reuse_compatible:
                     run_dir = reusable
                     state.setdefault("steps", {})[f"reuse_no_physics_seed_{seed}"] = {
                         "status": "PASS",
@@ -497,6 +523,19 @@ def main() -> int:
                     reused_baseline_seeds.append(seed)
                     print(f"\n=== reusing no-physics seed {seed}: {run_dir} ===", flush=True)
                 else:
+                    if reusable is not None:
+                        state.setdefault("steps", {})[f"reuse_no_physics_seed_{seed}"] = {
+                            "status": "SKIPPED_INCOMPATIBLE",
+                            "run_dir": str(reusable.resolve()),
+                            "source_validation_id": args.reuse_baseline_from,
+                            "reason": reuse_reason,
+                        }
+                        _save_state(state_path, state)
+                        print(
+                            f"\n=== no-physics seed {seed}: prior checkpoint is incompatible; "
+                            f"retraining ({reuse_reason}) ===",
+                            flush=True,
+                        )
                     run_dir = _train(
                         seed=seed,
                         variant=variant,

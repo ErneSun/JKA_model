@@ -47,8 +47,9 @@ This runs the affected FP32/AMP model smoke and paired physics/no-physics traini
 per-seed hard gates. A failed/interrupted session prints the same command for resumable
 continuation and skips steps that already passed. `--reuse-baseline-from` re-evaluates compatible
 no-physics checkpoints from the earlier result because their zero physics weights make them
-unaffected by the constraint change; if any referenced checkpoint is unavailable, that seed is
-trained again automatically. Omit this option when an entirely fresh paired experiment is wanted.
+unaffected by the constraint change. Reuse is attempted only after the normal checkpoint schema,
+revision, and config-hash guards pass; unavailable or incompatible baselines are trained again
+automatically. Omit this option when an entirely fresh paired experiment is wanted.
 
 ## 1. Update and verify revision
 
