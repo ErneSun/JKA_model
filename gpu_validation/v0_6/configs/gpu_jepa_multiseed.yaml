@@ -1,0 +1,16 @@
+# Template consumed by gpu_validate_all.py; that workflow resolves seeds 47, 53, 59
+# into separate configs without changing any other field.
+architecture: {package: jka_model, revision: "2.2"}
+training: {seed: 47, stage: jepa, deterministic: true, run_root: runs}
+data: {problem_name: periodic_advection_diffusion_2d, action_dim: 0, parameter_dim: 3, dt_mode: variable, constant_dt: null, history: 2, horizon: 16, split: {train: 0.7, validation: 0.15, test: 0.15, seed: 47}, normalization: {kind: standard, eps: 1.0e-6}, toy_advection_diffusion: null}
+koopman: {state_dim: 8, trainable: true, dtype: float32}
+advection_diffusion_2d: {num_trajectories: 64, num_steps: 100, nx: 64, ny: 64, cx: 0.7, cy: 0.25, nu: 0.02, mode_x: 1, mode_y: 2, base_dt: 0.04, variable_dt: true, dt_jitter: 0.15}
+field_autoencoder: {input_channels: 1, latent_dim: 8, width: 24, decoder_hidden_dim: 96}
+field_loss: {lambda_k: 1.0, lambda_generator: 1.0, lambda_multi: 2.0, lambda_rec: 2.0, lambda_forecast: 2.0, lambda_var: 0.1, lambda_stability: 0.1, lambda_physics: 0.2, lambda_mass: 1.0, lambda_operator: 1.0, min_std: 0.1}
+v0_5_training: {epochs: 75, batch_size: 32, learning_rate: 0.001, generator_lr_multiplier: 5.0, weight_decay: 1.0e-6, init_scale: 0.03, physics_warmup_epochs: 10, scheduler_step_size: 40, scheduler_gamma: 0.5, diagnostic_interval: 1, precision: fp32}
+v0_5_evaluation: {short_horizon: 1, medium_horizon: 16, long_horizon: 80, max_frequency_relative_error: 0.05, max_decay_relative_error: 0.2, max_spectral_abscissa: 0.001, max_relative_mass_drift: 0.01, max_operator_mse: 0.0001, max_ablation_skill_degradation: 0.05, max_ablation_constraint_degradation: 0.10}
+jepa_loss: {lambda_one_step: 1.0, lambda_multi_step: 1.0}
+ema: {start_tau: 0.996, end_tau: 1.0, schedule: linear}
+v0_6_evaluation: {max_long_rollout_degradation: 0.05, max_physics_degradation: 0.10, min_latent_std: 0.02, seeds: [47, 53, 59]}
+project_version: 0.6.0
+tags: [v0.6, gpu-full, jepa, multiseed, fp32]

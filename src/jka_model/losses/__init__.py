@@ -1,5 +1,6 @@
 """V0.4 Koopman-representation objectives; no JEPA or physics losses."""
 
+from jka_model.losses.field_jepa import JEPALossBreakdown, compute_field_jepa_loss
 from jka_model.losses.field_koopman import FieldLossBreakdown, compute_field_koopman_loss
 from jka_model.losses.koopman import (
     RepresentationLossBreakdown,
@@ -14,6 +15,8 @@ from jka_model.losses.koopman import (
 __all__ = [
     "FieldLossBreakdown",
     "compute_field_koopman_loss",
+    "JEPALossBreakdown",
+    "compute_field_jepa_loss",
     "RepresentationLossBreakdown",
     "compute_representation_loss",
     "koopman_multi_step_loss",

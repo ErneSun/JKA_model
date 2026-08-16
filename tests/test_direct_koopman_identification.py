@@ -14,6 +14,7 @@ from jka_model.config import (
     ProjectConfig,
     load_config,
 )
+from jka_model.constants import PROJECT_VERSION
 from jka_model.data import (
     generate_damped_oscillator_trajectories,
     generate_duffing_trajectories,
@@ -72,14 +73,10 @@ def test_constant_dt_direct_state_identification_frequency() -> None:
         num_steps=160,
         num_trajectories=12,
     )
-    records, _ = generate_damped_oscillator_trajectories(
-        data_config, seed=13, dtype=torch.float64
-    )
+    records, _ = generate_damped_oscillator_trajectories(data_config, seed=13, dtype=torch.float64)
     states, targets, dts = trajectory_transition_tensors(records)
     assert torch.allclose(dts, dts[:1].expand_as(dts))
-    fit_config = DirectIdentificationConfig(
-        epochs=700, learning_rate=0.03, init_scale=0.05
-    )
+    fit_config = DirectIdentificationConfig(epochs=700, learning_rate=0.03, init_scale=0.05)
     core = initialize_direct_koopman(
         2, seed=13, init_scale=fit_config.init_scale, dtype=torch.float64
     )
@@ -163,12 +160,10 @@ def test_koopman_checkpoint_roundtrip(tmp_path, identified_oscillator) -> None:
     assert restored_checkpoint.global_step == result.global_step
     assert restored_checkpoint.config == config
     assert restored_checkpoint.architecture_revision == "2.2"
-    assert restored_checkpoint.project_version == "0.5.0"
+    assert restored_checkpoint.project_version == PROJECT_VERSION
     assert restored_checkpoint.rng_state is not None
     assert restored_checkpoint.rng_state.python == saved_rng.python
-    np.testing.assert_array_equal(
-        restored_checkpoint.rng_state.numpy[1], saved_rng.numpy[1]
-    )
+    np.testing.assert_array_equal(restored_checkpoint.rng_state.numpy[1], saved_rng.numpy[1])
     torch.testing.assert_close(restored_checkpoint.rng_state.torch_cpu, saved_rng.torch_cpu)
     torch.testing.assert_close(restored.step(probe_state, probe_dt), before)
     restored_spectrum = restored.spectrum()

@@ -1,6 +1,6 @@
 # Koopman-Structured Physical JEPA World Model
 
-本仓库当前完成 **V0.5 — 2-D PDE Koopman + PhysicsConstraint + CPU/GPU Validation Workflow**。项目版本为 `0.5.0`，
+本仓库当前完成 **V0.6 本地实现 — JEPA Online/EMA-Target over Physics-Constrained Koopman**。项目版本为 `0.6.0`，
 唯一有效架构修订为 `2.2`。
 
 V0.5 在不改变连续时间 core 的前提下，将学习扩展到二维周期 PDE 场：
@@ -21,8 +21,9 @@ V0.1  engineering contracts / config / checkpoint / reproducibility
 V0.2  trajectory windows / train-only normalization / PhysicsConstraint
 V0.3  direct-state continuous-time Koopman generator
 V0.4  learned Koopman coordinates + training decoder
-V0.5  2-D PDE field encoder + raw-unit physics training（当前）
-V0.6+ JEPA / closure（未实现）
+V0.5  2-D PDE field encoder + raw-unit physics training（GPU 已验证）
+V0.6  online/EMA-target JEPA shell（本地实现通过，GPU 待验证）
+V0.7+ closure（未实现）
 ```
 
 V0.5 保留全部 V0.1–V0.4 回归能力，并新增：
@@ -64,6 +65,8 @@ python scripts/explain_v0_4.py
 python scripts/analyze_latent_v0_4.py --checkpoint /tmp/jka_v0_4.pt
 python scripts/smoke_v0_5.py
 python scripts/explain_v0_5.py
+python scripts/smoke_v0_6.py --device cpu
+python scripts/explain_v0_6.py
 python scripts/train_v0_5.py --config configs/v0_5/advection_diffusion_2d_cpu_tiny_train.yaml --device cpu
 ruff check .
 MYPYPATH=src mypy
@@ -84,17 +87,19 @@ core.spectrum()
 `rollout()` 包含初始状态，不使用 ground truth teacher forcing。负 `dt` 被拒绝，`dt=0` 用于
 identity test。
 
-## V0.5 范围边界
+## V0.6 范围边界
 
-V0.5 没有 JEPA、target/EMA encoder、`z_r`、residual closure、GRU/Transformer/Attention、
-action-conditioned dynamics、MPC、RL 或 V0.6 功能。本地 CPU 仅做正确性与集成验收；GPU validation
-尚未执行，scientific acceptance 为 `PENDING_GPU`。
+V0.6 只在最新 V0.5 上增加 JEPA online/EMA-target 训练目标。它仍没有 `z_r`、residual closure、
+GRU/Transformer/Attention、action-conditioned dynamics、MPC 或 RL。V0.6 本地 CPU 实现已通过；
+GPU matched-control 尚未执行，scientific acceptance 为 `PENDING_GPU`。
 
 文档入口：
 
 - [架构规范](./koopman_structured_physical_jepa_world_model_v2_2.md)
 - [V0.5 文档入口](./docs/v0_5/README.md)
 - [V0.5 状态](./docs/v0_5/status.md)
+- [V0.6 文档入口](./docs/v0_6/README.md)
+- [V0.6 状态](./docs/v0_6/status.md)
 - [V0.4 Code Walkthrough](./docs/v0_4_code_walkthrough.md)
 - [V0.4 Implementation Checklist](./docs/v0_4_implementation_checklist.md)
 - [V0.3 Code Walkthrough](./docs/v0_3_code_walkthrough.md)

@@ -15,6 +15,8 @@ from jka_model.constants import (
     ARCHITECTURE_REVISION,
     CHECKPOINT_SCHEMA_VERSION,
     PROJECT_VERSION,
+    V0_5_CHECKPOINT_SCHEMA_VERSION,
+    V0_5_PROJECT_VERSION,
 )
 from jka_model.contracts import ProblemSpec
 from jka_model.training import TrainStage
@@ -40,6 +42,8 @@ class Checkpoint:
     optimizer_state: Mapping[str, Any] | None = None
     scheduler_state: Mapping[str, Any] | None = None
     amp_scaler_state: Mapping[str, Any] | None = None
+    ema_state: Mapping[str, Any] | None = None
+    optimizer_update_step: int = 0
     rng_state: RNGState | None = None
     normalizer_state: Mapping[str, Any] | None = None
     problem_spec: ProblemSpec | None = None
@@ -52,8 +56,10 @@ class Checkpoint:
     schema_version: int = CHECKPOINT_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.epoch < 0 or self.global_step < 0:
+        if self.epoch < 0 or self.global_step < 0 or self.optimizer_update_step < 0:
             raise ValueError("checkpoint epoch and global_step must be non-negative")
+        if self.optimizer_update_step > self.global_step:
+            raise ValueError("optimizer_update_step cannot exceed global_step")
         if self.schema_version != CHECKPOINT_SCHEMA_VERSION:
             raise ValueError(
                 f"checkpoint schema {self.schema_version} is incompatible with runtime "
@@ -88,6 +94,8 @@ class Checkpoint:
             "optimizer_state": self.optimizer_state,
             "scheduler_state": self.scheduler_state,
             "amp_scaler_state": self.amp_scaler_state,
+            "ema_state": self.ema_state,
+            "optimizer_update_step": self.optimizer_update_step,
             "epoch": self.epoch,
             "global_step": self.global_step,
             "rng_state": None if self.rng_state is None else self.rng_state.to_checkpoint_dict(),
@@ -112,6 +120,8 @@ class Checkpoint:
             "target_model_state",
             "optimizer_state",
             "scheduler_state",
+            "ema_state",
+            "optimizer_update_step",
             "epoch",
             "global_step",
             "rng_state",
@@ -155,6 +165,8 @@ class Checkpoint:
             optimizer_state=payload["optimizer_state"],
             scheduler_state=payload["scheduler_state"],
             amp_scaler_state=payload.get("amp_scaler_state"),
+            ema_state=payload["ema_state"],
+            optimizer_update_step=int(payload["optimizer_update_step"]),
             epoch=int(payload["epoch"]),
             global_step=int(payload["global_step"]),
             rng_state=(None if rng_payload is None else RNGState.from_checkpoint_dict(rng_payload)),
@@ -198,4 +210,25 @@ def load_checkpoint(
         payload = torch.load(path, map_location=map_location)
     if not isinstance(payload, Mapping):
         raise ValueError("checkpoint payload must be a mapping")
+    if (
+        int(payload.get("schema_version", -1)) == V0_5_CHECKPOINT_SCHEMA_VERSION
+        and str(payload.get("project_version")) == V0_5_PROJECT_VERSION
+    ):
+        # Validate the historical hash before canonicalizing newly optional V0.6 config
+        # keys. Model/training state remains untouched; V0.6-only state is empty.
+        legacy_config = payload.get("config")
+        if not isinstance(legacy_config, Mapping):
+            raise ValueError("legacy V0.5 checkpoint lacks a resolved config mapping")
+        if payload.get("config_hash") != stable_config_hash(legacy_config):
+            raise ValueError("legacy V0.5 checkpoint config_hash is inconsistent")
+        migrated_config = ProjectConfig.from_dict(legacy_config)
+        payload = {
+            **payload,
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "project_version": PROJECT_VERSION,
+            "config": migrated_config.to_dict(),
+            "config_hash": migrated_config.stable_hash,
+            "ema_state": None,
+            "optimizer_update_step": 0,
+        }
     return Checkpoint.from_payload(payload)

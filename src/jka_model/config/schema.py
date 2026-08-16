@@ -11,7 +11,11 @@ from typing import Any
 
 import yaml
 
-from jka_model.constants import ARCHITECTURE_REVISION, PROJECT_VERSION
+from jka_model.constants import (
+    ARCHITECTURE_REVISION,
+    PROJECT_VERSION,
+    SUPPORTED_CONFIG_PROJECT_VERSIONS,
+)
 from jka_model.contracts import DtMode
 from jka_model.training import TrainStage
 
@@ -1042,6 +1046,120 @@ class V05EvaluationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class JEPALossConfig:
+    """V0.6 JEPA additions to the complete, unchanged V0.5 objective."""
+
+    lambda_one_step: float = 1.0
+    lambda_multi_step: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.lambda_one_step < 0 or self.lambda_multi_step < 0:
+            raise ValueError("V0.6 JEPA weights must be non-negative")
+
+    @property
+    def enabled(self) -> bool:
+        return self.lambda_one_step > 0 or self.lambda_multi_step > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "lambda_one_step": float(self.lambda_one_step),
+            "lambda_multi_step": float(self.lambda_multi_step),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> JEPALossConfig:
+        defaults = cls()
+        allowed = {"lambda_one_step", "lambda_multi_step"}
+        _reject_unknown(data, allowed, "V0.6 JEPA loss config")
+        return cls(
+            lambda_one_step=float(data.get("lambda_one_step", defaults.lambda_one_step)),
+            lambda_multi_step=float(data.get("lambda_multi_step", defaults.lambda_multi_step)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EMAConfig:
+    """Optimizer-step-indexed EMA target schedule for V0.6."""
+
+    start_tau: float = 0.996
+    end_tau: float = 1.0
+    schedule: str = "linear"
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.start_tau <= self.end_tau <= 1:
+            raise ValueError("EMA tau must satisfy 0 <= start_tau <= end_tau <= 1")
+        if self.schedule not in {"constant", "linear"}:
+            raise ValueError("EMA schedule must be 'constant' or 'linear'")
+        if self.schedule == "constant" and self.start_tau != self.end_tau:
+            raise ValueError("constant EMA schedule requires start_tau == end_tau")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "start_tau": float(self.start_tau),
+            "end_tau": float(self.end_tau),
+            "schedule": self.schedule,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> EMAConfig:
+        defaults = cls()
+        allowed = {"start_tau", "end_tau", "schedule"}
+        _reject_unknown(data, allowed, "V0.6 EMA config")
+        return cls(
+            start_tau=float(data.get("start_tau", defaults.start_tau)),
+            end_tau=float(data.get("end_tau", defaults.end_tau)),
+            schedule=str(data.get("schedule", defaults.schedule)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class V06EvaluationConfig:
+    """Matched-control scientific gates; final acceptance requires multi-seed GPU evidence."""
+
+    max_long_rollout_degradation: float = 0.05
+    max_physics_degradation: float = 0.10
+    min_latent_std: float = 0.02
+    seeds: tuple[int, ...] = (47, 53, 59)
+
+    def __post_init__(self) -> None:
+        if self.max_long_rollout_degradation < 0 or self.max_physics_degradation < 0:
+            raise ValueError("V0.6 degradation margins must be non-negative")
+        if self.min_latent_std <= 0:
+            raise ValueError("V0.6 minimum latent std threshold must be positive")
+        if len(self.seeds) < 3 or len(set(self.seeds)) != len(self.seeds):
+            raise ValueError("V0.6 scientific comparison requires at least three unique seeds")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "max_long_rollout_degradation": float(self.max_long_rollout_degradation),
+            "max_physics_degradation": float(self.max_physics_degradation),
+            "min_latent_std": float(self.min_latent_std),
+            "seeds": list(self.seeds),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V06EvaluationConfig:
+        defaults = cls()
+        allowed = {
+            "max_long_rollout_degradation",
+            "max_physics_degradation",
+            "min_latent_std",
+            "seeds",
+        }
+        _reject_unknown(data, allowed, "V0.6 evaluation config")
+        return cls(
+            max_long_rollout_degradation=float(
+                data.get("max_long_rollout_degradation", defaults.max_long_rollout_degradation)
+            ),
+            max_physics_degradation=float(
+                data.get("max_physics_degradation", defaults.max_physics_degradation)
+            ),
+            min_latent_std=float(data.get("min_latent_std", defaults.min_latent_std)),
+            seeds=tuple(int(seed) for seed in data.get("seeds", defaults.seeds)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DataConfig:
     """Static data expectations shared by V0.2+ pipelines."""
 
@@ -1167,14 +1285,17 @@ class ProjectConfig:
     field_loss: FieldLossConfig | None = None
     v0_5_training: V05TrainingConfig | None = None
     v0_5_evaluation: V05EvaluationConfig | None = None
+    jepa_loss: JEPALossConfig | None = None
+    ema: EMAConfig | None = None
+    v0_6_evaluation: V06EvaluationConfig | None = None
     project_version: str = PROJECT_VERSION
     tags: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
-        if self.project_version != PROJECT_VERSION:
+        if self.project_version not in SUPPORTED_CONFIG_PROJECT_VERSIONS:
             raise ValueError(
-                f"config project version {self.project_version!r} does not match "
-                f"runtime version {PROJECT_VERSION!r}"
+                f"config project version {self.project_version!r} is not supported; "
+                f"expected one of {sorted(SUPPORTED_CONFIG_PROJECT_VERSIONS)!r}"
             )
         v0_3_sections = (self.oscillator, self.identification, self.evaluation)
         if any(section is not None for section in v0_3_sections) and not all(
@@ -1203,6 +1324,20 @@ class ProjectConfig:
             section is not None for section in v0_5_sections
         ):
             raise ValueError("V0.5 config must provide all field-learning sections together")
+        v0_6_sections = (self.jepa_loss, self.ema, self.v0_6_evaluation)
+        if any(section is not None for section in v0_6_sections) and not all(
+            section is not None for section in v0_6_sections
+        ):
+            raise ValueError("V0.6 config must provide JEPA loss, EMA, and evaluation together")
+        if any(section is not None for section in v0_6_sections) and not all(
+            section is not None for section in v0_5_sections
+        ):
+            raise ValueError("V0.6 must inherit every V0.5 field-learning section")
+        if (
+            any(section is not None for section in v0_6_sections)
+            and self.project_version != PROJECT_VERSION
+        ):
+            raise ValueError("V0.6 sections require project_version 0.6.0")
         if (
             any(section is not None for section in v0_3_sections)
             or any(section is not None for section in v0_4_sections)
@@ -1326,6 +1461,11 @@ class ProjectConfig:
             "v0_5_evaluation": None
             if self.v0_5_evaluation is None
             else self.v0_5_evaluation.to_dict(),
+            "jepa_loss": None if self.jepa_loss is None else self.jepa_loss.to_dict(),
+            "ema": None if self.ema is None else self.ema.to_dict(),
+            "v0_6_evaluation": None
+            if self.v0_6_evaluation is None
+            else self.v0_6_evaluation.to_dict(),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }
@@ -1353,6 +1493,9 @@ class ProjectConfig:
                 "field_loss",
                 "v0_5_training",
                 "v0_5_evaluation",
+                "jepa_loss",
+                "ema",
+                "v0_6_evaluation",
                 "project_version",
                 "tags",
             },
@@ -1471,6 +1614,25 @@ class ProjectConfig:
                 if data.get("v0_5_evaluation") is None
                 else V05EvaluationConfig.from_dict(
                     _ensure_mapping(data["v0_5_evaluation"], "V0.5 evaluation config")
+                )
+            ),
+            jepa_loss=(
+                None
+                if data.get("jepa_loss") is None
+                else JEPALossConfig.from_dict(
+                    _ensure_mapping(data["jepa_loss"], "V0.6 JEPA loss config")
+                )
+            ),
+            ema=(
+                None
+                if data.get("ema") is None
+                else EMAConfig.from_dict(_ensure_mapping(data["ema"], "V0.6 EMA config"))
+            ),
+            v0_6_evaluation=(
+                None
+                if data.get("v0_6_evaluation") is None
+                else V06EvaluationConfig.from_dict(
+                    _ensure_mapping(data["v0_6_evaluation"], "V0.6 evaluation config")
                 )
             ),
             project_version=str(data.get("project_version", PROJECT_VERSION)),

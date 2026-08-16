@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 — JEPA online/EMA-target over the validated V0.5 Koopman model
+
+- Added a frozen EMA target encoder while retaining the complete V0.5 online model,
+  objective and raw-space physics constraints.
+- Added strict online-Koopman versus EMA-JEPA target separation.
+- Added optimizer-step-indexed EMA, schema-6 exact resume state, collapse/tracking
+  diagnostics, matched no-JEPA controls, tests and a one-command GPU workflow.
+- Local implementation passes; GPU and scientific acceptance remain pending.
+
 ## 0.5.0 — 2-D PDE Koopman and CPU/GPU validation workflow
 
 - Added analytic endpoint-free periodic 2-D advection-diffusion data and a problem adapter.

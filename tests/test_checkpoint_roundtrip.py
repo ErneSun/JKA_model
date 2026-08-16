@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from jka_model.config import ProjectConfig
-from jka_model.constants import ARCHITECTURE_REVISION
+from jka_model.config import ProjectConfig, load_config
+from jka_model.constants import ARCHITECTURE_REVISION, CHECKPOINT_SCHEMA_VERSION
 from jka_model.contracts import ProblemSpec
 from jka_model.training import TrainStage
 from jka_model.utils import Checkpoint, capture_rng_state, load_checkpoint, save_checkpoint
@@ -44,9 +44,7 @@ def test_checkpoint_roundtrip(
     assert restored.config == toy_config
     assert restored.config_hash == toy_config.stable_hash
     assert restored.data_fingerprint == "sha256:test-data"
-    assert restored.physics_constraint_spec == [
-        {"name": "finite_values", "parameters": {}}
-    ]
+    assert restored.physics_constraint_spec == [{"name": "finite_values", "parameters": {}}]
     assert restored.online_model_state is not None
     torch.testing.assert_close(restored.online_model_state["weight"], torch.tensor([1.0, 2.0]))
 
@@ -74,3 +72,28 @@ def test_checkpoint_rejects_config_hash_tampering(
     torch.save(payload, destination)
     with pytest.raises(ValueError, match="config_hash"):
         load_checkpoint(destination)
+
+
+def test_schema_five_v0_5_checkpoint_migrates_losslessly(tmp_path) -> None:
+    config = load_config("configs/v0_5/advection_diffusion_2d_cpu_smoke.yaml")
+    current = Checkpoint(
+        train_stage=TrainStage.KOOPMAN,
+        epoch=2,
+        global_step=7,
+        online_model_state={"weight": torch.tensor([3.0])},
+        config=config,
+    )
+    payload = current.to_payload()
+    payload["schema_version"] = 5
+    payload["project_version"] = "0.5.0"
+    payload.pop("ema_state")
+    payload.pop("optimizer_update_step")
+    destination = tmp_path / "legacy-v05.pt"
+    torch.save(payload, destination)
+    restored = load_checkpoint(destination)
+    assert restored.schema_version == CHECKPOINT_SCHEMA_VERSION
+    assert restored.config == config
+    assert restored.config_hash == config.stable_hash
+    assert restored.ema_state is None
+    assert restored.optimizer_update_step == 0
+    torch.testing.assert_close(restored.online_model_state["weight"], torch.tensor([3.0]))
