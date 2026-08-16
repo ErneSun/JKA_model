@@ -17,6 +17,12 @@ It runs the test suite, CUDA preflight, FP32 and AMP smoke, then matched no-JEPA
 full training for each seed from the same V0.5 checkpoint. Use `--skip-pytest` or
 `--skip-smoke` only when that exact commit has already passed those steps.
 
+The workflow is intentionally non-silent. Every validation step reports
+`START/PASS/FAIL`, subprocess output is shown live while also being preserved under the
+session `logs/` directory, and every training epoch reports the total/V0.5/JEPA losses,
+validation losses, elapsed time, and peak GPU memory. Canonical `train_v0_6()` uses the
+same progress output even when it is called outside this workflow.
+
 The command exits nonzero and preserves all artifacts when any gate fails. Do not resume
 a failed scientific comparison as a fresh run; assign a new validation id after an
 audited code/config change.

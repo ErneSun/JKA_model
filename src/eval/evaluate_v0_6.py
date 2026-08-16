@@ -67,9 +67,11 @@ def evaluate_v0_6(
             target_parts.append(model.encode_target(fields).cpu())
     online_latent = torch.cat(online_parts)
     target_latent = torch.cat(target_parts)
+    online_statistics = latent_statistics(online_latent)
+    target_statistics = latent_statistics(target_latent)
     tracking = {
-        "online": latent_statistics(online_latent),
-        "target": latent_statistics(target_latent),
+        "online": online_statistics,
+        "target": target_statistics,
         "latent_distance": latent_tracking_distance(online_latent, target_latent),
         "parameter_distance": normalized_parameter_distance(model),
     }
@@ -86,8 +88,9 @@ def evaluate_v0_6(
             "optimizer_update_step": saved.optimizer_update_step,
             "collapse_threshold": resolved.v0_6_evaluation.min_latent_std,
             "collapse_gate": (
-                tracking["online"]["min_dimension_std"] >= resolved.v0_6_evaluation.min_latent_std
-                and tracking["target"]["min_dimension_std"]
+                online_statistics["min_dimension_std"]
+                >= resolved.v0_6_evaluation.min_latent_std
+                and target_statistics["min_dimension_std"]
                 >= resolved.v0_6_evaluation.min_latent_std
             ),
             "scientific_acceptance": "PENDING_GPU",
@@ -123,8 +126,8 @@ def evaluate_v0_6(
             "Rollout used the online encoder, continuous Koopman core and decoder only.\n\n"
             f"- long rollout RMSE: {result['rollout']['long']['rmse']:.8g}\n"
             f"- long mass drift: {result['rollout']['long']['mass_drift']:.8g}\n"
-            f"- online latent minimum std: {tracking['online']['min_dimension_std']:.8g}\n"
-            f"- target latent minimum std: {tracking['target']['min_dimension_std']:.8g}\n"
+            f"- online latent minimum std: {online_statistics['min_dimension_std']:.8g}\n"
+            f"- target latent minimum std: {target_statistics['min_dimension_std']:.8g}\n"
             f"- collapse gate: `{result['collapse_gate']}`\n"
             "- scientific acceptance: `PENDING_GPU`\n",
             encoding="utf-8",

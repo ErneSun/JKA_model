@@ -83,13 +83,27 @@ def _assert_matched(control: ProjectConfig, jepa: ProjectConfig) -> None:
         raise ValueError("matched configs differ outside JEPA objective and descriptive tags")
 
 
-def _run_checked(command: list[str], log: Path) -> None:
+def _run_checked(command: list[str], log: Path, *, label: str) -> None:
+    print(f"[V0.6][validation] {label}: START", flush=True)
     with log.open("w", encoding="utf-8") as stream:
-        completed = subprocess.run(
-            command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, check=False
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
-    if completed.returncode:
-        raise RuntimeError(f"step failed ({completed.returncode}); log={log}")
+        assert process.stdout is not None
+        for line in process.stdout:
+            stream.write(line)
+            stream.flush()
+            print(line, end="", flush=True)
+        returncode = process.wait()
+    if returncode:
+        print(f"[V0.6][validation] {label}: FAIL (log={log})", flush=True)
+        raise RuntimeError(f"step failed ({returncode}); log={log}")
+    print(f"[V0.6][validation] {label}: PASS (log={log})", flush=True)
 
 
 def main() -> None:
@@ -118,14 +132,21 @@ def main() -> None:
     if not Path(python).is_file():
         python = "python3"
     if not args.skip_pytest:
-        _run_checked([python, "-m", "pytest", "-q"], session / "logs" / "pytest.log")
+        _run_checked(
+            [python, "-m", "pytest", "-q"],
+            session / "logs" / "pytest.log",
+            label="pytest",
+        )
     _run_checked(
-        [python, "gpu_validation/v0_6/scripts/gpu_preflight.py"], session / "logs" / "preflight.log"
+        [python, "gpu_validation/v0_6/scripts/gpu_preflight.py"],
+        session / "logs" / "preflight.log",
+        label="CUDA preflight",
     )
     if not args.skip_smoke:
         _run_checked(
             [python, "scripts/smoke_v0_6.py", "--device", "cuda"],
             session / "logs" / "smoke_fp32.log",
+            label="FP32 smoke",
         )
         smoke = load_config(ROOT / "gpu_validation/v0_6/configs/gpu_smoke.yaml").to_dict()
         smoke["v0_5_training"]["precision"] = "amp_fp16"
@@ -134,6 +155,7 @@ def main() -> None:
         _run_checked(
             [python, "scripts/smoke_v0_6.py", "--device", "cuda", "--config", str(amp_path)],
             session / "logs" / "smoke_amp.log",
+            label="AMP smoke",
         )
     template = load_config(ROOT / "gpu_validation/v0_6/configs/gpu_jepa_multiseed.yaml")
     jepa_configs = {seed: _resolved(template, seed, True) for seed in args.seeds}
@@ -149,18 +171,35 @@ def main() -> None:
         save_config(control, control_path)
         save_config(jepa, jepa_path)
         source = checkpoints[seed]
+        print(
+            f"[V0.6][validation] seed={seed} control training: START "
+            f"(V0.5 checkpoint={source})",
+            flush=True,
+        )
         control_result = train_v0_6(
             control,
             device="cuda",
             init_from_v0_5=source,
             run_name=f"{args.validation_id}-control-seed{seed}",
         )
+        print(
+            f"[V0.6][validation] seed={seed} control training: PASS "
+            f"(run={control_result.run_dir})",
+            flush=True,
+        )
+        print(f"[V0.6][validation] seed={seed} JEPA training: START", flush=True)
         jepa_result = train_v0_6(
             jepa,
             device="cuda",
             init_from_v0_5=source,
             run_name=f"{args.validation_id}-jepa-seed{seed}",
         )
+        print(
+            f"[V0.6][validation] seed={seed} JEPA training: PASS "
+            f"(run={jepa_result.run_dir})",
+            flush=True,
+        )
+        print(f"[V0.6][validation] seed={seed} comparison: START", flush=True)
         comparison = compare(
             control_result.evaluation,
             jepa_result.evaluation,
@@ -175,6 +214,11 @@ def main() -> None:
         }
         (session / "artifacts" / f"comparison_seed_{seed}.json").write_text(
             json.dumps(comparison, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        print(
+            f"[V0.6][validation] seed={seed} comparison: "
+            f"{'PASS' if comparison['pass'] else 'FAIL'}",
+            flush=True,
         )
     ratios = [comparisons[str(seed)]["ratios"]["long_rmse"] for seed in args.seeds]
     automated_pass = all(item["pass"] for item in comparisons.values())

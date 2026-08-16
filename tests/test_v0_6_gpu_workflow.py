@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import sys
+
 from gpu_validation.v0_6.scripts.gpu_compare import compare
+from gpu_validation.v0_6.scripts.gpu_validate_all import _run_checked
 
 
 def _metrics(rmse: float, mass: float, operator: float) -> dict:
@@ -31,3 +34,19 @@ def test_long_rollout_gate_remains_relative() -> None:
     )
     assert not result["pass"]
     assert not result["gates"]["long_rollout_noninferiority"]
+
+
+def test_validation_step_tees_output_to_terminal_and_log(tmp_path, capsys) -> None:
+    log = tmp_path / "step.log"
+
+    _run_checked(
+        [sys.executable, "-c", "print('visible validation output', flush=True)"],
+        log,
+        label="test step",
+    )
+
+    terminal = capsys.readouterr().out
+    assert "test step: START" in terminal
+    assert "visible validation output" in terminal
+    assert "test step: PASS" in terminal
+    assert log.read_text(encoding="utf-8") == "visible validation output\n"
