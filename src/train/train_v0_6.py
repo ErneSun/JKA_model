@@ -249,8 +249,9 @@ def train_v0_6(
     if selected.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
     progress_name = run_name or f"seed-{resolved.training.seed}"
+    detailed_progress = selected.type != "cuda"
     print(
-        f"[V0.6][train:{progress_name}] PREPARE "
+        f"[V0.6][train:{progress_name}] START "
         f"device={selected} precision={resolved.v0_5_training.precision} "
         f"epochs={resolved.v0_5_training.epochs}",
         flush=True,
@@ -281,11 +282,12 @@ def train_v0_6(
         horizon=resolved.data.horizon,
         normalizer=normalizer,
     )
-    print(
-        f"[V0.6][train:{progress_name}] DATA READY "
-        f"train_windows={len(train_windows)} validation_windows={len(validation_windows)}",
-        flush=True,
-    )
+    if detailed_progress:
+        print(
+            f"[V0.6][train:{progress_name}] DATA READY "
+            f"train_windows={len(train_windows)} validation_windows={len(validation_windows)}",
+            flush=True,
+        )
     model = initialize_v0_6_model(resolved, device=selected)
     optimizer = _optimizer(model, resolved)
     scheduler = StepLR(
@@ -413,24 +415,27 @@ def train_v0_6(
     (run.run_dir / "metadata" / "run_manifest.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    print(
-        f"[V0.6][train:{progress_name}] RUN READY path={run.run_dir} "
-        f"start_epoch={start_epoch + 1}",
-        flush=True,
-    )
+    if detailed_progress:
+        print(
+            f"[V0.6][train:{progress_name}] RUN READY path={run.run_dir} "
+            f"start_epoch={start_epoch + 1}",
+            flush=True,
+        )
     fixed_validation = _batches(
         validation_windows, resolved.v0_5_training.batch_size, shuffle=False
     )
-    print(f"[V0.6][train:{progress_name}] INITIAL VALIDATION: START", flush=True)
+    if detailed_progress:
+        print(f"[V0.6][train:{progress_name}] INITIAL VALIDATION: START", flush=True)
     initial = _validation(
         model, fixed_validation, normalizer, spec, resolved, constraints, selected
     )
     initial_loss = initial["total_loss"]
-    print(
-        f"[V0.6][train:{progress_name}] INITIAL VALIDATION: PASS "
-        f"loss={initial_loss:.6g}",
-        flush=True,
-    )
+    if detailed_progress:
+        print(
+            f"[V0.6][train:{progress_name}] INITIAL VALIDATION: PASS "
+            f"loss={initial_loss:.6g}",
+            flush=True,
+        )
     history_path = run.run_dir / "logs" / "epoch_metrics.csv"
     ema_path = run.run_dir / "logs" / "ema_metrics.csv"
     step_path = run.run_dir / "logs" / "step_metrics.jsonl"
@@ -601,19 +606,20 @@ def train_v0_6(
             writer.writerow(row)
             for stream in (history_stream, ema_stream, step_stream):
                 stream.flush()
-            peak_memory_mib = peak_gpu_memory / (1024.0 * 1024.0)
-            print(
-                f"[V0.6][train:{progress_name}] "
-                f"epoch={epoch + 1}/{resolved.v0_5_training.epochs} "
-                f"loss={means['total_loss']:.6g} "
-                f"v0.5={means['v0_5_total_loss']:.6g} "
-                f"jepa_one={means['jepa_one_step_loss']:.6g} "
-                f"jepa_multi={means['jepa_multi_step_loss']:.6g} "
-                f"val_rollout={val_rollout:.6g} "
-                f"val_jepa={val_jepa:.6g} "
-                f"time={elapsed:.2f}s gpu_peak={peak_memory_mib:.1f}MiB",
-                flush=True,
-            )
+            if detailed_progress:
+                peak_memory_mib = peak_gpu_memory / (1024.0 * 1024.0)
+                print(
+                    f"[V0.6][train:{progress_name}] "
+                    f"epoch={epoch + 1}/{resolved.v0_5_training.epochs} "
+                    f"loss={means['total_loss']:.6g} "
+                    f"v0.5={means['v0_5_total_loss']:.6g} "
+                    f"jepa_one={means['jepa_one_step_loss']:.6g} "
+                    f"jepa_multi={means['jepa_multi_step_loss']:.6g} "
+                    f"val_rollout={val_rollout:.6g} "
+                    f"val_jepa={val_jepa:.6g} "
+                    f"time={elapsed:.2f}s gpu_peak={peak_memory_mib:.1f}MiB",
+                    flush=True,
+                )
             final_loss = means["total_loss"]
             checkpoint = Checkpoint(
                 train_stage=TrainStage.JEPA,
@@ -648,12 +654,14 @@ def train_v0_6(
         save_checkpoint(checkpoint, best_path)
     from eval.evaluate_v0_6 import evaluate_v0_6
 
-    print(
-        f"[V0.6][train:{progress_name}] FINAL EVALUATION: START checkpoint={best_path}",
-        flush=True,
-    )
+    if detailed_progress:
+        print(
+            f"[V0.6][train:{progress_name}] FINAL EVALUATION: START checkpoint={best_path}",
+            flush=True,
+        )
     evaluation = evaluate_v0_6(resolved, checkpoint=best_path, device=selected, run_dir=run.run_dir)
-    print(f"[V0.6][train:{progress_name}] FINAL EVALUATION: PASS", flush=True)
+    if detailed_progress:
+        print(f"[V0.6][train:{progress_name}] FINAL EVALUATION: PASS", flush=True)
     all_dts = torch.cat([record.dts for record in records])
     metadata.update(
         {
@@ -677,9 +685,11 @@ def train_v0_6(
         "- scientific acceptance: `PENDING_GPU`\n",
         encoding="utf-8",
     )
+    long_rmse = float(evaluation["rollout"]["long"]["rmse"])
     print(
         f"[V0.6][train:{progress_name}] COMPLETE "
         f"epochs={resolved.v0_5_training.epochs} final_loss={final_loss:.6g} "
+        f"long_rmse={long_rmse:.6g} collapse_gate={evaluation['collapse_gate']} "
         f"run={run.run_dir}",
         flush=True,
     )

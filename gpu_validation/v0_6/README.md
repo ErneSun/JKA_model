@@ -18,10 +18,10 @@ full training for each seed from the same V0.5 checkpoint. Use `--skip-pytest` o
 `--skip-smoke` only when that exact commit has already passed those steps.
 
 The workflow is intentionally non-silent. Every validation step reports
-`START/PASS/FAIL`, subprocess output is shown live while also being preserved under the
-session `logs/` directory, and every training epoch reports the total/V0.5/JEPA losses,
-validation losses, elapsed time, and peak GPU memory. Canonical `train_v0_6()` uses the
-same progress output even when it is called outside this workflow.
+`START/PASS/FAIL`, and subprocess output is shown live while also being preserved under
+the session `logs/` directory. Formal GPU training reports its start and final summary
+without printing every epoch; the complete epoch metrics remain in `epoch_metrics.csv`
+and `step_metrics.jsonl`. CPU smoke/development training keeps per-epoch terminal output.
 
 The command exits nonzero and preserves all artifacts when any gate fails. Do not resume
 a failed scientific comparison as a fresh run; assign a new validation id after an
