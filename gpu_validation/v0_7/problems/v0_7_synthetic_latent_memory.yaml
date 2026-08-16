@@ -1,0 +1,11 @@
+problem_id: v0_7_synthetic_latent_memory
+version_owner: v0.7
+role: mechanism_diagnostic_only
+scientific_acceptance_source: false
+equation: "z[t+1] = 0.92*z[t] + 0.18*z[t-1] - 0.10*z[t-2]"
+latent_dim: 4
+history: 3
+trajectories: 48
+steps: 96
+noise_std: 0.0
+purpose: Verify that ordered fixed history beats instantaneous and shuffled-history controls when memory is known to exist.

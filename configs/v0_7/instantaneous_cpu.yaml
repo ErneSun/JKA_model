@@ -1,0 +1,19 @@
+# Matched workflow preset for variant=instantaneous; backbone contract equals CPU V0.6.
+architecture: {package: jka_model, revision: "2.2"}
+training: {seed: 29, stage: residual, deterministic: true, run_root: runs}
+data: {problem_name: periodic_advection_diffusion_2d, action_dim: 0, parameter_dim: 3, dt_mode: variable, constant_dt: null, history: 2, horizon: 4, split: {train: 0.67, validation: 0.17, test: 0.16, seed: 29}, normalization: {kind: standard, eps: 0.000001}, toy_advection_diffusion: null}
+koopman: {state_dim: 4, trainable: true, dtype: float32}
+advection_diffusion_2d: {num_trajectories: 9, num_steps: 12, nx: 8, ny: 8, cx: 0.7, cy: 0.25, nu: 0.02, mode_x: 1, mode_y: 2, base_dt: 0.05, variable_dt: true, dt_jitter: 0.1}
+field_autoencoder: {input_channels: 1, latent_dim: 4, width: 6, decoder_hidden_dim: 24}
+field_loss: {lambda_k: 1.0, lambda_generator: 1.0, lambda_multi: 1.0, lambda_rec: 2.0, lambda_forecast: 1.0, lambda_var: 0.1, lambda_stability: 0.1, lambda_physics: 0.02, lambda_mass: 0.1, lambda_operator: 0.05, min_std: 0.05}
+v0_5_training: {epochs: 2, batch_size: 16, learning_rate: 0.002, generator_lr_multiplier: 5.0, weight_decay: 0.0, init_scale: 0.03, physics_warmup_epochs: 1, scheduler_step_size: 2, scheduler_gamma: 0.8, diagnostic_interval: 1, precision: fp32}
+v0_5_evaluation: {short_horizon: 1, medium_horizon: 4, long_horizon: 10, max_frequency_relative_error: 0.05, max_decay_relative_error: 0.2, max_spectral_abscissa: 0.001, max_relative_mass_drift: 0.01, max_operator_mse: 0.0001, max_ablation_skill_degradation: 0.05, max_ablation_constraint_degradation: 0.10}
+jepa_loss: {lambda_one_step: 1.0, lambda_multi_step: 1.0}
+ema: {start_tau: 0.996, end_tau: 1.0, schedule: linear}
+v0_6_evaluation: {max_long_rollout_degradation: 0.05, max_physics_degradation: 0.10, min_latent_std: 0.02, seeds: [47, 53, 59]}
+residual_closure: {history: 4, hidden_dim: 16, depth: 2, include_parameters: true, cache_dtype: float32, max_acf_lag: 4, variants: [zero, linear, instantaneous, history, shuffled_history]}
+residual_training: {epochs: 10, batch_size: 16, learning_rate: 0.001, weight_decay: 0.00001, gradient_clip_norm: 1.0, patience: 5, precision: fp32}
+memory_sweep: {history_lengths: [1, 2, 4, 8], effective_gain_fraction: 0.95, material_relative_gain: 0.02, plateau_relative_gain: 0.01, parameter_match_tolerance: 0.05, seed_consistency_fraction: 0.6666666666666666, strong_r2: 0.75, moderate_r2: 0.40, weak_r2: 0.05}
+v0_7_evaluation: {rollout_horizons: [2, 4, 8], min_residual_rms: 0.000001, min_history_r2_gain: 0.02, max_closure_burden: 1.0, max_physics_degradation: 0.10, seeds: [47, 53, 59]}
+project_version: 0.7.0
+tags: [v0.7, cpu, instantaneous-closure]

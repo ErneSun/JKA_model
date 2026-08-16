@@ -15,6 +15,7 @@ from jka_model.constants import (
     ARCHITECTURE_REVISION,
     PROJECT_VERSION,
     SUPPORTED_CONFIG_PROJECT_VERSIONS,
+    V0_6_PROJECT_VERSION,
 )
 from jka_model.contracts import DtMode
 from jka_model.training import TrainStage
@@ -1160,6 +1161,277 @@ class V06EvaluationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ResidualClosureConfig:
+    """V0.7 residual-cache and minimal closure architecture contract."""
+
+    history: int = 4
+    hidden_dim: int = 64
+    depth: int = 2
+    include_parameters: bool = True
+    cache_dtype: str = "float32"
+    max_acf_lag: int = 12
+    variants: tuple[str, ...] = (
+        "zero",
+        "linear",
+        "instantaneous",
+        "history",
+        "shuffled_history",
+    )
+
+    def __post_init__(self) -> None:
+        allowed = {"zero", "linear", "instantaneous", "history", "shuffled_history"}
+        if self.history < 1 or self.hidden_dim < 1 or self.depth < 1:
+            raise ValueError("V0.7 closure history>=1 and positive hidden_dim/depth are required")
+        if self.cache_dtype not in {"float32", "float64"}:
+            raise ValueError("V0.7 cache_dtype must be float32 or float64")
+        if self.max_acf_lag < 1:
+            raise ValueError("V0.7 max_acf_lag must be positive")
+        if not self.variants or len(set(self.variants)) != len(self.variants):
+            raise ValueError("V0.7 closure variants must be unique and non-empty")
+        unknown = set(self.variants) - allowed
+        if unknown:
+            raise ValueError(f"unknown V0.7 closure variant(s): {sorted(unknown)!r}")
+        if "zero" not in self.variants or "history" not in self.variants:
+            raise ValueError("V0.7 requires zero and history closure variants")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "history": self.history,
+            "hidden_dim": self.hidden_dim,
+            "depth": self.depth,
+            "include_parameters": self.include_parameters,
+            "cache_dtype": self.cache_dtype,
+            "max_acf_lag": self.max_acf_lag,
+            "variants": list(self.variants),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ResidualClosureConfig:
+        defaults = cls()
+        allowed = {
+            "history",
+            "hidden_dim",
+            "depth",
+            "include_parameters",
+            "cache_dtype",
+            "max_acf_lag",
+            "variants",
+        }
+        _reject_unknown(data, allowed, "V0.7 residual closure config")
+        return cls(
+            history=int(data.get("history", defaults.history)),
+            hidden_dim=int(data.get("hidden_dim", defaults.hidden_dim)),
+            depth=int(data.get("depth", defaults.depth)),
+            include_parameters=bool(data.get("include_parameters", defaults.include_parameters)),
+            cache_dtype=str(data.get("cache_dtype", defaults.cache_dtype)),
+            max_acf_lag=int(data.get("max_acf_lag", defaults.max_acf_lag)),
+            variants=tuple(str(item) for item in data.get("variants", defaults.variants)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ResidualTrainingConfig:
+    """Optimizer settings for closure-only V0.7 training."""
+
+    epochs: int = 60
+    batch_size: int = 128
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-5
+    gradient_clip_norm: float = 1.0
+    patience: int = 12
+    precision: str = "fp32"
+
+    def __post_init__(self) -> None:
+        if self.epochs < 1 or self.batch_size < 1 or self.learning_rate <= 0:
+            raise ValueError("V0.7 closure epochs/batch_size/lr must be positive")
+        if self.weight_decay < 0 or self.gradient_clip_norm <= 0 or self.patience < 1:
+            raise ValueError("invalid V0.7 closure regularization or patience")
+        if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
+            raise ValueError("V0.7 precision must be fp32, amp_fp16, or amp_bf16")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "epochs": self.epochs,
+            "batch_size": self.batch_size,
+            "learning_rate": self.learning_rate,
+            "weight_decay": self.weight_decay,
+            "gradient_clip_norm": self.gradient_clip_norm,
+            "patience": self.patience,
+            "precision": self.precision,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ResidualTrainingConfig:
+        defaults = cls()
+        allowed = {
+            "epochs",
+            "batch_size",
+            "learning_rate",
+            "weight_decay",
+            "gradient_clip_norm",
+            "patience",
+            "precision",
+        }
+        _reject_unknown(data, allowed, "V0.7 residual training config")
+        return cls(
+            epochs=int(data.get("epochs", defaults.epochs)),
+            batch_size=int(data.get("batch_size", defaults.batch_size)),
+            learning_rate=float(data.get("learning_rate", defaults.learning_rate)),
+            weight_decay=float(data.get("weight_decay", defaults.weight_decay)),
+            gradient_clip_norm=float(data.get("gradient_clip_norm", defaults.gradient_clip_norm)),
+            patience=int(data.get("patience", defaults.patience)),
+            precision=str(data.get("precision", defaults.precision)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MemorySweepConfig:
+    """Explicit operational thresholds for V0.7 memory characterization."""
+
+    history_lengths: tuple[int, ...] = (1, 2, 4, 8, 16)
+    effective_gain_fraction: float = 0.95
+    material_relative_gain: float = 0.02
+    plateau_relative_gain: float = 0.01
+    parameter_match_tolerance: float = 0.05
+    seed_consistency_fraction: float = 2.0 / 3.0
+    strong_r2: float = 0.75
+    moderate_r2: float = 0.40
+    weak_r2: float = 0.05
+
+    def __post_init__(self) -> None:
+        if len(self.history_lengths) < 4 or self.history_lengths[0] != 1:
+            raise ValueError("V0.7 memory sweep requires H=1 and at least four history levels")
+        if tuple(sorted(set(self.history_lengths))) != self.history_lengths:
+            raise ValueError("V0.7 history lengths must be unique and increasing")
+        if not 0 < self.effective_gain_fraction <= 1:
+            raise ValueError("effective_gain_fraction must lie in (0,1]")
+        for name, value in (
+            ("material_relative_gain", self.material_relative_gain),
+            ("plateau_relative_gain", self.plateau_relative_gain),
+            ("parameter_match_tolerance", self.parameter_match_tolerance),
+        ):
+            if not 0 <= value < 1:
+                raise ValueError(f"{name} must lie in [0,1)")
+        if not 0.5 <= self.seed_consistency_fraction <= 1:
+            raise ValueError("seed_consistency_fraction must lie in [0.5,1]")
+        if not 1 >= self.strong_r2 > self.moderate_r2 > self.weak_r2 >= 0:
+            raise ValueError("learnability R2 thresholds must strictly decrease in [0,1]")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "history_lengths": list(self.history_lengths),
+            "effective_gain_fraction": self.effective_gain_fraction,
+            "material_relative_gain": self.material_relative_gain,
+            "plateau_relative_gain": self.plateau_relative_gain,
+            "parameter_match_tolerance": self.parameter_match_tolerance,
+            "seed_consistency_fraction": self.seed_consistency_fraction,
+            "strong_r2": self.strong_r2,
+            "moderate_r2": self.moderate_r2,
+            "weak_r2": self.weak_r2,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> MemorySweepConfig:
+        defaults = cls()
+        allowed = {
+            "history_lengths",
+            "effective_gain_fraction",
+            "material_relative_gain",
+            "plateau_relative_gain",
+            "parameter_match_tolerance",
+            "seed_consistency_fraction",
+            "strong_r2",
+            "moderate_r2",
+            "weak_r2",
+        }
+        _reject_unknown(data, allowed, "V0.7 memory sweep config")
+        return cls(
+            history_lengths=tuple(
+                int(value) for value in data.get("history_lengths", defaults.history_lengths)
+            ),
+            effective_gain_fraction=float(
+                data.get("effective_gain_fraction", defaults.effective_gain_fraction)
+            ),
+            material_relative_gain=float(
+                data.get("material_relative_gain", defaults.material_relative_gain)
+            ),
+            plateau_relative_gain=float(
+                data.get("plateau_relative_gain", defaults.plateau_relative_gain)
+            ),
+            parameter_match_tolerance=float(
+                data.get("parameter_match_tolerance", defaults.parameter_match_tolerance)
+            ),
+            seed_consistency_fraction=float(
+                data.get("seed_consistency_fraction", defaults.seed_consistency_fraction)
+            ),
+            strong_r2=float(data.get("strong_r2", defaults.strong_r2)),
+            moderate_r2=float(data.get("moderate_r2", defaults.moderate_r2)),
+            weak_r2=float(data.get("weak_r2", defaults.weak_r2)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class V07EvaluationConfig:
+    """Evidence thresholds; memory strength is inferred rather than presumed."""
+
+    rollout_horizons: tuple[int, ...] = (8, 16, 32)
+    min_residual_rms: float = 1e-6
+    min_history_r2_gain: float = 0.02
+    max_closure_burden: float = 1.0
+    max_physics_degradation: float = 0.10
+    seeds: tuple[int, ...] = (47, 53, 59)
+
+    def __post_init__(self) -> None:
+        if not self.rollout_horizons or any(value < 1 for value in self.rollout_horizons):
+            raise ValueError("V0.7 rollout horizons must be positive")
+        if tuple(sorted(set(self.rollout_horizons))) != self.rollout_horizons:
+            raise ValueError("V0.7 rollout horizons must be unique and increasing")
+        if self.min_residual_rms < 0 or self.min_history_r2_gain < 0:
+            raise ValueError("V0.7 evidence thresholds must be non-negative")
+        if self.max_closure_burden <= 0 or self.max_physics_degradation < 0:
+            raise ValueError("invalid V0.7 closure/physics threshold")
+        if len(self.seeds) < 3 or len(set(self.seeds)) != len(self.seeds):
+            raise ValueError("V0.7 scientific comparison requires at least three unique seeds")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rollout_horizons": list(self.rollout_horizons),
+            "min_residual_rms": self.min_residual_rms,
+            "min_history_r2_gain": self.min_history_r2_gain,
+            "max_closure_burden": self.max_closure_burden,
+            "max_physics_degradation": self.max_physics_degradation,
+            "seeds": list(self.seeds),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V07EvaluationConfig:
+        defaults = cls()
+        allowed = {
+            "rollout_horizons",
+            "min_residual_rms",
+            "min_history_r2_gain",
+            "max_closure_burden",
+            "max_physics_degradation",
+            "seeds",
+        }
+        _reject_unknown(data, allowed, "V0.7 evaluation config")
+        return cls(
+            rollout_horizons=tuple(
+                int(value) for value in data.get("rollout_horizons", defaults.rollout_horizons)
+            ),
+            min_residual_rms=float(data.get("min_residual_rms", defaults.min_residual_rms)),
+            min_history_r2_gain=float(
+                data.get("min_history_r2_gain", defaults.min_history_r2_gain)
+            ),
+            max_closure_burden=float(data.get("max_closure_burden", defaults.max_closure_burden)),
+            max_physics_degradation=float(
+                data.get("max_physics_degradation", defaults.max_physics_degradation)
+            ),
+            seeds=tuple(int(seed) for seed in data.get("seeds", defaults.seeds)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DataConfig:
     """Static data expectations shared by V0.2+ pipelines."""
 
@@ -1288,6 +1560,10 @@ class ProjectConfig:
     jepa_loss: JEPALossConfig | None = None
     ema: EMAConfig | None = None
     v0_6_evaluation: V06EvaluationConfig | None = None
+    residual_closure: ResidualClosureConfig | None = None
+    residual_training: ResidualTrainingConfig | None = None
+    memory_sweep: MemorySweepConfig | None = None
+    v0_7_evaluation: V07EvaluationConfig | None = None
     project_version: str = PROJECT_VERSION
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -1333,11 +1609,35 @@ class ProjectConfig:
             section is not None for section in v0_5_sections
         ):
             raise ValueError("V0.6 must inherit every V0.5 field-learning section")
+        if any(section is not None for section in v0_6_sections) and self.project_version not in {
+            V0_6_PROJECT_VERSION,
+            PROJECT_VERSION,
+        }:
+            raise ValueError(
+                "V0.6 sections require project_version 0.6.0 or a later inheriting version"
+            )
+        v0_7_sections = (
+            self.residual_closure,
+            self.residual_training,
+            self.memory_sweep,
+            self.v0_7_evaluation,
+        )
+        if any(section is not None for section in v0_7_sections) and not all(
+            section is not None for section in v0_7_sections
+        ):
+            raise ValueError("V0.7 config must provide closure, training, and evaluation together")
+        if any(section is not None for section in v0_7_sections) and not all(
+            section is not None for section in v0_6_sections
+        ):
+            raise ValueError("V0.7 must inherit every V0.6 section")
         if (
-            any(section is not None for section in v0_6_sections)
+            any(section is not None for section in v0_7_sections)
             and self.project_version != PROJECT_VERSION
         ):
-            raise ValueError("V0.6 sections require project_version 0.6.0")
+            raise ValueError("V0.7 sections require project_version 0.7.0")
+        if self.memory_sweep is not None and self.advection_diffusion_2d is not None:
+            if self.memory_sweep.history_lengths[-1] >= self.advection_diffusion_2d.num_steps:
+                raise ValueError("V0.7 maximum history must be shorter than each trajectory")
         if (
             any(section is not None for section in v0_3_sections)
             or any(section is not None for section in v0_4_sections)
@@ -1466,6 +1766,16 @@ class ProjectConfig:
             "v0_6_evaluation": None
             if self.v0_6_evaluation is None
             else self.v0_6_evaluation.to_dict(),
+            "residual_closure": None
+            if self.residual_closure is None
+            else self.residual_closure.to_dict(),
+            "residual_training": None
+            if self.residual_training is None
+            else self.residual_training.to_dict(),
+            "memory_sweep": None if self.memory_sweep is None else self.memory_sweep.to_dict(),
+            "v0_7_evaluation": None
+            if self.v0_7_evaluation is None
+            else self.v0_7_evaluation.to_dict(),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }
@@ -1496,6 +1806,10 @@ class ProjectConfig:
                 "jepa_loss",
                 "ema",
                 "v0_6_evaluation",
+                "residual_closure",
+                "residual_training",
+                "memory_sweep",
+                "v0_7_evaluation",
                 "project_version",
                 "tags",
             },
@@ -1633,6 +1947,34 @@ class ProjectConfig:
                 if data.get("v0_6_evaluation") is None
                 else V06EvaluationConfig.from_dict(
                     _ensure_mapping(data["v0_6_evaluation"], "V0.6 evaluation config")
+                )
+            ),
+            residual_closure=(
+                None
+                if data.get("residual_closure") is None
+                else ResidualClosureConfig.from_dict(
+                    _ensure_mapping(data["residual_closure"], "V0.7 residual closure config")
+                )
+            ),
+            residual_training=(
+                None
+                if data.get("residual_training") is None
+                else ResidualTrainingConfig.from_dict(
+                    _ensure_mapping(data["residual_training"], "V0.7 residual training config")
+                )
+            ),
+            memory_sweep=(
+                None
+                if data.get("memory_sweep") is None
+                else MemorySweepConfig.from_dict(
+                    _ensure_mapping(data["memory_sweep"], "V0.7 memory sweep config")
+                )
+            ),
+            v0_7_evaluation=(
+                None
+                if data.get("v0_7_evaluation") is None
+                else V07EvaluationConfig.from_dict(
+                    _ensure_mapping(data["v0_7_evaluation"], "V0.7 evaluation config")
                 )
             ),
             project_version=str(data.get("project_version", PROJECT_VERSION)),

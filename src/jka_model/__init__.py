@@ -1,4 +1,4 @@
-"""Public API through V0.4 learned continuous-time Koopman coordinates."""
+"""Public API through V0.7 Koopman residual identification and minimal closure."""
 
 from jka_model.constants import (
     ARCHITECTURE_REVISION,
@@ -25,6 +25,7 @@ from jka_model.models import (
     TrainingDecoder,
 )
 from jka_model.physics import PhysicsConstraint
+from jka_model.residual import ResidualKoopmanModel, ResidualWindowDataset, build_closure
 from jka_model.training import TrainStage, configure_train_stage
 
 __all__ = [
@@ -44,9 +45,12 @@ __all__ = [
     "ProblemBatch",
     "ProblemSpec",
     "PhysicsConstraint",
+    "ResidualKoopmanModel",
+    "ResidualWindowDataset",
     "TrainStage",
     "TrainingDecoder",
     "TransitionOutput",
+    "build_closure",
     "configure_train_stage",
     "validate_trajectory_alignment",
 ]

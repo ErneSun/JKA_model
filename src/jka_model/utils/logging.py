@@ -98,4 +98,3 @@ def create_run_directory(
     logger.info("run_started metadata=%s", json.dumps(context.to_dict(), sort_keys=True))
     handler.flush()
     return context
-

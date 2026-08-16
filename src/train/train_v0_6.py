@@ -26,6 +26,8 @@ from jka_model.constants import (
     PROJECT_VERSION,
     V0_5_CHECKPOINT_SCHEMA_VERSION,
     V0_5_PROJECT_VERSION,
+    V0_6_CHECKPOINT_SCHEMA_VERSION,
+    V0_6_PROJECT_VERSION,
 )
 from jka_model.data import (
     ChannelStandardizer,
@@ -131,6 +133,7 @@ def load_v0_5_initialization(path: str | Path, config: ProjectConfig) -> Mapping
     )
     allowed = {
         (V0_5_CHECKPOINT_SCHEMA_VERSION, V0_5_PROJECT_VERSION),
+        (V0_6_CHECKPOINT_SCHEMA_VERSION, V0_6_PROJECT_VERSION),
         (CHECKPOINT_SCHEMA_VERSION, PROJECT_VERSION),
     }
     if version_pair not in allowed:
@@ -145,7 +148,7 @@ def load_v0_5_initialization(path: str | Path, config: ProjectConfig) -> Mapping
     source_resolved = ProjectConfig.from_dict(source_config)
     expected_hash = (
         stable_config_hash(source_config)
-        if version_pair[0] == V0_5_CHECKPOINT_SCHEMA_VERSION
+        if version_pair[0] in {V0_5_CHECKPOINT_SCHEMA_VERSION, V0_6_CHECKPOINT_SCHEMA_VERSION}
         else source_resolved.stable_hash
     )
     if payload.get("config_hash") != expected_hash:
@@ -432,8 +435,7 @@ def train_v0_6(
     initial_loss = initial["total_loss"]
     if detailed_progress:
         print(
-            f"[V0.6][train:{progress_name}] INITIAL VALIDATION: PASS "
-            f"loss={initial_loss:.6g}",
+            f"[V0.6][train:{progress_name}] INITIAL VALIDATION: PASS loss={initial_loss:.6g}",
             flush=True,
         )
     history_path = run.run_dir / "logs" / "epoch_metrics.csv"
@@ -573,9 +575,7 @@ def train_v0_6(
             means = {name: value / seen for name, value in sums.items()}
             elapsed = time.perf_counter() - started
             val_rollout = float(validation["forecast_model_mse"])
-            val_jepa = float(
-                validation["jepa_one_step_loss"] + validation["jepa_multi_step_loss"]
-            )
+            val_jepa = float(validation["jepa_one_step_loss"] + validation["jepa_multi_step_loss"])
             peak_gpu_memory = (
                 torch.cuda.max_memory_allocated(selected) if selected.type == "cuda" else 0
             )
