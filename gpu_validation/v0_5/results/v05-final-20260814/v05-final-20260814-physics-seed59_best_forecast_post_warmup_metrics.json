@@ -1,0 +1,81 @@
+{
+  "ablation_constraint_degradation_threshold": 0.1,
+  "ablation_skill_degradation_threshold": 0.05,
+  "beats_persistence": {
+    "long": true,
+    "medium": true,
+    "short": true
+  },
+  "checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed59/checkpoints/best_forecast_post_warmup.pt",
+  "checkpoint_name": "best_forecast_post_warmup",
+  "config": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed59/config/resolved_config.yaml",
+  "config_hash": "e5ed55c77ff1be68942a24d64ee7bf11c2041c17f0be0f4b74b431dfa76f7576",
+  "decay_gate_pass": true,
+  "decay_relative_error": 0.15922600030899042,
+  "decay_threshold": 0.2,
+  "forecast": {
+    "long": {
+      "mass_drift": 0.0007478071978160491,
+      "operator": 2.449300772077044e-07,
+      "persistence_rmse": 0.9160465664333768,
+      "relative_l2": 0.02279801956481404,
+      "rmse": 0.013298678315348096
+    },
+    "medium": {
+      "mass_drift": 0.0006137209970297085,
+      "operator": 7.186642265979673e-07,
+      "persistence_rmse": 0.2938987331257926,
+      "relative_l2": 0.003166621732008126,
+      "rmse": 0.0020860858753116596
+    },
+    "short": {
+      "mass_drift": 0.0005717437517079008,
+      "operator": 8.71101721915895e-06,
+      "persistence_rmse": 0.030443714517686103,
+      "relative_l2": 0.004210426265166866,
+      "rmse": 0.002849983064354294
+    }
+  },
+  "frequency_gate_pass": true,
+  "frequency_relative_error": 0.0024784207344054807,
+  "frequency_threshold": 0.05,
+  "git_branch": "gpu_validation",
+  "git_commit": "976de084c540e28a21411614ed0c854291ed491c",
+  "git_dirty": false,
+  "gpu": "NVIDIA GeForce RTX 5080",
+  "latent_max_std": 0.6695785522460938,
+  "latent_min_std": 0.48157256841659546,
+  "learned_angular_frequency": 1.1970258951187134,
+  "learned_decay_rate": 0.11592260003089905,
+  "long_beats_persistence": true,
+  "mass_drift_long": 0.0007478071978160491,
+  "mass_gate_pass": {
+    "long": true,
+    "medium": true,
+    "short": true
+  },
+  "max_samples_per_second": 155.55366223016875,
+  "operator_gate_pass": {
+    "long": true,
+    "medium": true,
+    "short": true
+  },
+  "operator_long": 2.449300772077044e-07,
+  "operator_mse_threshold": 0.0001,
+  "peak_gpu_memory_bytes": 2907331072.0,
+  "persistence_long_rmse": 0.9160465664333768,
+  "precision": "fp32",
+  "reconstruction_rmse": 0.0032672591041773558,
+  "relative_mass_drift_threshold": 0.01,
+  "run_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed59",
+  "run_id": "v05-final-20260814-physics-seed59",
+  "scientific_acceptance": "PENDING_REVIEW",
+  "selection_epoch": 128,
+  "selection_rule": "minimum validation forecast MSE after physics warmup",
+  "spectral_abscissa": -9.620861237635836e-05,
+  "spectral_abscissa_threshold": 0.001,
+  "stability_gate_pass": true,
+  "status": "PASS",
+  "true_angular_frequency": 1.2,
+  "true_decay_rate": 0.1
+}
