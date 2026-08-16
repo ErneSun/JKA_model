@@ -62,28 +62,30 @@
       }
     }
   },
-  "gpu_validation": "MEASURED_PASS_PENDING_REVIEW",
+  "final_review_json": "gpu_validation/v0_6/results/v06-final-20260816T030842Z/final_review.json",
+  "final_review_markdown": "gpu_validation/v0_6/results/v06-final-20260816T030842Z/final_review.md",
+  "gpu_validation": "PASS",
   "implementation": "PASS",
   "long_rmse_ratio_mean": 0.714433020218376,
   "long_rmse_ratio_std": 0.3187674124475464,
   "runs": {
     "47": {
-      "control": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed47",
-      "jepa": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed47",
-      "v0_5_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed47/checkpoints/best_forecast_post_warmup.pt"
+      "control": "runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed47",
+      "jepa": "runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed47",
+      "v0_5_checkpoint": "runs/v0_5/gpu/v05-final-20260814-physics-seed47/checkpoints/best_forecast_post_warmup.pt"
     },
     "53": {
-      "control": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed53",
-      "jepa": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed53",
-      "v0_5_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed53/checkpoints/best_forecast_post_warmup.pt"
+      "control": "runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed53",
+      "jepa": "runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed53",
+      "v0_5_checkpoint": "runs/v0_5/gpu/v05-final-20260814-physics-seed53/checkpoints/best_forecast_post_warmup.pt"
     },
     "59": {
-      "control": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed59",
-      "jepa": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed59",
-      "v0_5_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed59/checkpoints/best_forecast_post_warmup.pt"
+      "control": "runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed59",
+      "jepa": "runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed59",
+      "v0_5_checkpoint": "runs/v0_5/gpu/v05-final-20260814-physics-seed59/checkpoints/best_forecast_post_warmup.pt"
     }
   },
-  "scientific_acceptance": "PENDING_REVIEW",
+  "scientific_acceptance": "PASS_AFTER_REVIEW",
   "seeds": [
     47,
     53,

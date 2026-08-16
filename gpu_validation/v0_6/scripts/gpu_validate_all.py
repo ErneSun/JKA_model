@@ -20,6 +20,7 @@ for import_root in (ROOT, ROOT / "src"):
         sys.path.insert(0, str(import_root))
 
 from gpu_validation.v0_6.scripts.gpu_compare import compare  # noqa: E402
+from gpu_validation.v0_6.scripts.gpu_report import build_review, write_bundle  # noqa: E402
 from jka_model.config import ProjectConfig, load_config, save_config  # noqa: E402
 from train.train_v0_6 import load_v0_5_initialization, train_v0_6  # noqa: E402
 
@@ -32,6 +33,14 @@ def _payload(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"checkpoint is not a mapping: {path}")
     return value
+
+
+def _portable_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(ROOT))
+    except ValueError:
+        return str(resolved)
 
 
 def _seed_of_checkpoint(path: Path) -> int | None:
@@ -200,6 +209,7 @@ def main() -> None:
             flush=True,
         )
         print(f"[V0.6][validation] seed={seed} comparison: START", flush=True)
+        assert jepa.v0_6_evaluation is not None
         comparison = compare(
             control_result.evaluation,
             jepa_result.evaluation,
@@ -208,9 +218,9 @@ def main() -> None:
         )
         comparisons[str(seed)] = comparison
         runs[str(seed)] = {
-            "v0_5_checkpoint": str(source.resolve()),
-            "control": str(control_result.run_dir.resolve()),
-            "jepa": str(jepa_result.run_dir.resolve()),
+            "v0_5_checkpoint": _portable_path(source),
+            "control": _portable_path(control_result.run_dir),
+            "jepa": _portable_path(jepa_result.run_dir),
         }
         (session / "artifacts" / f"comparison_seed_{seed}.json").write_text(
             json.dumps(comparison, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -241,6 +251,13 @@ def main() -> None:
     (compact / "summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    automated_review = build_review(
+        args.validation_id,
+        args.seeds,
+        ROOT / "runs" / "v0_6" / "gpu",
+        reviewed=False,
+    )
+    write_bundle(compact, automated_review)
     print(json.dumps(summary, indent=2))
     if not automated_pass:
         raise SystemExit(1)

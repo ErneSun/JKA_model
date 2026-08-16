@@ -1,0 +1,787 @@
+{
+  "aggregate": {
+    "decay_relative_error": {
+      "control": {
+        "mean": 0.1705775062243143,
+        "sample_std": 0.020855481499639127
+      },
+      "jepa": {
+        "mean": 0.11791327595710749,
+        "sample_std": 0.04190053028338991
+      },
+      "jepa_mean_relative_change": -0.30874076795302574,
+      "jepa_over_control_mean_ratio": 0.6912592320469743
+    },
+    "elapsed_seconds": {
+      "control": {
+        "mean": 1935.8883633333335,
+        "sample_std": 17.83866415350685
+      },
+      "jepa": {
+        "mean": 2319.335004333333,
+        "sample_std": 26.758882596783238
+      },
+      "jepa_mean_relative_change": 0.19807270308694713,
+      "jepa_over_control_mean_ratio": 1.1980727030869471
+    },
+    "frequency_relative_error": {
+      "control": {
+        "mean": 0.002676771746741364,
+        "sample_std": 0.00031561643319100174
+      },
+      "jepa": {
+        "mean": 0.001800219217936161,
+        "sample_std": 0.0006177358722249378
+      },
+      "jepa_mean_relative_change": -0.32746629587386245,
+      "jepa_over_control_mean_ratio": 0.6725337041261376
+    },
+    "long_mass_drift": {
+      "control": {
+        "mean": 0.0012269837213723265,
+        "sample_std": 0.0005325267138922404
+      },
+      "jepa": {
+        "mean": 0.002240254615942292,
+        "sample_std": 0.0012906607846664884
+      },
+      "jepa_mean_relative_change": 0.8258226062173566,
+      "jepa_over_control_mean_ratio": 1.8258226062173566
+    },
+    "long_operator": {
+      "control": {
+        "mean": 2.495401353207348e-07,
+        "sample_std": 5.563944322461923e-08
+      },
+      "jepa": {
+        "mean": 1.2690192343869612e-07,
+        "sample_std": 1.0570212152842666e-07
+      },
+      "jepa_mean_relative_change": -0.49145686213727247,
+      "jepa_over_control_mean_ratio": 0.5085431378627275
+    },
+    "long_rmse": {
+      "control": {
+        "mean": 0.015099141160371126,
+        "sample_std": 0.0016083460358843522
+      },
+      "jepa": {
+        "mean": 0.010575901009832267,
+        "sample_std": 0.004490141042837886
+      },
+      "jepa_mean_relative_change": -0.2995693663961799,
+      "jepa_over_control_mean_ratio": 0.7004306336038201
+    },
+    "medium_rmse": {
+      "control": {
+        "mean": 0.0023739127769928287,
+        "sample_std": 0.000274871155130512
+      },
+      "jepa": {
+        "mean": 0.0017043013919006895,
+        "sample_std": 0.0006275796244798014
+      },
+      "jepa_mean_relative_change": -0.2820707616479382,
+      "jepa_over_control_mean_ratio": 0.7179292383520618
+    },
+    "peak_gpu_memory_mib": {
+      "control": {
+        "mean": 2755.9656575520835,
+        "sample_std": 0.4916498386067907
+      },
+      "jepa": {
+        "mean": 2833.72802734375,
+        "sample_std": 0.0
+      },
+      "jepa_mean_relative_change": 0.02821601552928521,
+      "jepa_over_control_mean_ratio": 1.0282160155292852
+    },
+    "short_rmse": {
+      "control": {
+        "mean": 0.002534392479531191,
+        "sample_std": 0.00043024525492646817
+      },
+      "jepa": {
+        "mean": 0.0015172252412109324,
+        "sample_std": 0.000925282957052432
+      },
+      "jepa_mean_relative_change": -0.40134558736869874,
+      "jepa_over_control_mean_ratio": 0.5986544126313013
+    }
+  },
+  "automated_gates": "PASS",
+  "claim_boundary": "reduced analytical single-mode PDE validation",
+  "gpu_validation": "PASS",
+  "implementation": "PASS",
+  "per_seed": {
+    "47": {
+      "comparison": {
+        "gates": {
+          "long_rollout_noninferiority": true,
+          "mass_noninferiority": true,
+          "no_collapse": true,
+          "operator_noninferiority": true,
+          "target_not_in_rollout": true
+        },
+        "limits": {
+          "long_rmse_ratio": 1.05,
+          "mass_drift": 0.01,
+          "operator": 0.0001
+        },
+        "pass": true,
+        "ratios": {
+          "long_rmse": 0.9846432571512821,
+          "mass": 0.6104399172610064,
+          "operator": 0.8582373899141172
+        }
+      },
+      "evaluation": {
+        "control": {
+          "collapse_threshold": 0.02,
+          "decay_relative_error": 0.1614000797271728,
+          "frequency_relative_error": 0.0025186538696288694,
+          "gates": {
+            "beats_persistence_all_horizons": true,
+            "decay": true,
+            "finite_evaluation": true,
+            "finite_training": true,
+            "frequency": true,
+            "mass_all_horizons": true,
+            "no_collapse": true,
+            "operator_all_horizons": true,
+            "optimizer_ema_counts_match": true,
+            "stability": true,
+            "target_not_in_optimizer": true,
+            "target_not_in_rollout": true
+          },
+          "near_identity": {
+            "large": {
+              "dt": 0.04597797244787216,
+              "relative_frobenius": 0.028774939477443695
+            },
+            "median": {
+              "dt": 0.039987582713365555,
+              "relative_frobenius": 0.02503543719649315
+            },
+            "small": {
+              "dt": 0.03406840190291405,
+              "relative_frobenius": 0.021337497979402542
+            }
+          },
+          "online_min_dimension_std": 0.48617544770240784,
+          "online_target_latent_distance": 0.011732331477105618,
+          "online_target_parameter_distance": 0.018264267593622208,
+          "pass": true,
+          "reconstruction_rmse": 0.0033789855531520313,
+          "rollout": {
+            "long": {
+              "mass_drift": 0.0017947494440401595,
+              "operator": 2.8169597025377396e-07,
+              "persistence_rmse": 1.0331104066636827,
+              "relative_l2": 0.02324345376756456,
+              "rmse": 0.015246667485270236
+            },
+            "medium": {
+              "mass_drift": 0.000758489820226613,
+              "operator": 7.548036238505221e-07,
+              "persistence_rmse": 0.332117670112186,
+              "relative_l2": 0.003041055545003878,
+              "rmse": 0.002243846538476646
+            },
+            "short": {
+              "mass_drift": 0.0004653202001160632,
+              "operator": 8.894201932384425e-06,
+              "persistence_rmse": 0.03339302560521497,
+              "relative_l2": 0.003954558400437236,
+              "rmse": 0.002949527775247892
+            }
+          },
+          "spectral_abscissa": -0.0005470956675708294,
+          "target_min_dimension_std": 0.4848877787590027,
+          "target_used_for_rollout": false
+        },
+        "jepa": {
+          "collapse_threshold": 0.02,
+          "decay_relative_error": 0.15766316652297968,
+          "frequency_relative_error": 0.0024308363596597937,
+          "gates": {
+            "beats_persistence_all_horizons": true,
+            "decay": true,
+            "finite_evaluation": true,
+            "finite_training": true,
+            "frequency": true,
+            "mass_all_horizons": true,
+            "no_collapse": true,
+            "operator_all_horizons": true,
+            "optimizer_ema_counts_match": true,
+            "stability": true,
+            "target_not_in_optimizer": true,
+            "target_not_in_rollout": true
+          },
+          "near_identity": {
+            "large": {
+              "dt": 0.04597797244787216,
+              "relative_frobenius": 0.02881598472595215
+            },
+            "median": {
+              "dt": 0.039987582713365555,
+              "relative_frobenius": 0.02507118694484234
+            },
+            "small": {
+              "dt": 0.03406840190291405,
+              "relative_frobenius": 0.0213679987937212
+            }
+          },
+          "online_min_dimension_std": 0.498891144990921,
+          "online_target_latent_distance": 0.003996962681412697,
+          "online_target_parameter_distance": 0.023795487359166145,
+          "pass": true,
+          "reconstruction_rmse": 0.0029359150470958818,
+          "rollout": {
+            "long": {
+              "mass_drift": 0.0010955867021241123,
+              "operator": 2.417620142599238e-07,
+              "persistence_rmse": 1.0331104066636827,
+              "relative_l2": 0.02285259237719907,
+              "rmse": 0.015012528333399031
+            },
+            "medium": {
+              "mass_drift": 0.00036710405725494237,
+              "operator": 6.034900271364071e-07,
+              "persistence_rmse": 0.332117670112186,
+              "relative_l2": 0.0032312862005912596,
+              "rmse": 0.0023806554834461873
+            },
+            "short": {
+              "mass_drift": 0.00014143903005484995,
+              "operator": 6.368481232736182e-06,
+              "persistence_rmse": 0.03339302560521497,
+              "relative_l2": 0.0033470986204014886,
+              "rmse": 0.002503726269221968
+            }
+          },
+          "spectral_abscissa": -0.00019171331950929016,
+          "target_min_dimension_std": 0.49683913588523865,
+          "target_used_for_rollout": false
+        }
+      },
+      "pair_contract": {
+        "configs_match_except_jepa_and_tags": true,
+        "same_data_fingerprint": true,
+        "same_inference_parameter_count": true,
+        "same_split_manifest": true,
+        "same_trainable_parameter_count": true,
+        "same_v0_5_initialization": true
+      },
+      "pass": true,
+      "runs": {
+        "control": "runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed47",
+        "jepa": "runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed47"
+      },
+      "training": {
+        "control": {
+          "best_validation_epoch": 15,
+          "best_validation_rollout": 1.003176360730625e-05,
+          "data_fingerprint": "sha256:5c9aa71ced387d92a0f70046725c626078632e8a4ea2bcbe7f0456dfea0816cd",
+          "device": "cuda",
+          "elapsed_seconds": 1930.47622,
+          "ema_update_count": 8925,
+          "epochs": 75,
+          "final_jepa_loss": 0.0,
+          "final_total_loss": 0.000145013488197167,
+          "finite": true,
+          "git_commit": "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a",
+          "initial_total_loss": 0.028100929197130933,
+          "mean_samples_per_second": 152.28161179248508,
+          "optimizer_ema_counts_match": true,
+          "optimizer_update_step": 8925,
+          "parameter_count_inference": 9671593,
+          "peak_gpu_memory_mib": 2755.39794921875,
+          "precision": "fp32",
+          "target_in_optimizer": false,
+          "trainable_parameter_count": 9671593,
+          "v0_5_initialization": "v05-final-20260814-physics-seed47"
+        },
+        "jepa": {
+          "best_validation_epoch": 52,
+          "best_validation_rollout": 1.0383029811713467e-05,
+          "data_fingerprint": "sha256:5c9aa71ced387d92a0f70046725c626078632e8a4ea2bcbe7f0456dfea0816cd",
+          "device": "cuda",
+          "elapsed_seconds": 2322.330682,
+          "ema_update_count": 8925,
+          "epochs": 75,
+          "final_jepa_loss": 1.4011588597929438e-05,
+          "final_total_loss": 0.00021725124514738108,
+          "finite": true,
+          "git_commit": "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a",
+          "initial_total_loss": 0.030908325085094293,
+          "mean_samples_per_second": 126.78884457738617,
+          "optimizer_ema_counts_match": true,
+          "optimizer_update_step": 8925,
+          "parameter_count_inference": 9671593,
+          "peak_gpu_memory_mib": 2833.72802734375,
+          "precision": "fp32",
+          "target_in_optimizer": false,
+          "trainable_parameter_count": 9671593,
+          "v0_5_initialization": "v05-final-20260814-physics-seed47"
+        }
+      }
+    },
+    "53": {
+      "comparison": {
+        "gates": {
+          "long_rollout_noninferiority": true,
+          "mass_noninferiority": true,
+          "no_collapse": true,
+          "operator_noninferiority": true,
+          "target_not_in_rollout": true
+        },
+        "limits": {
+          "long_rmse_ratio": 1.05,
+          "mass_drift": 0.01,
+          "operator": 0.0001
+        },
+        "pass": true,
+        "ratios": {
+          "long_rmse": 0.7957822482802409,
+          "mass": 1.730656331850754,
+          "operator": 0.5678852998666665
+        }
+      },
+      "evaluation": {
+        "control": {
+          "collapse_threshold": 0.02,
+          "decay_relative_error": 0.15588456392288202,
+          "frequency_relative_error": 0.0024714668591816853,
+          "gates": {
+            "beats_persistence_all_horizons": true,
+            "decay": true,
+            "finite_evaluation": true,
+            "finite_training": true,
+            "frequency": true,
+            "mass_all_horizons": true,
+            "no_collapse": true,
+            "operator_all_horizons": true,
+            "optimizer_ema_counts_match": true,
+            "stability": true,
+            "target_not_in_optimizer": true,
+            "target_not_in_rollout": true
+          },
+          "near_identity": {
+            "large": {
+              "dt": 0.045996956527233124,
+              "relative_frobenius": 0.028479695320129395
+            },
+            "median": {
+              "dt": 0.04001455754041672,
+              "relative_frobenius": 0.02478497289121151
+            },
+            "small": {
+              "dt": 0.03400123491883278,
+              "relative_frobenius": 0.021068250760436058
+            }
+          },
+          "online_min_dimension_std": 0.42599841952323914,
+          "online_target_latent_distance": 0.049068961292505264,
+          "online_target_parameter_distance": 0.14614593982696533,
+          "pass": true,
+          "reconstruction_rmse": 0.0025026539030174413,
+          "rollout": {
+            "long": {
+              "mass_drift": 0.0011475911144063706,
+              "operator": 1.8529325116231928e-07,
+              "persistence_rmse": 0.925665921635098,
+              "relative_l2": 0.022889392864372995,
+              "rmse": 0.013422114464143911
+            },
+            "medium": {
+              "mass_drift": 0.0009008004950980345,
+              "operator": 4.381136433393193e-07,
+              "persistence_rmse": 0.29228677848974866,
+              "relative_l2": 0.0033241060251990953,
+              "rmse": 0.0021882145018834206
+            },
+            "short": {
+              "mass_drift": 0.0008065579782447054,
+              "operator": 4.518681432980682e-06,
+              "persistence_rmse": 0.031891308517919645,
+              "relative_l2": 0.003155679493728611,
+              "rmse": 0.0020904818730842737
+            }
+          },
+          "spectral_abscissa": -3.5167031455785036e-05,
+          "target_min_dimension_std": 0.4125553071498871,
+          "target_used_for_rollout": false
+        },
+        "jepa": {
+          "collapse_threshold": 0.02,
+          "decay_relative_error": 0.12192586064338679,
+          "frequency_relative_error": 0.0017735958099364866,
+          "gates": {
+            "beats_persistence_all_horizons": true,
+            "decay": true,
+            "finite_evaluation": true,
+            "finite_training": true,
+            "frequency": true,
+            "mass_all_horizons": true,
+            "no_collapse": true,
+            "operator_all_horizons": true,
+            "optimizer_ema_counts_match": true,
+            "stability": true,
+            "target_not_in_optimizer": true,
+            "target_not_in_rollout": true
+          },
+          "near_identity": {
+            "large": {
+              "dt": 0.045996956527233124,
+              "relative_frobenius": 0.02880311757326126
+            },
+            "median": {
+              "dt": 0.04001455754041672,
+              "relative_frobenius": 0.02506665140390396
+            },
+            "small": {
+              "dt": 0.03400123491883278,
+              "relative_frobenius": 0.021307867020368576
+            }
+          },
+          "online_min_dimension_std": 0.2920283377170563,
+          "online_target_latent_distance": 0.0036843232810497284,
+          "online_target_parameter_distance": 0.003421867499127984,
+          "pass": true,
+          "reconstruction_rmse": 0.0016929705679002735,
+          "rollout": {
+            "long": {
+              "mass_drift": 0.001986085828523048,
+              "operator": 1.0522531349958324e-07,
+              "persistence_rmse": 0.925665921635098,
+              "relative_l2": 0.01832760332359208,
+              "rmse": 0.010681080424951183
+            },
+            "medium": {
+              "mass_drift": 0.0004292389308425805,
+              "operator": 2.0716779166226237e-07,
+              "persistence_rmse": 0.29228677848974866,
+              "relative_l2": 0.002446700275565187,
+              "rmse": 0.0015914353360939357
+            },
+            "short": {
+              "mass_drift": 0.00018363788758001142,
+              "operator": 1.9768510305261266e-06,
+              "persistence_rmse": 0.031891308517919645,
+              "relative_l2": 0.002088564784369535,
+              "rmse": 0.0013793060400833685
+            }
+          },
+          "spectral_abscissa": -0.002293818164616823,
+          "target_min_dimension_std": 0.29048842191696167,
+          "target_used_for_rollout": false
+        }
+      },
+      "pair_contract": {
+        "configs_match_except_jepa_and_tags": true,
+        "same_data_fingerprint": true,
+        "same_inference_parameter_count": true,
+        "same_split_manifest": true,
+        "same_trainable_parameter_count": true,
+        "same_v0_5_initialization": true
+      },
+      "pass": true,
+      "runs": {
+        "control": "runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed53",
+        "jepa": "runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed53"
+      },
+      "training": {
+        "control": {
+          "best_validation_epoch": 8,
+          "best_validation_rollout": 1.1085744439956865e-05,
+          "data_fingerprint": "sha256:e308106fb8ee24db0ead88d3830963d0f3ac0acaf2d5dd6d55809d2f49eb54b2",
+          "device": "cuda",
+          "elapsed_seconds": 1921.382536,
+          "ema_update_count": 8925,
+          "epochs": 75,
+          "final_jepa_loss": 0.0,
+          "final_total_loss": 0.0001366205473748287,
+          "finite": true,
+          "git_commit": "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a",
+          "initial_total_loss": 0.027035558526735278,
+          "mean_samples_per_second": 154.18617685743362,
+          "optimizer_ema_counts_match": true,
+          "optimizer_update_step": 8925,
+          "parameter_count_inference": 9671593,
+          "peak_gpu_memory_mib": 2756.24951171875,
+          "precision": "fp32",
+          "target_in_optimizer": false,
+          "trainable_parameter_count": 9671593,
+          "v0_5_initialization": "v05-final-20260814-physics-seed53"
+        },
+        "jepa": {
+          "best_validation_epoch": 51,
+          "best_validation_rollout": 8.422477323966589e-06,
+          "data_fingerprint": "sha256:e308106fb8ee24db0ead88d3830963d0f3ac0acaf2d5dd6d55809d2f49eb54b2",
+          "device": "cuda",
+          "elapsed_seconds": 2291.204343,
+          "ema_update_count": 8925,
+          "epochs": 75,
+          "final_jepa_loss": 1.262409972751672e-05,
+          "final_total_loss": 0.00022213364403575372,
+          "finite": true,
+          "git_commit": "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a",
+          "initial_total_loss": 0.027620891231575996,
+          "mean_samples_per_second": 128.2405465655864,
+          "optimizer_ema_counts_match": true,
+          "optimizer_update_step": 8925,
+          "parameter_count_inference": 9671593,
+          "peak_gpu_memory_mib": 2833.72802734375,
+          "precision": "fp32",
+          "target_in_optimizer": false,
+          "trainable_parameter_count": 9671593,
+          "v0_5_initialization": "v05-final-20260814-physics-seed53"
+        }
+      }
+    },
+    "59": {
+      "comparison": {
+        "gates": {
+          "long_rollout_noninferiority": true,
+          "mass_noninferiority": true,
+          "no_collapse": true,
+          "operator_noninferiority": true,
+          "target_not_in_rollout": true
+        },
+        "limits": {
+          "long_rmse_ratio": 1.05,
+          "mass_drift": 0.01,
+          "operator": 0.0001
+        },
+        "pass": true,
+        "ratios": {
+          "long_rmse": 0.36287355522360476,
+          "mass": 4.9269415971578825,
+          "operator": 0.11972552901385354
+        }
+      },
+      "evaluation": {
+        "control": {
+          "collapse_threshold": 0.02,
+          "decay_relative_error": 0.19444787502288813,
+          "frequency_relative_error": 0.0030401945114135374,
+          "gates": {
+            "beats_persistence_all_horizons": true,
+            "decay": true,
+            "finite_evaluation": true,
+            "finite_training": true,
+            "frequency": true,
+            "mass_all_horizons": true,
+            "no_collapse": true,
+            "operator_all_horizons": true,
+            "optimizer_ema_counts_match": true,
+            "stability": true,
+            "target_not_in_optimizer": true,
+            "target_not_in_rollout": true
+          },
+          "near_identity": {
+            "large": {
+              "dt": 0.045973584055900574,
+              "relative_frobenius": 0.028761770576238632
+            },
+            "median": {
+              "dt": 0.040328025817871094,
+              "relative_frobenius": 0.025239456444978714
+            },
+            "small": {
+              "dt": 0.03402426466345787,
+              "relative_frobenius": 0.0213032066822052
+            }
+          },
+          "online_min_dimension_std": 0.6875141859054565,
+          "online_target_latent_distance": 0.04447834938764572,
+          "online_target_parameter_distance": 0.08449158072471619,
+          "pass": true,
+          "reconstruction_rmse": 0.0030776457084963718,
+          "rollout": {
+            "long": {
+              "mass_drift": 0.0007386106056704497,
+              "operator": 2.8163118454611117e-07,
+              "persistence_rmse": 0.9160465664333768,
+              "relative_l2": 0.028521431816948786,
+              "rmse": 0.016628641531699233
+            },
+            "medium": {
+              "mass_drift": 0.0004935071467318469,
+              "operator": 6.672021489369703e-07,
+              "persistence_rmse": 0.2938987331257926,
+              "relative_l2": 0.004129771893430088,
+              "rmse": 0.0026896772906184196
+            },
+            "short": {
+              "mass_drift": 0.00043999875682250905,
+              "operator": 6.766378242496608e-06,
+              "persistence_rmse": 0.030443714517686103,
+              "relative_l2": 0.0038367480350037417,
+              "rmse": 0.002563167790261408
+            }
+          },
+          "spectral_abscissa": -0.00030826206784695387,
+          "target_min_dimension_std": 0.7096429467201233,
+          "target_used_for_rollout": false
+        },
+        "jepa": {
+          "collapse_threshold": 0.02,
+          "decay_relative_error": 0.074150800704956,
+          "frequency_relative_error": 0.0011962254842122026,
+          "gates": {
+            "beats_persistence_all_horizons": true,
+            "decay": true,
+            "finite_evaluation": true,
+            "finite_training": true,
+            "frequency": true,
+            "mass_all_horizons": true,
+            "no_collapse": true,
+            "operator_all_horizons": true,
+            "optimizer_ema_counts_match": true,
+            "stability": true,
+            "target_not_in_optimizer": true,
+            "target_not_in_rollout": true
+          },
+          "near_identity": {
+            "large": {
+              "dt": 0.045973584055900574,
+              "relative_frobenius": 0.028926366940140724
+            },
+            "median": {
+              "dt": 0.040328025817871094,
+              "relative_frobenius": 0.025382820516824722
+            },
+            "small": {
+              "dt": 0.03402426466345787,
+              "relative_frobenius": 0.021423200145363808
+            }
+          },
+          "online_min_dimension_std": 0.21375784277915955,
+          "online_target_latent_distance": 0.004090046510100365,
+          "online_target_parameter_distance": 0.048146191984415054,
+          "pass": true,
+          "reconstruction_rmse": 0.0007989498359772066,
+          "rollout": {
+            "long": {
+              "mass_drift": 0.003639091317179716,
+              "operator": 3.371844255658137e-08,
+              "persistence_rmse": 0.9160465664333768,
+              "relative_l2": 0.010405002989702754,
+              "rmse": 0.006034094271146589
+            },
+            "medium": {
+              "mass_drift": 0.0007974821378916709,
+              "operator": 5.885200790898024e-08,
+              "persistence_rmse": 0.2938987331257926,
+              "relative_l2": 0.001758759129895932,
+              "rmse": 0.0011408133561619455
+            },
+            "short": {
+              "mass_drift": 0.00026262166001187224,
+              "operator": 5.380935487803779e-07,
+              "persistence_rmse": 0.030443714517686103,
+              "relative_l2": 0.0010011107887193146,
+              "rmse": 0.0006686434143274608
+            }
+          },
+          "spectral_abscissa": -0.0067773135378956795,
+          "target_min_dimension_std": 0.2130875587463379,
+          "target_used_for_rollout": false
+        }
+      },
+      "pair_contract": {
+        "configs_match_except_jepa_and_tags": true,
+        "same_data_fingerprint": true,
+        "same_inference_parameter_count": true,
+        "same_split_manifest": true,
+        "same_trainable_parameter_count": true,
+        "same_v0_5_initialization": true
+      },
+      "pass": true,
+      "runs": {
+        "control": "runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed59",
+        "jepa": "runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed59"
+      },
+      "training": {
+        "control": {
+          "best_validation_epoch": 4,
+          "best_validation_rollout": 1.5299394016481182e-05,
+          "data_fingerprint": "sha256:8fb25c9b41a7d39a3c4d5b505f2fed5ca3009f765cde5f6faf9b18a4c168f50e",
+          "device": "cuda",
+          "elapsed_seconds": 1955.806334,
+          "ema_update_count": 8925,
+          "epochs": 75,
+          "final_jepa_loss": 0.0,
+          "final_total_loss": 0.00025613859941672886,
+          "finite": true,
+          "git_commit": "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a",
+          "initial_total_loss": 0.021279666405685477,
+          "mean_samples_per_second": 151.11618840454696,
+          "optimizer_ema_counts_match": true,
+          "optimizer_update_step": 8925,
+          "parameter_count_inference": 9671593,
+          "peak_gpu_memory_mib": 2756.24951171875,
+          "precision": "fp32",
+          "target_in_optimizer": false,
+          "trainable_parameter_count": 9671593,
+          "v0_5_initialization": "v05-final-20260814-physics-seed59"
+        },
+        "jepa": {
+          "best_validation_epoch": 72,
+          "best_validation_rollout": 4.288405564996841e-06,
+          "data_fingerprint": "sha256:8fb25c9b41a7d39a3c4d5b505f2fed5ca3009f765cde5f6faf9b18a4c168f50e",
+          "device": "cuda",
+          "elapsed_seconds": 2344.469988,
+          "ema_update_count": 8925,
+          "epochs": 75,
+          "final_jepa_loss": 3.0520745573835847e-06,
+          "final_total_loss": 6.218862662242144e-05,
+          "finite": true,
+          "git_commit": "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a",
+          "initial_total_loss": 0.02240482477809083,
+          "mean_samples_per_second": 125.08967500144585,
+          "optimizer_ema_counts_match": true,
+          "optimizer_update_step": 8925,
+          "parameter_count_inference": 9671593,
+          "peak_gpu_memory_mib": 2833.72802734375,
+          "precision": "fp32",
+          "target_in_optimizer": false,
+          "trainable_parameter_count": 9671593,
+          "v0_5_initialization": "v05-final-20260814-physics-seed59"
+        }
+      }
+    }
+  },
+  "review_date": "2026-08-16",
+  "review_findings": {
+    "long_rollout_improved_every_seed": true,
+    "mass_improved_every_seed": false,
+    "mass_remains_within_absolute_contract": true,
+    "operator_improved_every_seed": true,
+    "target_is_training_only": true
+  },
+  "schema": "v0.6-scientific-review-1",
+  "scientific_acceptance": "PASS_AFTER_REVIEW",
+  "scope": "2D periodic constant-coefficient single-Fourier-mode advection-diffusion",
+  "seeds": [
+    47,
+    53,
+    59
+  ],
+  "thresholds": {
+    "decay_relative_error": 0.2,
+    "frequency_relative_error": 0.05,
+    "latent_min_std": 0.02,
+    "long_rollout_relative_degradation": 0.05,
+    "operator_mse": 0.0001,
+    "physics_relative_degradation": 0.1,
+    "relative_mass_drift": 0.01,
+    "spectral_abscissa": 0.001
+  },
+  "training_commits": [
+    "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a"
+  ],
+  "validation_id": "v06-final-20260816T030842Z"
+}

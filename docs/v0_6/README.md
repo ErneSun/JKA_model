@@ -6,6 +6,7 @@ continuous Koopman generator, decoder, data split, normalizer, and complete V0.5
 remain the baseline. No attention, residual state, action/control input, extra predictor,
 masking pipeline, or latent normalization was added.
 
-Current status: local CPU implementation `PASS`; GPU validation `NOT RUN`; scientific
-acceptance `PENDING_GPU`. See [status.md](status.md) and the remote workflow under
-`gpu_validation/v0_6/`.
+Current status: local CPU implementation `PASS`; GPU validation `PASS`; scientific
+acceptance `PASS_AFTER_REVIEW` within the registered reduced analytical single-mode PDE
+scope. See [status.md](status.md) and the final review under
+`gpu_validation/v0_6/results/v06-final-20260816T030842Z/`.

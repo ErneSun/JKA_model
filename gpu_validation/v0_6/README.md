@@ -2,7 +2,8 @@
 
 This package calls canonical `train_v0_6()` and `evaluate_v0_6()`; it contains no
 copied model or loss implementation. Raw runs/checkpoints stay under ignored `runs/`.
-Compact summaries are written to `gpu_validation/v0_6/results/<validation-id>/`.
+Compact summaries and complete automated Markdown/JSON reviews are written to
+`gpu_validation/v0_6/results/<validation-id>/`.
 
 Prerequisites: the validated V0.5 seed-47/53/59 runs and checkpoints must exist below
 `runs/v0_5/gpu/`, and the current commit must be installed in `.venv`.

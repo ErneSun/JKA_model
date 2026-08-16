@@ -11,5 +11,5 @@
 - [x] Add collapse, tracking, spectrum and near-identity diagnostics.
 - [x] Add matched no-JEPA and three-seed GPU workflow.
 - [x] Pass local unit/regression tests and end-to-end smoke.
-- [ ] Run remote FP32/AMP and three-seed matched full validation.
-- [ ] Review results and declare final scientific acceptance.
+- [x] Run remote FP32/AMP and three-seed matched full validation.
+- [x] Review results and declare final scientific acceptance within the registered scope.
