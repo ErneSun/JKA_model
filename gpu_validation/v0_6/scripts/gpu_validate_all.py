@@ -7,17 +7,21 @@ import argparse
 import json
 import statistics
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import torch
 
-from gpu_validation.v0_6.scripts.gpu_compare import compare
-from jka_model.config import ProjectConfig, load_config, save_config
-from train.train_v0_6 import load_v0_5_initialization, train_v0_6
-
 ROOT = Path(__file__).resolve().parents[3]
+for import_root in (ROOT, ROOT / "src"):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
+
+from gpu_validation.v0_6.scripts.gpu_compare import compare  # noqa: E402
+from jka_model.config import ProjectConfig, load_config, save_config  # noqa: E402
+from train.train_v0_6 import load_v0_5_initialization, train_v0_6  # noqa: E402
 
 
 def _payload(path: Path) -> dict[str, Any]:

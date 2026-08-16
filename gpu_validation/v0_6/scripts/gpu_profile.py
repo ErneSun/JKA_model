@@ -3,12 +3,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
+from pathlib import Path
 
 import torch
 
-from jka_model.config import load_config
-from train.train_v0_6 import initialize_v0_6_model
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from jka_model.config import load_config  # noqa: E402
+from train.train_v0_6 import initialize_v0_6_model  # noqa: E402
 
 
 def main() -> None:

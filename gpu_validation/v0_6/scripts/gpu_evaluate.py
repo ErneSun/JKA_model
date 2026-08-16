@@ -3,8 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
 
-from eval.evaluate_v0_6 import evaluate_v0_6
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from eval.evaluate_v0_6 import evaluate_v0_6  # noqa: E402
 
 
 def main() -> None:
