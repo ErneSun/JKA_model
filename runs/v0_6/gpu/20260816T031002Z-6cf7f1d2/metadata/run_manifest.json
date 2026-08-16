@@ -1,0 +1,65 @@
+{
+  "architecture_revision": "2.2",
+  "config_hash": "96bf4c1af8e55cf84c1a3b795c585c4c28e883240980b4943383becb81adeddc",
+  "data_fingerprint": "sha256:3b54590b7535e4b8351a3b0774094394bba07e1499ea9a48833036ec0fda995e",
+  "device": "cuda",
+  "ema_update_count": 6,
+  "end_time": "2026-08-16T03:10:03.069355+00:00",
+  "git_branch": "gpu_validation",
+  "git_commit": "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a",
+  "global_step": 6,
+  "gpu_validation": "MEASURED_NOT_REVIEWED",
+  "near_identity": {
+    "large": {
+      "dt": 0.05493497475981712,
+      "relative_frobenius": 0.005600123666226864
+    },
+    "median": {
+      "dt": 0.049791377037763596,
+      "relative_frobenius": 0.005076785106211901
+    },
+    "small": {
+      "dt": 0.04505210742354393,
+      "relative_frobenius": 0.0045944033190608025
+    }
+  },
+  "optimizer_update_step": 6,
+  "parameter_count_inference": 73013,
+  "parameter_count_total": 77609,
+  "precision": "amp_fp16",
+  "project_phase": "v0.6",
+  "project_version": "0.6.0",
+  "python": "3.13.14",
+  "run_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/20260816T031002Z-6cf7f1d2",
+  "run_id": "20260816T031002Z-6cf7f1d2",
+  "seed": 43,
+  "split_manifest": {
+    "ratios": [
+      0.67,
+      0.17,
+      0.16
+    ],
+    "seed": 43,
+    "test": [
+      "advection-diffusion-2d-0000"
+    ],
+    "train": [
+      "advection-diffusion-2d-0006",
+      "advection-diffusion-2d-0008",
+      "advection-diffusion-2d-0007",
+      "advection-diffusion-2d-0002",
+      "advection-diffusion-2d-0003",
+      "advection-diffusion-2d-0001"
+    ],
+    "validation": [
+      "advection-diffusion-2d-0005",
+      "advection-diffusion-2d-0004"
+    ]
+  },
+  "start_time": "2026-08-16T03:10:02.685546+00:00",
+  "target_in_optimizer": false,
+  "torch": "2.11.0+cu128",
+  "train_stage": "jepa",
+  "trainable_parameter_count": 73013,
+  "v0_5_initialization": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/20260816T030959Z-3d3e2903/checkpoints/best_forecast.pt"
+}

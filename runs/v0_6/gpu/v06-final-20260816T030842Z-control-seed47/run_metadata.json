@@ -1,0 +1,10 @@
+{
+  "architecture_revision": "2.2",
+  "config_hash": "ebb7b05cf046b205b8638d4f5da07e8d1142ba05b7c7e2a5bdbd592cf31a1425",
+  "git_commit": "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a",
+  "project_version": "0.6.0",
+  "run_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed47",
+  "run_id": "v06-final-20260816T030842Z-control-seed47",
+  "seed": 47,
+  "train_stage": "jepa"
+}

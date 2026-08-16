@@ -1,0 +1,93 @@
+{
+  "automated_gates": "PASS",
+  "comparisons": {
+    "47": {
+      "gates": {
+        "long_rollout_noninferiority": true,
+        "mass_noninferiority": true,
+        "no_collapse": true,
+        "operator_noninferiority": true,
+        "target_not_in_rollout": true
+      },
+      "limits": {
+        "long_rmse_ratio": 1.05,
+        "mass_drift": 0.01,
+        "operator": 0.0001
+      },
+      "pass": true,
+      "ratios": {
+        "long_rmse": 0.9846432571512821,
+        "mass": 0.6104399172610064,
+        "operator": 0.8582373899141172
+      }
+    },
+    "53": {
+      "gates": {
+        "long_rollout_noninferiority": true,
+        "mass_noninferiority": true,
+        "no_collapse": true,
+        "operator_noninferiority": true,
+        "target_not_in_rollout": true
+      },
+      "limits": {
+        "long_rmse_ratio": 1.05,
+        "mass_drift": 0.01,
+        "operator": 0.0001
+      },
+      "pass": true,
+      "ratios": {
+        "long_rmse": 0.7957822482802409,
+        "mass": 1.730656331850754,
+        "operator": 0.5678852998666665
+      }
+    },
+    "59": {
+      "gates": {
+        "long_rollout_noninferiority": true,
+        "mass_noninferiority": true,
+        "no_collapse": true,
+        "operator_noninferiority": true,
+        "target_not_in_rollout": true
+      },
+      "limits": {
+        "long_rmse_ratio": 1.05,
+        "mass_drift": 0.01,
+        "operator": 0.0001
+      },
+      "pass": true,
+      "ratios": {
+        "long_rmse": 0.36287355522360476,
+        "mass": 4.9269415971578825,
+        "operator": 0.11972552901385354
+      }
+    }
+  },
+  "gpu_validation": "MEASURED_PASS_PENDING_REVIEW",
+  "implementation": "PASS",
+  "long_rmse_ratio_mean": 0.714433020218376,
+  "long_rmse_ratio_std": 0.3187674124475464,
+  "runs": {
+    "47": {
+      "control": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed47",
+      "jepa": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed47",
+      "v0_5_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed47/checkpoints/best_forecast_post_warmup.pt"
+    },
+    "53": {
+      "control": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed53",
+      "jepa": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed53",
+      "v0_5_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed53/checkpoints/best_forecast_post_warmup.pt"
+    },
+    "59": {
+      "control": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed59",
+      "jepa": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-jepa-seed59",
+      "v0_5_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed59/checkpoints/best_forecast_post_warmup.pt"
+    }
+  },
+  "scientific_acceptance": "PENDING_REVIEW",
+  "seeds": [
+    47,
+    53,
+    59
+  ],
+  "validation_id": "v06-final-20260816T030842Z"
+}

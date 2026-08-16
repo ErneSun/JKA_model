@@ -1,0 +1,111 @@
+{
+  "ablation_constraint_degradation_threshold": 0.1,
+  "ablation_skill_degradation_threshold": 0.05,
+  "checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/20260816T031002Z-6cf7f1d2/checkpoints/best_forecast_post_warmup.pt",
+  "collapse_gate": false,
+  "collapse_threshold": 0.02,
+  "decay_relative_error": 0.42161656916141516,
+  "decay_threshold": 0.2,
+  "device": "cuda",
+  "ema_state": {
+    "config": {
+      "end_tau": 1.0,
+      "schedule": "linear",
+      "start_tau": 0.996
+    },
+    "current_tau": 1.0,
+    "total_updates": 6,
+    "update_count": 6
+  },
+  "finite": true,
+  "frequency_relative_error": 0.9239114485681057,
+  "frequency_threshold": 0.05,
+  "inference_modules": [
+    "online_encoder",
+    "koopman_core",
+    "training_decoder"
+  ],
+  "jepa_enabled": true,
+  "latent_max_std": 0.0010375215206295252,
+  "latent_min_std": 0.0008856404456309974,
+  "learned_angular_frequency": 0.09130626171827316,
+  "learned_decay_rate": 0.05783834308385849,
+  "learned_frequency_hz": 0.014531842887705468,
+  "near_identity": {
+    "large": {
+      "dt": 0.05480782315135002,
+      "relative_frobenius": 0.005587188061326742
+    },
+    "median": {
+      "dt": 0.050135932862758636,
+      "relative_frobenius": 0.0051118358969688416
+    },
+    "small": {
+      "dt": 0.04652762413024902,
+      "relative_frobenius": 0.004744595382362604
+    }
+  },
+  "operator_mse_threshold": 0.0001,
+  "optimizer_update_step": 6,
+  "phase": "v0.6",
+  "reconstruction_rmse": 0.5174686908721924,
+  "relative_mass_drift_threshold": 0.01,
+  "rollout": {
+    "long": {
+      "mass_drift": 0.0013679993571713567,
+      "operator": 0.02650667540729046,
+      "persistence_rmse": 0.18800710141658783,
+      "relative_l2": 0.9991589188575745,
+      "rmse": 0.5036953091621399
+    },
+    "medium": {
+      "mass_drift": 0.0013679676922038198,
+      "operator": 0.06626668572425842,
+      "persistence_rmse": 0.08392365276813507,
+      "relative_l2": 0.998954176902771,
+      "rmse": 0.511159360408783
+    },
+    "short": {
+      "mass_drift": 0.0013679516268894076,
+      "operator": 0.2650667428970337,
+      "persistence_rmse": 0.03192739561200142,
+      "relative_l2": 0.9988710880279541,
+      "rmse": 0.5148463845252991
+    }
+  },
+  "scientific_acceptance": "PENDING_GPU",
+  "selected_eigenvalue": [
+    -0.05783834308385849,
+    0.09130626171827316
+  ],
+  "spectral_abscissa": -0.04647011682391167,
+  "spectral_abscissa_threshold": 0.001,
+  "split": "test",
+  "target_used_for_rollout": false,
+  "tracking": {
+    "latent_distance": 0.1511450558900833,
+    "online": {
+      "covariance_condition": 3665017.5,
+      "max_dimension_std": 0.0010375215206295252,
+      "mean": 0.001738177496008575,
+      "mean_norm": 0.012445694766938686,
+      "min_dimension_std": 0.0008856404456309974,
+      "std": 0.006016569212079048
+    },
+    "parameter_distance": 0.07901500165462494,
+    "target": {
+      "covariance_condition": 6370039.5,
+      "max_dimension_std": 0.0014522168785333633,
+      "mean": 0.002412560395896435,
+      "mean_norm": 0.011970238760113716,
+      "min_dimension_std": 0.00104902230668813,
+      "std": 0.00553180743008852
+    }
+  },
+  "trajectory_ids": [
+    "advection-diffusion-2d-0000"
+  ],
+  "true_angular_frequency": 1.2,
+  "true_decay_rate": 0.1,
+  "true_frequency_hz": 0.1909859317102744
+}

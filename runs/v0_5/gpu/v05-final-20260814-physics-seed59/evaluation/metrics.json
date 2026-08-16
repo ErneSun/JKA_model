@@ -1,0 +1,64 @@
+{
+  "ablation_constraint_degradation_threshold": 0.1,
+  "ablation_skill_degradation_threshold": 0.05,
+  "checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed59/checkpoints/best_forecast_post_warmup.pt",
+  "decay_relative_error": 0.15922600030899042,
+  "decay_threshold": 0.2,
+  "device": "cuda",
+  "finite": true,
+  "frequency_relative_error": 0.0024784207344054807,
+  "frequency_threshold": 0.05,
+  "latent_max_std": 0.6695785522460938,
+  "latent_min_std": 0.48157256841659546,
+  "learned_angular_frequency": 1.1970258951187134,
+  "learned_decay_rate": 0.11592260003089905,
+  "learned_frequency_hz": 0.1905125882171439,
+  "operator_mse_threshold": 0.0001,
+  "reconstruction_rmse": 0.0032672591041773558,
+  "relative_mass_drift_threshold": 0.01,
+  "rollout": {
+    "long": {
+      "mass_drift": 0.0007478071978160491,
+      "operator": 2.449300772077044e-07,
+      "persistence_rmse": 0.9160465664333768,
+      "relative_l2": 0.02279801956481404,
+      "rmse": 0.013298678315348096
+    },
+    "medium": {
+      "mass_drift": 0.0006137209970297085,
+      "operator": 7.186642265979673e-07,
+      "persistence_rmse": 0.2938987331257926,
+      "relative_l2": 0.003166621732008126,
+      "rmse": 0.0020860858753116596
+    },
+    "short": {
+      "mass_drift": 0.0005717437517079008,
+      "operator": 8.71101721915895e-06,
+      "persistence_rmse": 0.030443714517686103,
+      "relative_l2": 0.004210426265166866,
+      "rmse": 0.002849983064354294
+    }
+  },
+  "scientific_acceptance": "MEASURED_NOT_AUTOMATICALLY_ACCEPTED",
+  "selected_eigenvalue": [
+    -0.11592260003089905,
+    1.1970258951187134
+  ],
+  "spectral_abscissa": -9.620861237635836e-05,
+  "spectral_abscissa_threshold": 0.001,
+  "split": "test",
+  "trajectory_ids": [
+    "advection-diffusion-2d-0019",
+    "advection-diffusion-2d-0054",
+    "advection-diffusion-2d-0008",
+    "advection-diffusion-2d-0001",
+    "advection-diffusion-2d-0029",
+    "advection-diffusion-2d-0041",
+    "advection-diffusion-2d-0059",
+    "advection-diffusion-2d-0005",
+    "advection-diffusion-2d-0028"
+  ],
+  "true_angular_frequency": 1.2,
+  "true_decay_rate": 0.1,
+  "true_frequency_hz": 0.1909859317102744
+}

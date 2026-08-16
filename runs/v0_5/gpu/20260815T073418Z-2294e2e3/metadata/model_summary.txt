@@ -1,0 +1,29 @@
+FieldKoopmanAutoencoder(
+  (encoder): KoopmanEncoder2D(
+    (network): Sequential(
+      (0): Conv2d(1, 8, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), padding_mode=circular)
+      (1): SiLU()
+      (2): Conv2d(8, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), padding_mode=circular)
+      (3): SiLU()
+      (4): Conv2d(16, 16, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), padding_mode=circular)
+      (5): SiLU()
+    )
+    (projection): Linear(in_features=256, out_features=4, bias=True)
+  )
+  (core): ContinuousKoopmanCore()
+  (decoder): TrainingDecoder2D(
+    (lift): Sequential(
+      (0): Linear(in_features=4, out_features=32, bias=True)
+      (1): SiLU()
+      (2): Linear(in_features=32, out_features=2048, bias=True)
+    )
+    (refine): Sequential(
+      (0): Conv2d(8, 8, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), padding_mode=circular)
+      (1): SiLU()
+      (2): Conv2d(8, 1, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), padding_mode=circular)
+    )
+  )
+)
+
+parameters=73013
+trainable=73013

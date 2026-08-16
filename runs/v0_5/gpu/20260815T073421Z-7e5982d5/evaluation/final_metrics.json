@@ -1,0 +1,56 @@
+{
+  "ablation_constraint_degradation_threshold": 0.1,
+  "ablation_skill_degradation_threshold": 0.05,
+  "checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/20260815T073421Z-7e5982d5/checkpoints/best_forecast.pt",
+  "decay_relative_error": 0.7781510464847088,
+  "decay_threshold": 0.2,
+  "device": "cuda",
+  "finite": true,
+  "frequency_relative_error": 0.9373609821001688,
+  "frequency_threshold": 0.05,
+  "latent_max_std": 0.0014499947428703308,
+  "latent_min_std": 0.0010477257892489433,
+  "learned_angular_frequency": 0.07516682147979736,
+  "learned_decay_rate": 0.02218489535152912,
+  "learned_frequency_hz": 0.011963171195015805,
+  "operator_mse_threshold": 0.0001,
+  "reconstruction_rmse": 0.5178954601287842,
+  "relative_mass_drift_threshold": 0.01,
+  "rollout": {
+    "long": {
+      "mass_drift": 0.00016384199261665344,
+      "operator": 0.02654847502708435,
+      "persistence_rmse": 0.18800710141658783,
+      "relative_l2": 0.9997420907020569,
+      "rmse": 0.5039893388748169
+    },
+    "medium": {
+      "mass_drift": 0.00016384143964387476,
+      "operator": 0.06637118756771088,
+      "persistence_rmse": 0.08392365276813507,
+      "relative_l2": 0.9996823668479919,
+      "rmse": 0.5115319490432739
+    },
+    "short": {
+      "mass_drift": 0.00016384109039790928,
+      "operator": 0.2654847502708435,
+      "persistence_rmse": 0.03192739561200142,
+      "relative_l2": 0.9996584057807922,
+      "rmse": 0.5152521729469299
+    }
+  },
+  "scientific_acceptance": "MEASURED_NOT_AUTOMATICALLY_ACCEPTED",
+  "selected_eigenvalue": [
+    -0.02218489535152912,
+    0.07516682147979736
+  ],
+  "spectral_abscissa": -0.02218489535152912,
+  "spectral_abscissa_threshold": 0.001,
+  "split": "test",
+  "trajectory_ids": [
+    "advection-diffusion-2d-0000"
+  ],
+  "true_angular_frequency": 1.2,
+  "true_decay_rate": 0.1,
+  "true_frequency_hz": 0.1909859317102744
+}

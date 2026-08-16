@@ -1,0 +1,63 @@
+{
+  "amp_mode": "fp32",
+  "architecture_revision": "2.2",
+  "completed_epochs": 2,
+  "config_hash": "009b3f31ce3697ac0a12a21286d071100da8489dea5314ad668784d2ce27b6b8",
+  "cuda_version": "12.8",
+  "data_fingerprint": "sha256:c7327e4f9c0ca667999d96abe9d1448cc9892017abae95ad4923478437fcb0ed",
+  "device": "cuda",
+  "end_time": "2026-08-16T03:09:55.825520+00:00",
+  "environment": {
+    "cuda_device_count": 1,
+    "cuda_version": "12.8",
+    "device": "cuda",
+    "gpu_model": "NVIDIA GeForce RTX 5080",
+    "gpu_total_memory": 16585523200,
+    "precision": "fp32",
+    "python": "3.13.14",
+    "pytorch": "2.11.0+cu128"
+  },
+  "git_branch": "gpu_validation",
+  "git_commit": "c49f0eefe09e9c8e7ecbda4ba97f31f1abe8fa2a",
+  "git_dirty": false,
+  "global_step": 6,
+  "gpu_count": 1,
+  "gpu_model": "NVIDIA GeForce RTX 5080",
+  "gpu_total_memory": 16585523200,
+  "gpu_validation": "MEASURED_NOT_REVIEWED",
+  "parameter_count": 12345,
+  "peak_gpu_memory": 20419072,
+  "precision": "fp32",
+  "project_version": "0.6.0",
+  "python": "3.13.14",
+  "run_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/20260816T030953Z-4ff09c57",
+  "run_id": "20260816T030953Z-4ff09c57",
+  "seed": 29,
+  "split_manifest": {
+    "ratios": [
+      0.67,
+      0.17,
+      0.16
+    ],
+    "seed": 29,
+    "test": [
+      "advection-diffusion-2d-0008"
+    ],
+    "train": [
+      "advection-diffusion-2d-0003",
+      "advection-diffusion-2d-0007",
+      "advection-diffusion-2d-0000",
+      "advection-diffusion-2d-0006",
+      "advection-diffusion-2d-0005",
+      "advection-diffusion-2d-0004"
+    ],
+    "validation": [
+      "advection-diffusion-2d-0002",
+      "advection-diffusion-2d-0001"
+    ]
+  },
+  "start_time": "2026-08-16T03:09:52.633718+00:00",
+  "torch": "2.11.0+cu128",
+  "train_stage": "koopman",
+  "trainable_parameter_count": 12345
+}

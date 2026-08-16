@@ -1,0 +1,10 @@
+{
+  "architecture_revision": "2.2",
+  "config_hash": "64f0e878c95f45820ed0f560a91bf32084b0213918be8e0b10ad8c0c7b6df1f8",
+  "git_commit": "976de084c540e28a21411614ed0c854291ed491c",
+  "project_version": "0.5.0",
+  "run_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/20260815T073421Z-7e5982d5",
+  "run_id": "20260815T073421Z-7e5982d5",
+  "seed": 43,
+  "train_stage": "koopman"
+}

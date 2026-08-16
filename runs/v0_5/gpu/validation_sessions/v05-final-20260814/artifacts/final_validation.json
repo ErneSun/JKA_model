@@ -1,0 +1,375 @@
+{
+  "ablation_constraint_degradation_threshold": 0.1,
+  "ablation_skill_degradation_threshold": 0.05,
+  "all_seed_gates_pass": true,
+  "baseline_reuse": {
+    "requested_result_id": "v05-final-20260813",
+    "retrained_no_physics_seeds": [
+      47,
+      53,
+      59
+    ],
+    "reused_seeds": []
+  },
+  "gates_by_seed": {
+    "47": {
+      "decay": true,
+      "frequency": true,
+      "long_beats_persistence": true,
+      "long_mass": true,
+      "long_operator": true,
+      "medium_beats_persistence": true,
+      "medium_mass": true,
+      "medium_operator": true,
+      "reconstruction": true,
+      "short_beats_persistence": true,
+      "short_mass": true,
+      "short_operator": true,
+      "stability": true
+    },
+    "53": {
+      "decay": true,
+      "frequency": true,
+      "long_beats_persistence": true,
+      "long_mass": true,
+      "long_operator": true,
+      "medium_beats_persistence": true,
+      "medium_mass": true,
+      "medium_operator": true,
+      "reconstruction": true,
+      "short_beats_persistence": true,
+      "short_mass": true,
+      "short_operator": true,
+      "stability": true
+    },
+    "59": {
+      "decay": true,
+      "frequency": true,
+      "long_beats_persistence": true,
+      "long_mass": true,
+      "long_operator": true,
+      "medium_beats_persistence": true,
+      "medium_mass": true,
+      "medium_operator": true,
+      "reconstruction": true,
+      "short_beats_persistence": true,
+      "short_mass": true,
+      "short_operator": true,
+      "stability": true
+    }
+  },
+  "generated_at": "2026-08-15T14:03:14.139854+00:00",
+  "overall_acceptance": "PENDING_RESEARCHER_REVIEW",
+  "physics_ablation_consistent": true,
+  "physics_ablation_noninferior": true,
+  "physics_aggregate": {
+    "decay_relative_error": {
+      "max": 0.16594150662422175,
+      "mean": 0.15892579158147171,
+      "median": 0.15922600030899042,
+      "min": 0.15160986781120295,
+      "std": 0.005854716715422164
+    },
+    "forecast": {
+      "long": {
+        "mass_drift": {
+          "max": 0.0007758158284963833,
+          "mean": 0.0007364347380913656,
+          "median": 0.0007478071978160491,
+          "min": 0.0006856811879616645,
+          "std": 3.766574912944033e-05
+        },
+        "operator": {
+          "max": 3.225551649974376e-07,
+          "mean": 2.5325781018005324e-07,
+          "median": 2.449300772077044e-07,
+          "min": 1.9228818833501768e-07,
+          "std": 5.350629031267211e-08
+        },
+        "persistence_rmse": {
+          "max": 1.0331104066636827,
+          "mean": 0.9582742982440525,
+          "median": 0.925665921635098,
+          "min": 0.9160465664333768,
+          "std": 0.05306263808726567
+        },
+        "relative_l2": {
+          "max": 0.023050474002957344,
+          "mean": 0.022610222023946264,
+          "median": 0.02279801956481404,
+          "min": 0.02198217250406742,
+          "std": 0.0004559005450019412
+        },
+        "rmse": {
+          "max": 0.015123577995432748,
+          "mean": 0.013766685742195006,
+          "median": 0.013298678315348096,
+          "min": 0.012877800915804174,
+          "std": 0.0009747313771955021
+        }
+      },
+      "medium": {
+        "mass_drift": {
+          "max": 0.0006137209970297085,
+          "mean": 0.000590532223685403,
+          "median": 0.0005995664202297727,
+          "min": 0.0005583092537967281,
+          "std": 2.3506422561095386e-05
+        },
+        "operator": {
+          "max": 9.596997756489145e-07,
+          "mean": 7.234572615709988e-07,
+          "median": 7.186642265979673e-07,
+          "min": 4.920077824661146e-07,
+          "std": 1.909645342465708e-07
+        },
+        "persistence_rmse": {
+          "max": 0.332117670112186,
+          "mean": 0.3061010605759091,
+          "median": 0.2938987331257926,
+          "min": 0.29228677848974866,
+          "std": 0.018408287594803365
+        },
+        "relative_l2": {
+          "max": 0.0034099124992887178,
+          "mean": 0.003164174397372537,
+          "median": 0.003166621732008126,
+          "min": 0.0029159889608207676,
+          "std": 0.00020165086585199527
+        },
+        "rmse": {
+          "max": 0.0025051876436918974,
+          "mean": 0.0021704858324180045,
+          "median": 0.0020860858753116596,
+          "min": 0.0019201839782504572,
+          "std": 0.00024617045140125273
+        }
+      },
+      "short": {
+        "mass_drift": {
+          "max": 0.0005717437517079008,
+          "mean": 0.0005414030386385059,
+          "median": 0.0005273628355805866,
+          "min": 0.0005251025286270306,
+          "std": 2.147395940902348e-05
+        },
+        "operator": {
+          "max": 1.180212964552791e-05,
+          "mean": 8.694403748921576e-06,
+          "median": 8.71101721915895e-06,
+          "min": 5.570064382077868e-06,
+          "std": 2.544257110634347e-06
+        },
+        "persistence_rmse": {
+          "max": 0.03339302560521497,
+          "mean": 0.03190934954694024,
+          "median": 0.031891308517919645,
+          "min": 0.030443714517686103,
+          "std": 0.0012041187875513684
+        },
+        "relative_l2": {
+          "max": 0.004458376284067829,
+          "mean": 0.004065437509712798,
+          "median": 0.004210426265166866,
+          "min": 0.003527509979903698,
+          "std": 0.0003936109106407298
+        },
+        "rmse": {
+          "max": 0.0033329002973106173,
+          "mean": 0.0028406878657363083,
+          "median": 0.002849983064354294,
+          "min": 0.002339180235544013,
+          "std": 0.00040573775670775893
+        }
+      }
+    },
+    "frequency_relative_error": {
+      "max": 0.002527594566345178,
+      "mean": 0.0024550755818684524,
+      "median": 0.0024784207344054807,
+      "min": 0.0023592114448546995,
+      "std": 7.069637431038992e-05
+    },
+    "reconstruction_rmse": {
+      "max": 0.0038010397822492653,
+      "mean": 0.0032719066021619017,
+      "median": 0.0032672591041773558,
+      "min": 0.002747420920059085,
+      "std": 0.0004301506527709177
+    },
+    "spectral_abscissa": {
+      "max": -2.335488716198597e-05,
+      "mean": -7.857940666629777e-05,
+      "median": -9.620861237635836e-05,
+      "min": -0.000116174720460549,
+      "std": 3.989128588107919e-05
+    }
+  },
+  "physics_vs_no_physics_constraint_degradation": {
+    "long": {
+      "mass_drift": {
+        "max": 0.04903770596784954,
+        "mean": -0.02558717756915872,
+        "median": 0.04027678466324384,
+        "min": -0.16607602333856952,
+        "std": 0.09940498067582712
+      },
+      "operator": {
+        "max": 0.001299501432880687,
+        "mean": 0.00041116062258576375,
+        "median": 0.00033848851425470145,
+        "min": -0.0004045080793780974,
+        "std": 0.0006975543137582269
+      }
+    },
+    "medium": {
+      "mass_drift": {
+        "max": 0.04564233679250012,
+        "mean": 0.0016319521347651484,
+        "median": 0.02907798965073501,
+        "min": -0.06982447003893968,
+        "std": 0.05097783571617687
+      },
+      "operator": {
+        "max": 0.004292778802058214,
+        "mean": 0.0016330305693709644,
+        "median": 0.0015620047596106212,
+        "min": -0.0009556918535559418,
+        "std": 0.0021432676850936137
+      }
+    },
+    "short": {
+      "mass_drift": {
+        "max": 0.04096688691485421,
+        "mean": 0.006983111700686066,
+        "median": 0.025336050020996485,
+        "min": -0.045353601833792494,
+        "std": 0.037553778799593075
+      },
+      "operator": {
+        "max": 0.051958399025251206,
+        "mean": 0.022479428446752502,
+        "median": 0.024256333088285627,
+        "min": -0.008776446773279323,
+        "std": 0.02482671163782599
+      }
+    }
+  },
+  "physics_vs_no_physics_paired_relative_change": {
+    "long": {
+      "mass_drift": {
+        "max": 2.5108381680877914,
+        "mean": 0.998850721729346,
+        "median": 1.167309888715006,
+        "min": -0.6815958916147598,
+        "std": 1.3087379861513802
+      },
+      "operator": {
+        "max": 0.674697586463539,
+        "mean": 0.22041788061088066,
+        "median": 0.1603593654529509,
+        "min": -0.1738033100838479,
+        "std": 0.3489925613272784
+      },
+      "rmse": {
+        "max": 0.35395539431748524,
+        "mean": 0.08310768786566192,
+        "median": -0.007815577556793622,
+        "min": -0.09681675316370586,
+        "std": 0.1949344545952355
+      }
+    },
+    "medium": {
+      "mass_drift": {
+        "max": 3.18858205533589,
+        "mean": 1.1777704588532727,
+        "median": 0.900411548845943,
+        "min": -0.5556822276220147,
+        "std": 1.541119664157396
+      },
+      "operator": {
+        "max": 0.8093140269920793,
+        "mean": 0.3081240044045458,
+        "median": 0.2777076314414728,
+        "min": -0.16264964521991473,
+        "std": 0.3973849618301526
+      },
+      "rmse": {
+        "max": 0.31405322418606507,
+        "mean": 0.05073536545027977,
+        "median": -0.035189819681905904,
+        "min": -0.12665730815331985,
+        "std": 0.1899013716094336
+      }
+    },
+    "short": {
+      "mass_drift": {
+        "max": 3.4807975427107523,
+        "mean": 1.2710446461332265,
+        "median": 0.7957720734930286,
+        "min": -0.4634356778041013,
+        "std": 1.6449228833355214
+      },
+      "operator": {
+        "max": 0.7864989433786824,
+        "mean": 0.34543271542653425,
+        "median": 0.3859164918855467,
+        "min": -0.1361172889846263,
+        "std": 0.37774275212314723
+      },
+      "rmse": {
+        "max": 0.3175688763483033,
+        "mean": 0.1430971833460842,
+        "median": 0.17775522706977578,
+        "min": -0.06603255337982648,
+        "std": 0.15851056582749998
+      }
+    }
+  },
+  "physics_vs_no_physics_skill_degradation": {
+    "long": {
+      "max": 0.00382694299078516,
+      "mean": 0.0007404323118162148,
+      "median": -0.00011435617025645135,
+      "min": -0.001491289885080064,
+      "std": 0.0022537225120965966
+    },
+    "medium": {
+      "max": 0.0018027627617450191,
+      "mean": 0.00019704183932952254,
+      "median": -0.00025888663620516803,
+      "min": -0.0009527506075512835,
+      "std": 0.0011702183736936184
+    },
+    "short": {
+      "max": 0.024056428813746082,
+      "mean": 0.010999874569963505,
+      "median": 0.014129018006316467,
+      "min": -0.005185823110172039,
+      "std": 0.01214141612771279
+    }
+  },
+  "runs": {
+    "47": {
+      "no_physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-no_physics-seed47",
+      "physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed47"
+    },
+    "53": {
+      "no_physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-no_physics-seed53",
+      "physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed53"
+    },
+    "59": {
+      "no_physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-no_physics-seed59",
+      "physics": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed59"
+    }
+  },
+  "scientific_checkpoint": "best_forecast_post_warmup",
+  "scientific_status": "PENDING_REVIEW",
+  "seeds": [
+    47,
+    53,
+    59
+  ],
+  "validation_id": "v05-final-20260814",
+  "workflow_status": "PASS"
+}

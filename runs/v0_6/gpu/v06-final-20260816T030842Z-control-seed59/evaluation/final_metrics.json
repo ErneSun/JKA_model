@@ -1,0 +1,119 @@
+{
+  "ablation_constraint_degradation_threshold": 0.1,
+  "ablation_skill_degradation_threshold": 0.05,
+  "checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_6/gpu/v06-final-20260816T030842Z-control-seed59/checkpoints/best_forecast_post_warmup.pt",
+  "collapse_gate": true,
+  "collapse_threshold": 0.02,
+  "decay_relative_error": 0.19444787502288813,
+  "decay_threshold": 0.2,
+  "device": "cuda",
+  "ema_state": {
+    "config": {
+      "end_tau": 1.0,
+      "schedule": "linear",
+      "start_tau": 0.996
+    },
+    "current_tau": 0.9998399820708203,
+    "total_updates": 8925,
+    "update_count": 8568
+  },
+  "finite": true,
+  "frequency_relative_error": 0.0030401945114135374,
+  "frequency_threshold": 0.05,
+  "inference_modules": [
+    "online_encoder",
+    "koopman_core",
+    "training_decoder"
+  ],
+  "jepa_enabled": false,
+  "latent_max_std": 1.2175050973892212,
+  "latent_min_std": 0.6875141859054565,
+  "learned_angular_frequency": 1.1963517665863037,
+  "learned_decay_rate": 0.11944478750228882,
+  "learned_frequency_hz": 0.19040529732893163,
+  "near_identity": {
+    "large": {
+      "dt": 0.045973584055900574,
+      "relative_frobenius": 0.028761770576238632
+    },
+    "median": {
+      "dt": 0.040328025817871094,
+      "relative_frobenius": 0.025239456444978714
+    },
+    "small": {
+      "dt": 0.03402426466345787,
+      "relative_frobenius": 0.0213032066822052
+    }
+  },
+  "operator_mse_threshold": 0.0001,
+  "optimizer_update_step": 8568,
+  "phase": "v0.6",
+  "reconstruction_rmse": 0.0030776457084963718,
+  "relative_mass_drift_threshold": 0.01,
+  "rollout": {
+    "long": {
+      "mass_drift": 0.0007386106056704497,
+      "operator": 2.8163118454611117e-07,
+      "persistence_rmse": 0.9160465664333768,
+      "relative_l2": 0.028521431816948786,
+      "rmse": 0.016628641531699233
+    },
+    "medium": {
+      "mass_drift": 0.0004935071467318469,
+      "operator": 6.672021489369703e-07,
+      "persistence_rmse": 0.2938987331257926,
+      "relative_l2": 0.004129771893430088,
+      "rmse": 0.0026896772906184196
+    },
+    "short": {
+      "mass_drift": 0.00043999875682250905,
+      "operator": 6.766378242496608e-06,
+      "persistence_rmse": 0.030443714517686103,
+      "relative_l2": 0.0038367480350037417,
+      "rmse": 0.002563167790261408
+    }
+  },
+  "scientific_acceptance": "PENDING_GPU",
+  "selected_eigenvalue": [
+    -0.11944478750228882,
+    1.1963517665863037
+  ],
+  "spectral_abscissa": -0.00030826206784695387,
+  "spectral_abscissa_threshold": 0.001,
+  "split": "test",
+  "target_used_for_rollout": false,
+  "tracking": {
+    "latent_distance": 0.04447834938764572,
+    "online": {
+      "covariance_condition": 28742962.0,
+      "max_dimension_std": 1.2175050973892212,
+      "mean": 0.08878231793642044,
+      "mean_norm": 2.6809842586517334,
+      "min_dimension_std": 0.6875141859054565,
+      "std": 0.9601219296455383
+    },
+    "parameter_distance": 0.08449158072471619,
+    "target": {
+      "covariance_condition": 359880992.0,
+      "max_dimension_std": 1.255943775177002,
+      "mean": 0.0941319614648819,
+      "mean_norm": 2.7524478435516357,
+      "min_dimension_std": 0.7096429467201233,
+      "std": 0.984616219997406
+    }
+  },
+  "trajectory_ids": [
+    "advection-diffusion-2d-0019",
+    "advection-diffusion-2d-0054",
+    "advection-diffusion-2d-0008",
+    "advection-diffusion-2d-0001",
+    "advection-diffusion-2d-0029",
+    "advection-diffusion-2d-0041",
+    "advection-diffusion-2d-0059",
+    "advection-diffusion-2d-0005",
+    "advection-diffusion-2d-0028"
+  ],
+  "true_angular_frequency": 1.2,
+  "true_decay_rate": 0.1,
+  "true_frequency_hz": 0.1909859317102744
+}

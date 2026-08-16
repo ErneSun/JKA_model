@@ -1,0 +1,37 @@
+{
+  "collapse_gate": true,
+  "near_identity": {
+    "large": {
+      "dt": 0.045973584055900574,
+      "relative_frobenius": 0.028926366940140724
+    },
+    "median": {
+      "dt": 0.040328025817871094,
+      "relative_frobenius": 0.025382820516824722
+    },
+    "small": {
+      "dt": 0.03402426466345787,
+      "relative_frobenius": 0.021423200145363808
+    }
+  },
+  "tracking": {
+    "latent_distance": 0.004090046510100365,
+    "online": {
+      "covariance_condition": 100583880.0,
+      "max_dimension_std": 0.2979106307029724,
+      "mean": 0.006635615136474371,
+      "mean_norm": 0.7012986540794373,
+      "min_dimension_std": 0.21375784277915955,
+      "std": 0.2521013915538788
+    },
+    "parameter_distance": 0.048146191984415054,
+    "target": {
+      "covariance_condition": 9757475.0,
+      "max_dimension_std": 0.2970452308654785,
+      "mean": 0.006640024017542601,
+      "mean_norm": 0.6989555954933167,
+      "min_dimension_std": 0.2130875587463379,
+      "std": 0.2512928545475006
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "cuda_device_count": 1,
+  "cuda_version": "12.8",
+  "device": "cuda",
+  "gpu_model": "NVIDIA GeForce RTX 5080",
+  "gpu_total_memory": 16585523200,
+  "precision": "amp_fp16",
+  "python": "3.13.14",
+  "pytorch": "2.11.0+cu128"
+}

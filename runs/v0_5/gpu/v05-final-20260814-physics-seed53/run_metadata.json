@@ -1,0 +1,10 @@
+{
+  "architecture_revision": "2.2",
+  "config_hash": "3405f58cb09ab8144b287de2d5ef48fc3139dba94a0e6ebe07808bf1615a8cc9",
+  "git_commit": "976de084c540e28a21411614ed0c854291ed491c",
+  "project_version": "0.5.0",
+  "run_dir": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_5/gpu/v05-final-20260814-physics-seed53",
+  "run_id": "v05-final-20260814-physics-seed53",
+  "seed": 53,
+  "train_stage": "koopman"
+}
