@@ -264,28 +264,29 @@ b+A e^{-\gamma t}
 
 ---
 
-## 6. 空间离散与 PhysicsConstraint
+## 6. 谱推进、空间离散与 PhysicsConstraint
 
 这是 V0.5 数学物理上最需要精读的模块。
 
-### 6.1 二阶中心差分
+### 6.1 当前 adapter：精确 Fourier 一步推进
 
 \[
-D_xu_i=
-\frac{u_{i+1}-u_{i-1}}{2\Delta x},
+\widehat u^{n+1}_{k_x,k_y}=
+\exp\left(
+[-\nu(k_x^2+k_y^2)-i(c_xk_x+c_yk_y)]\Delta t
+\right)\widehat u^n_{k_x,k_y}.
 \]
 
-\[
-D_{xx}u_i=
-\frac{u_{i+1}-2u_i+u_{i-1}}{\Delta x^2}.
-\]
+当前周期常系数 advection-diffusion adapter 使用上述 spectral-step consistency。
+二阶中心差分和梯形 residual 仍保留为通用算子与回归测试材料，但不再作为该解析数据集的
+正式 physics loss，因为解析 Fourier 数据代入低阶离散残差本身会产生截断偏差。
 
 需要理解：
 
-- `torch.roll` 如何实现周期边界。
-- `Dx/Dy/Dxx/Dyy` 的 axis 语义。
-- 为什么 reference test 使用 float64。
-- observed order 如何验证理论二阶精度。
+- `torch.fft.fftfreq` 如何构造 endpoint-free 周期网格的波数。
+- advection 对应 Fourier generator 的虚部，diffusion 对应负实部。
+- 为什么该约束与解析数据生成器在离散时间上完全一致。
+- 为什么泛化到非周期、变系数或非线性 PDE 时不能直接沿用该精确传播式。
 
 ### 6.2 质量守恒
 
@@ -295,10 +296,16 @@ M(u)=\sum_{i,j}u_{ij}w_{ij},
 
 \[
 L_{mass}=
-\left(M(\hat u^{n+1})-M(\hat u^n)\right)^2.
+\operatorname{mean}\left[
+\frac{M(\hat u)-M(u_{ref})}
+{\sum |u_{ref}|w+\epsilon}
+\right]^2.
 \]
 
-### 6.3 PDE operator residual
+相对尺度使训练和评估不随区域面积、均值或场幅值任意改变。rollout 中所有未来状态均与
+初始参考质量比较，避免相邻 step 误差累计。
+
+### 6.3 通用有限差分 residual（保留但非当前正式 adapter）
 
 定义：
 
@@ -335,6 +342,8 @@ latent rollout
 
 - [ ] 能复现 `Dx/Dy/Dxx/Dyy` 解析测试。
 - [ ] 能计算 32/64/128 网格的 observed order。
+- [ ] 能推导当前 Fourier step multiplier，并验证解析真值的 penalty 接近 roundoff。
+- [ ] 能解释为何当前 adapter 使用 spectral step、但通用有限差分算子仍应保留。
 - [ ] 能解释 physics 为什么必须在 raw units 中计算。
 - [ ] 能只对 `L_physics` 调用 backward 并检查 encoder/decoder/A 梯度。
 - [ ] 能解释 AMP 下 physics 与 matrix exponential 为什么保持 FP32。
@@ -512,10 +521,10 @@ reports/final_report.md
 
 ### Session 6：PhysicsConstraint
 
-- finite differences
-- grid convergence
-- mass conservation
-- trapezoidal PDE residual
+- exact Fourier step on the current periodic constant-coefficient PDE
+- relative mass conservation
+- finite differences and trapezoidal residual as generic/reference methods
+- discretization consistency between data generator and physics loss
 - physics-only gradients
 
 ### Session 7：架构解耦
@@ -605,13 +614,14 @@ PhysicsConstraint 是物理仪表，trainer 是按固定流程驾驶并记录黑
 
 ### GPU 实验结论
 
-- Commit：
-- GPU：
-- Physics run：
-- No-physics run：
-- Resume equality：
-- Long rollout vs persistence：
-- Frequency relative error：
-- Physics ablation conclusion：
-- Final technical status：
-- Final scientific status：
+- Commit：`976de084c540e28a21411614ed0c854291ed491c`
+- GPU：NVIDIA GeForce RTX 5080，FP32
+- Physics run：seeds `47/53/59`，全部重新训练
+- No-physics run：seeds `47/53/59`，全部重新训练
+- Resume equality：此前完整 GPU workflow 已通过 exact-resume；本轮复用该工程证据
+- Long rollout vs persistence：mean `0.0137667` vs `0.958274`，PASS
+- Frequency relative error：mean `0.2455%`，worst `0.2528%`，PASS
+- Physics ablation conclusion：forecast/constraint non-inferiority PASS；不宣称全指标优于 no-physics
+- Final technical status：PASS
+- Final scientific status：人工审阅后，在 V0.5 当前合同范围内 PASS
+- 详细研究记录：[`V0_5_Koopman_adjustments_and_validation_20260816.md`](V0_5_Koopman_adjustments_and_validation_20260816.md)
