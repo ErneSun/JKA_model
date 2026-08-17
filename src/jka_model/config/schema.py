@@ -1240,6 +1240,7 @@ class ResidualTrainingConfig:
     gradient_clip_norm: float = 1.0
     patience: int = 12
     precision: str = "fp32"
+    initialization_seed: int = 101
 
     def __post_init__(self) -> None:
         if self.epochs < 1 or self.batch_size < 1 or self.learning_rate <= 0:
@@ -1248,6 +1249,8 @@ class ResidualTrainingConfig:
             raise ValueError("invalid V0.7 closure regularization or patience")
         if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
             raise ValueError("V0.7 precision must be fp32, amp_fp16, or amp_bf16")
+        if self.initialization_seed < 0:
+            raise ValueError("V0.7 closure initialization_seed must be non-negative")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1258,6 +1261,7 @@ class ResidualTrainingConfig:
             "gradient_clip_norm": self.gradient_clip_norm,
             "patience": self.patience,
             "precision": self.precision,
+            "initialization_seed": self.initialization_seed,
         }
 
     @classmethod
@@ -1271,6 +1275,7 @@ class ResidualTrainingConfig:
             "gradient_clip_norm",
             "patience",
             "precision",
+            "initialization_seed",
         }
         _reject_unknown(data, allowed, "V0.7 residual training config")
         return cls(
@@ -1281,6 +1286,7 @@ class ResidualTrainingConfig:
             gradient_clip_norm=float(data.get("gradient_clip_norm", defaults.gradient_clip_norm)),
             patience=int(data.get("patience", defaults.patience)),
             precision=str(data.get("precision", defaults.precision)),
+            initialization_seed=int(data.get("initialization_seed", defaults.initialization_seed)),
         )
 
 
@@ -1294,6 +1300,7 @@ class MemorySweepConfig:
     plateau_relative_gain: float = 0.01
     parameter_match_tolerance: float = 0.05
     seed_consistency_fraction: float = 2.0 / 3.0
+    initialization_seeds: tuple[int, ...] = (101, 211, 307)
     strong_r2: float = 0.75
     moderate_r2: float = 0.40
     weak_r2: float = 0.05
@@ -1314,6 +1321,12 @@ class MemorySweepConfig:
                 raise ValueError(f"{name} must lie in [0,1)")
         if not 0.5 <= self.seed_consistency_fraction <= 1:
             raise ValueError("seed_consistency_fraction must lie in [0.5,1]")
+        if not self.initialization_seeds or len(set(self.initialization_seeds)) != len(
+            self.initialization_seeds
+        ):
+            raise ValueError("V0.7 closure initialization seeds must be unique and non-empty")
+        if any(seed < 0 for seed in self.initialization_seeds):
+            raise ValueError("V0.7 closure initialization seeds must be non-negative")
         if not 1 >= self.strong_r2 > self.moderate_r2 > self.weak_r2 >= 0:
             raise ValueError("learnability R2 thresholds must strictly decrease in [0,1]")
 
@@ -1325,6 +1338,7 @@ class MemorySweepConfig:
             "plateau_relative_gain": self.plateau_relative_gain,
             "parameter_match_tolerance": self.parameter_match_tolerance,
             "seed_consistency_fraction": self.seed_consistency_fraction,
+            "initialization_seeds": list(self.initialization_seeds),
             "strong_r2": self.strong_r2,
             "moderate_r2": self.moderate_r2,
             "weak_r2": self.weak_r2,
@@ -1340,6 +1354,7 @@ class MemorySweepConfig:
             "plateau_relative_gain",
             "parameter_match_tolerance",
             "seed_consistency_fraction",
+            "initialization_seeds",
             "strong_r2",
             "moderate_r2",
             "weak_r2",
@@ -1364,6 +1379,10 @@ class MemorySweepConfig:
             seed_consistency_fraction=float(
                 data.get("seed_consistency_fraction", defaults.seed_consistency_fraction)
             ),
+            initialization_seeds=tuple(
+                int(value)
+                for value in data.get("initialization_seeds", defaults.initialization_seeds)
+            ),
             strong_r2=float(data.get("strong_r2", defaults.strong_r2)),
             moderate_r2=float(data.get("moderate_r2", defaults.moderate_r2)),
             weak_r2=float(data.get("weak_r2", defaults.weak_r2)),
@@ -1377,7 +1396,7 @@ class V07EvaluationConfig:
     rollout_horizons: tuple[int, ...] = (8, 16, 32)
     min_residual_rms: float = 1e-6
     min_history_r2_gain: float = 0.02
-    max_closure_burden: float = 1.0
+    max_closure_burden: float = 0.25
     max_physics_degradation: float = 0.10
     seeds: tuple[int, ...] = (47, 53, 59)
 

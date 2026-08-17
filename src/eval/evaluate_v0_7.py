@@ -48,6 +48,39 @@ def _load_model(
 
 
 @torch.no_grad()
+def _teacher_forced_metrics(
+    model: ResidualKoopmanModel,
+    cache: Any,
+    split: str,
+    config: ProjectConfig,
+    variant: str,
+    device: torch.device,
+) -> dict[str, Any]:
+    assert config.residual_closure and config.residual_training
+    dataset = ResidualWindowDataset(
+        cache,
+        split,
+        config.residual_closure.history,
+        shuffle_history=variant == "shuffled_history",
+        shuffle_seed=config.residual_training.initialization_seed,
+    )
+    predictions: list[torch.Tensor] = []
+    targets: list[torch.Tensor] = []
+    for index in range(len(dataset)):
+        sample = dataset[index]
+        batch = {
+            key: value.unsqueeze(0) if isinstance(value, torch.Tensor) else [value]
+            for key, value in sample.items()
+        }
+        history_z, history_dts, next_dt, parameters, target = _batch_to_device(
+            batch, device, config.residual_closure.include_parameters
+        )
+        predictions.append(model.residual_head(history_z, history_dts, next_dt, parameters).cpu())
+        targets.append(target.cpu())
+    return closure_metrics(torch.cat(predictions), torch.cat(targets))
+
+
+@torch.no_grad()
 def evaluate_v0_7(
     config: ProjectConfig | str | Path,
     *,
@@ -58,7 +91,13 @@ def evaluate_v0_7(
 ) -> dict[str, Any]:
     resolved = load_config(config) if isinstance(config, (str, Path)) else config
     _require_v0_7(resolved)
-    assert resolved.residual_closure and resolved.memory_sweep and resolved.v0_7_evaluation
+    assert (
+        resolved.residual_closure
+        and resolved.residual_training
+        and resolved.memory_sweep
+        and resolved.v0_5_evaluation
+        and resolved.v0_7_evaluation
+    )
     selected = torch.device(
         "cuda" if device is None and torch.cuda.is_available() else (device or "cpu")
     )
@@ -70,27 +109,11 @@ def evaluate_v0_7(
         raise ValueError("V0.7 evaluation cache/checkpoint mismatch")
     model = _load_model(resolved, payload, selected)
     parameter_count = sum(parameter.numel() for parameter in model.residual_head.parameters())
-    dataset = ResidualWindowDataset(
-        cache,
-        "test",
-        resolved.residual_closure.history,
-        shuffle_history=payload["closure_variant"] == "shuffled_history",
-        shuffle_seed=resolved.training.seed,
+    variant = str(payload["closure_variant"])
+    teacher_forced_validation = _teacher_forced_metrics(
+        model, cache, "validation", resolved, variant, selected
     )
-    predictions: list[torch.Tensor] = []
-    targets: list[torch.Tensor] = []
-    for index in range(len(dataset)):
-        sample = dataset[index]
-        batch = {
-            key: value.unsqueeze(0) if isinstance(value, torch.Tensor) else [value]
-            for key, value in sample.items()
-        }
-        history_z, history_dts, next_dt, parameters, target = _batch_to_device(
-            batch, selected, resolved.residual_closure.include_parameters
-        )
-        predictions.append(model.residual_head(history_z, history_dts, next_dt, parameters).cpu())
-        targets.append(target.cpu())
-    teacher_forced = closure_metrics(torch.cat(predictions), torch.cat(targets))
+    teacher_forced = _teacher_forced_metrics(model, cache, "test", resolved, variant, selected)
     normalizer = ChannelStandardizer(eps=resolved.data.normalization.eps)
     normalizer.load_state_dict(payload["normalizer_state"])
     adapter = create_problem_adapter(resolved)
@@ -200,6 +223,7 @@ def evaluate_v0_7(
     result = {
         "phase": "v0.7",
         "seed": resolved.training.seed,
+        "closure_initialization_seed": resolved.residual_training.initialization_seed,
         "variant": payload["closure_variant"],
         "closure_family": type(model.residual_head).__name__,
         "history_length_steps": history,
@@ -213,6 +237,7 @@ def evaluate_v0_7(
         "history_shuffled": payload["closure_variant"] == "shuffled_history",
         "history_shuffle": payload["closure_variant"] == "shuffled_history",
         "teacher_forced": teacher_forced,
+        "teacher_forced_validation": teacher_forced_validation,
         "closed_loop": rollout,
         "provenance": {
             "backbone_checkpoint_sha256": cache.backbone_checkpoint_sha256,
@@ -230,6 +255,10 @@ def evaluate_v0_7(
         "scientific_acceptance": "PENDING_MULTI_SEED_GPU_REVIEW",
         "memory_sweep_config": resolved.memory_sweep.to_dict(),
         "v0_7_evaluation_config": resolved.v0_7_evaluation.to_dict(),
+        "physics_limits": {
+            "max_relative_mass_drift": resolved.v0_5_evaluation.max_relative_mass_drift,
+            "max_operator_mse": resolved.v0_5_evaluation.max_operator_mse,
+        },
     }
     if output_path is not None:
         destination = Path(output_path)

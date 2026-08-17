@@ -10,6 +10,8 @@ Hard restrictions:
 - DO NOT reuse a residual cache with a different checkpoint hash.
 - DO NOT call teacher-forced metrics closed-loop forecasting.
 - DO NOT classify memory from one H or ACF alone; complete all configured H and controls.
+- DO NOT select a closure family or memory H from test metrics; validation selects and test confirms.
+- DO NOT collapse closure initialization seeds into backbone/data seeds.
 - DO NOT retrain from the comparison-only script.
 - DO NOT claim an exact Mori–Zwanzig kernel.
 

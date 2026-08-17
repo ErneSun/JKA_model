@@ -31,6 +31,7 @@ from jka_model.training import (
 )
 from jka_model.utils import Checkpoint, load_checkpoint
 from train.train_v0_6 import initialize_v0_6_model
+from train.train_v0_7 import _training_residual_scale
 
 
 def _cache_case():
@@ -98,6 +99,19 @@ def test_residual_target_never_uses_ema_target_encoder() -> None:
         torch.testing.assert_close(left.residuals, right.residuals)
 
 
+def test_residual_training_scale_uses_train_split_only_and_is_positive() -> None:
+    _, _, cache = _cache_case()
+    scale = _training_residual_scale(cache)
+    train_residuals = torch.cat([item.residuals.float() for item in cache.select("train")])
+    expected = train_residuals.square().mean(dim=0).sqrt()
+    floor = max(
+        float(train_residuals.square().mean().sqrt()) * 1e-3,
+        torch.finfo(expected.dtype).eps,
+    )
+    torch.testing.assert_close(scale, expected.clamp_min(floor))
+    assert torch.all(scale > 0)
+
+
 def test_residual_stage_freezes_backbone_and_optimizer_owns_only_closure() -> None:
     config, backbone, _ = _cache_case()
     assert config.residual_closure
@@ -129,13 +143,16 @@ def test_residual_windows_preserve_dt_alignment_and_never_cross_trajectories() -
 
 
 def test_h1_matches_markovian_semantics() -> None:
+    torch.manual_seed(19)
     history = build_closure(
         "history", latent_dim=4, history=1, parameter_dim=3, hidden_dim=16, depth=2
     )
+    torch.manual_seed(19)
     instantaneous = build_closure(
         "instantaneous", latent_dim=4, history=1, parameter_dim=3, hidden_dim=16, depth=2
     )
-    instantaneous.load_state_dict(history.state_dict())
+    for left, right in zip(history.parameters(), instantaneous.parameters(), strict=True):
+        torch.testing.assert_close(left, right)
     z = torch.randn(3, 1, 4)
     history_dts = torch.empty(3, 0)
     next_dt = torch.full((3, 1), 0.1)
@@ -249,6 +266,21 @@ def test_history_length_config_roundtrip() -> None:
     restored = ProjectConfig.from_dict(config.to_dict())
     assert restored.memory_sweep is not None
     assert restored.memory_sweep.history_lengths == (1, 2, 4, 8)
+    assert restored.memory_sweep.initialization_seeds == (101, 211, 307)
+
+
+@pytest.mark.parametrize("variant", ["linear", "instantaneous", "history"])
+def test_learned_closures_start_as_zero_correction(variant: str) -> None:
+    closure = build_closure(
+        variant, latent_dim=4, history=2, parameter_dim=3, hidden_dim=16, depth=2
+    )
+    prediction = closure(
+        torch.randn(3, 2, 4),
+        torch.full((3, 1), 0.1),
+        torch.full((3, 1), 0.1),
+        torch.randn(3, 3),
+    )
+    torch.testing.assert_close(prediction, torch.zeros_like(prediction))
 
 
 def test_parameter_count_report() -> None:
@@ -387,6 +419,7 @@ def _sweep_records() -> list[dict[str, object]]:
         "plateau_relative_gain": 0.01,
         "parameter_match_tolerance": 0.05,
         "seed_consistency_fraction": 2 / 3,
+        "initialization_seeds": [101, 211, 307],
         "strong_r2": 0.75,
         "moderate_r2": 0.4,
         "weak_r2": 0.05,
@@ -394,6 +427,7 @@ def _sweep_records() -> list[dict[str, object]]:
     evaluation = {
         "min_residual_rms": 1e-6,
         "max_physics_degradation": 0.1,
+        "max_closure_burden": 0.25,
     }
     for seed in (47, 53, 59):
         provenance = {
@@ -405,51 +439,61 @@ def _sweep_records() -> list[dict[str, object]]:
             "normalizer_fingerprint": f"normalizer-{seed}",
             "evaluation_trajectory_ids": [f"test-{seed}"],
         }
-        for history in (1, 2, 4, 8):
-            variants = ["history", "instantaneous"]
-            if history == 1:
-                variants += ["zero", "linear"]
-            else:
-                variants += ["shuffled_history"]
-            for variant in variants:
-                gain = 0.05 * min(history - 1, 3) if variant == "history" else 0.0
-                records.append(
-                    {
-                        "phase": "v0.7",
-                        "seed": seed,
-                        "variant": variant,
-                        "closure_family": variant,
-                        "history_length_steps": history,
-                        "history_length_physical_time": {"mean": 0.1 * (history - 1)},
-                        "parameter_count": 1000,
-                        "parameter_matched_control": variant == "instantaneous",
-                        "history_shuffled": variant == "shuffled_history",
-                        "teacher_forced": {
-                            "mse": 0.2 - gain,
-                            "normalized_rmse": 0.5 - gain,
-                            "r2": 0.6 + gain,
-                            "target_rms": 0.1,
-                        },
-                        "closed_loop": {
-                            "8": {
-                                "latent_rmse": 0.4 - gain,
-                                "field_rmse": 0.5 - gain,
-                                "relative_l2": 0.3,
-                                "mass_drift": 0.001,
-                                "operator_mse": 1e-5,
-                                "closure_burden": 0.2,
-                                "closure_burden_by_step": [0.2] * 8,
-                            }
-                        },
-                        "provenance": provenance,
-                        "memory_sweep_config": config,
-                        "v0_7_evaluation_config": evaluation,
-                        "target_encoder_used": False,
-                        "rollout_uses_predicted_history": True,
-                        "physics_used_for_training": False,
-                        "source_file": f"seed-{seed}-{history}-{variant}.json",
+        for closure_seed in config["initialization_seeds"]:
+            for history in (1, 2, 4, 8):
+                variants = ["history", "instantaneous"]
+                if history == 1:
+                    variants += ["zero", "linear"]
+                else:
+                    variants += ["shuffled_history"]
+                for variant in variants:
+                    gain = 0.05 * min(history - 1, 3) if variant == "history" else 0.0
+                    teacher = {
+                        "mse": 0.2 - gain,
+                        "normalized_rmse": 0.5 - gain,
+                        "r2": 0.6 + gain,
+                        "target_rms": 0.1,
                     }
-                )
+                    records.append(
+                        {
+                            "phase": "v0.7",
+                            "seed": seed,
+                            "closure_initialization_seed": closure_seed,
+                            "variant": variant,
+                            "closure_family": variant,
+                            "history_length_steps": history,
+                            "history_length_physical_time": {"mean": 0.1 * (history - 1)},
+                            "parameter_count": 1000,
+                            "parameter_matched_control": variant == "instantaneous",
+                            "history_shuffled": variant == "shuffled_history",
+                            "teacher_forced": teacher,
+                            "teacher_forced_validation": dict(teacher),
+                            "closed_loop": {
+                                "8": {
+                                    "latent_rmse": 0.4 - gain,
+                                    "field_rmse": 0.5 - gain,
+                                    "relative_l2": 0.3,
+                                    "mass_drift": 0.001,
+                                    "operator_mse": 1e-5,
+                                    "closure_burden": 0.2,
+                                    "closure_burden_by_step": [0.2] * 8,
+                                }
+                            },
+                            "provenance": provenance,
+                            "memory_sweep_config": config,
+                            "v0_7_evaluation_config": evaluation,
+                            "physics_limits": {
+                                "max_relative_mass_drift": 0.01,
+                                "max_operator_mse": 1e-4,
+                            },
+                            "target_encoder_used": False,
+                            "rollout_uses_predicted_history": True,
+                            "physics_used_for_training": False,
+                            "source_file": (
+                                f"seed-{seed}-init-{closure_seed}-{history}-{variant}.json"
+                            ),
+                        }
+                    )
     return records
 
 
@@ -477,6 +521,39 @@ def test_memory_classification_schema() -> None:
         "LONG_MEMORY_CANDIDATE",
         "INCONCLUSIVE",
     }
+
+
+def test_model_selection_uses_validation_not_test_oracle() -> None:
+    records = _sweep_records()
+    target = next(
+        record
+        for record in records
+        if record["seed"] == 47
+        and record["closure_initialization_seed"] == 101
+        and record["variant"] == "history"
+        and record["history_length_steps"] == 8
+    )
+    target["teacher_forced_validation"]["normalized_rmse"] = 10.0
+    target["teacher_forced"]["r2"] = 0.999
+    target["closed_loop"]["8"]["field_rmse"] = 1e-9
+    provenance = validate_sweep_provenance(records)
+    result = classify_memory_sweep(records, provenance)
+    selected = result["evidence"]["selected_models"]["seed_47_init_101"]
+    assert selected["history_steps"] != 8
+    memory_candidate = result["evidence"]["validation_selected_memory_candidate_by_repeat"][
+        "seed_47_init_101"
+    ]
+    assert memory_candidate["history_steps"] != 8
+
+
+def test_physics_failure_prevents_positive_utility() -> None:
+    records = _sweep_records()
+    for record in records:
+        if record["variant"] == "history" and record["history_length_steps"] == 4:
+            record["closed_loop"]["8"]["mass_drift"] = 0.02
+    provenance = validate_sweep_provenance(records)
+    result = classify_memory_sweep(records, provenance)
+    assert result["closed_loop_utility"] == "NEGATIVE"
 
 
 def test_memory_comparison_writes_required_outputs(tmp_path: Path) -> None:

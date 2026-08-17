@@ -14,6 +14,6 @@ v0_6_evaluation: {max_long_rollout_degradation: 0.05, max_physics_degradation: 0
 residual_closure: {history: 4, hidden_dim: 16, depth: 2, include_parameters: true, cache_dtype: float32, max_acf_lag: 4, variants: [zero, linear, instantaneous, history, shuffled_history]}
 residual_training: {epochs: 10, batch_size: 16, learning_rate: 0.001, weight_decay: 0.00001, gradient_clip_norm: 1.0, patience: 5, precision: fp32}
 memory_sweep: {history_lengths: [1, 2, 4, 8], effective_gain_fraction: 0.95, material_relative_gain: 0.02, plateau_relative_gain: 0.01, parameter_match_tolerance: 0.05, seed_consistency_fraction: 0.6666666666666666, strong_r2: 0.75, moderate_r2: 0.40, weak_r2: 0.05}
-v0_7_evaluation: {rollout_horizons: [2, 4, 8], min_residual_rms: 0.000001, min_history_r2_gain: 0.02, max_closure_burden: 1.0, max_physics_degradation: 0.10, seeds: [47, 53, 59]}
+v0_7_evaluation: {rollout_horizons: [2, 4, 8], min_residual_rms: 0.000001, min_history_r2_gain: 0.02, max_closure_burden: 0.25, max_physics_degradation: 0.10, seeds: [47, 53, 59]}
 project_version: 0.7.0
 tags: [v0.7, cpu, fixed-history-closure]

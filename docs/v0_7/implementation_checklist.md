@@ -8,13 +8,18 @@
 - [x] Zero, linear, instantaneous, history, shuffled-history variants exist.
 - [x] Instantaneous MLP parameter count is matched as closely as integer width permits.
 - [x] H=1 exactly matches the current-state Markovian information set.
+- [x] H=1 controls use paired initialization and must be training-identical.
+- [x] Every learned closure begins with zero correction; loss is scaled by training-only residual RMS.
+- [x] Closure initialization is repeated independently from backbone/data seeds.
 - [x] Configured H sweep has at least four levels and formal GPU levels `[1,2,4,8,16]`.
 - [x] Comparison-only script validates provenance and never retrains.
 - [x] Formal rollout feeds predicted history after the initial context.
 - [x] Teacher-forced and closed-loop metrics are separate.
+- [x] Validation selects model/H before any test-set scientific metric is read.
+- [x] Physics acceptance combines inherited absolute limits, baseline-relative tolerance, and closure burden.
 - [x] Standalone schema-7 checkpoints contain backbone and closure.
 - [x] New V0.7 tests and CPU end-to-end smoke pass.
 - [x] GPU workflow is non-silent and writes automatic reports.
-- [x] Results include sweep CSV, classification JSON, five diagnostic plots, and two reports.
+- [x] Results include completion/summary JSON, sweep CSV, classification JSON, five diagnostic plots, and two reports.
 - [ ] Multi-seed RTX 5080 measurement.
 - [ ] Human review of scientific evidence.

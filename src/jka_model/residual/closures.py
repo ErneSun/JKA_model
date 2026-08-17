@@ -76,6 +76,8 @@ class LinearClosure(BaseClosure):
     def __init__(self, latent_dim: int, history: int, parameter_dim: int) -> None:
         super().__init__(latent_dim, history, parameter_dim)
         self.linear = nn.Linear(latent_dim + 1 + parameter_dim, latent_dim)
+        nn.init.zeros_(self.linear.weight)
+        nn.init.zeros_(self.linear.bias)
 
     def forward(
         self, history_z: Tensor, history_dts: Tensor, next_dt: Tensor, parameters: Tensor
@@ -90,8 +92,18 @@ def _mlp(input_dim: int, hidden_dim: int, depth: int, output_dim: int) -> nn.Seq
     for _ in range(depth):
         layers.extend((nn.Linear(current, hidden_dim), nn.SiLU()))
         current = hidden_dim
-    layers.append(nn.Linear(current, output_dim))
+    output = nn.Linear(current, output_dim)
+    nn.init.zeros_(output.weight)
+    nn.init.zeros_(output.bias)
+    layers.append(output)
     return nn.Sequential(*layers)
+
+
+def _mlp_parameter_count(input_dim: int, hidden_dim: int, depth: int, output_dim: int) -> int:
+    first = input_dim * hidden_dim + hidden_dim
+    hidden = max(depth - 1, 0) * (hidden_dim * hidden_dim + hidden_dim)
+    output = hidden_dim * output_dim + output_dim
+    return first + hidden + output
 
 
 class InstantaneousMLPClosure(BaseClosure):
@@ -145,18 +157,14 @@ def build_closure(
         # Parameter-match the instantaneous control to the primary history MLP as
         # closely as integer widths allow. This prevents capacity from masquerading
         # as temporal-memory evidence.
-        reference = HistoryMLPClosure(latent_dim, history, parameter_dim, hidden_dim, depth)
-        target_count = sum(parameter.numel() for parameter in reference.parameters())
+        history_input_dim = history * latent_dim + history + parameter_dim
+        target_count = _mlp_parameter_count(history_input_dim, hidden_dim, depth, latent_dim)
+        instantaneous_input_dim = latent_dim + 1 + parameter_dim
         candidate_widths = range(1, max(hidden_dim * 4, 2))
         matched_width = min(
             candidate_widths,
             key=lambda width: abs(
-                sum(
-                    parameter.numel()
-                    for parameter in InstantaneousMLPClosure(
-                        latent_dim, history, parameter_dim, width, depth
-                    ).parameters()
-                )
+                _mlp_parameter_count(instantaneous_input_dim, width, depth, latent_dim)
                 - target_count
             ),
         )

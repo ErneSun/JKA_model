@@ -136,6 +136,7 @@ def _evaluate_loader(
     loader: DataLoader,
     device: torch.device,
     include_parameters: bool,
+    residual_scale: torch.Tensor | None = None,
 ) -> dict[str, Any]:
     model.eval()
     predictions: list[torch.Tensor] = []
@@ -146,7 +147,20 @@ def _evaluate_loader(
         )
         predictions.append(model.residual_head(history_z, history_dts, next_dt, parameters).cpu())
         targets.append(target.cpu())
-    return closure_metrics(torch.cat(predictions), torch.cat(targets))
+    prediction = torch.cat(predictions)
+    target = torch.cat(targets)
+    metrics = closure_metrics(prediction, target)
+    if residual_scale is not None:
+        scale = residual_scale.detach().cpu().to(dtype=prediction.dtype)
+        metrics["standardized_mse"] = float(((prediction - target) / scale).square().mean())
+    return metrics
+
+
+def _training_residual_scale(cache: ResidualCache) -> torch.Tensor:
+    residuals = torch.cat([item.residuals.float() for item in cache.select("train")])
+    scale = residuals.square().mean(dim=0).sqrt()
+    relative_floor = float(residuals.square().mean().sqrt()) * 1e-3
+    return scale.clamp_min(max(relative_floor, torch.finfo(scale.dtype).eps))
 
 
 def _loaders(cache: ResidualCache, config: ProjectConfig, variant: str):
@@ -154,7 +168,7 @@ def _loaders(cache: ResidualCache, config: ProjectConfig, variant: str):
     kwargs = {
         "history": config.residual_closure.history,
         "shuffle_history": variant == "shuffled_history",
-        "shuffle_seed": config.training.seed,
+        "shuffle_seed": config.residual_training.initialization_seed,
     }
     train = ResidualWindowDataset(cache, "train", **kwargs)
     validation = ResidualWindowDataset(cache, "validation", **kwargs)
@@ -209,8 +223,11 @@ def train_v0_7(
         f"epochs={resolved.residual_training.epochs}",
         flush=True,
     )
-    set_global_seed(resolved.training.seed, deterministic=resolved.training.deterministic)
+    closure_seed = resolved.residual_training.initialization_seed
+    set_global_seed(closure_seed, deterministic=resolved.training.deterministic)
     cache = load_residual_cache(cache_path)
+    residual_scale_cpu = _training_residual_scale(cache)
+    residual_scale = residual_scale_cpu.to(selected)
     source_sha = file_sha256(backbone_checkpoint)
     if cache.backbone_checkpoint_sha256 != source_sha:
         raise ValueError("residual cache was built from a different V0.6 checkpoint")
@@ -296,6 +313,9 @@ def train_v0_7(
                 "parameter_matched_control": variant == "instantaneous",
                 "history_shuffled": variant == "shuffled_history",
                 "history_shuffle": variant == "shuffled_history",
+                "closure_initialization_seed": closure_seed,
+                "residual_training_scale": residual_scale_cpu.tolist(),
+                "residual_loss": "per_dimension_train_rms_standardized_mse",
                 "frozen_backbone": True,
                 "target_encoder_used_for_residual": False,
                 "trainable_parameters": trainable_parameters,
@@ -307,9 +327,13 @@ def train_v0_7(
         encoding="utf-8",
     )
     initial = _evaluate_loader(
-        model, validation_loader, selected, resolved.residual_closure.include_parameters
+        model,
+        validation_loader,
+        selected,
+        resolved.residual_closure.include_parameters,
+        residual_scale_cpu,
     )
-    initial_mse = float(initial["mse"])
+    initial_mse = float(initial["standardized_mse"])
     history_path = destination / "logs" / "epoch_metrics.csv"
     latest_path = destination / "checkpoints" / "latest.pt"
     best_path = destination / "checkpoints" / "best.pt"
@@ -318,7 +342,15 @@ def train_v0_7(
     completed = start_epoch
     with history_path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(
-            stream, fieldnames=["epoch", "global_step", "train_mse", "validation_mse", "seconds"]
+            stream,
+            fieldnames=[
+                "epoch",
+                "global_step",
+                "train_standardized_mse",
+                "validation_standardized_mse",
+                "validation_raw_mse",
+                "seconds",
+            ],
         )
         writer.writeheader()
         epoch_limit = start_epoch if variant == "zero" else resolved.residual_training.epochs
@@ -335,7 +367,7 @@ def train_v0_7(
                 context = torch.autocast("cuda", dtype=amp_dtype) if amp_enabled else nullcontext()
                 with context:
                     prediction = model.residual_head(history_z, history_dts, next_dt, parameters)
-                    loss = (prediction - target).square().mean()
+                    loss = ((prediction - target) / residual_scale).square().mean()
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
@@ -349,16 +381,21 @@ def train_v0_7(
                 global_step += 1
             scheduler.step()
             validation = _evaluate_loader(
-                model, validation_loader, selected, resolved.residual_closure.include_parameters
+                model,
+                validation_loader,
+                selected,
+                resolved.residual_closure.include_parameters,
+                residual_scale_cpu,
             )
-            validation_mse = float(validation["mse"])
+            validation_mse = float(validation["standardized_mse"])
             completed = epoch + 1
             writer.writerow(
                 {
                     "epoch": completed,
                     "global_step": global_step,
-                    "train_mse": total / count,
-                    "validation_mse": validation_mse,
+                    "train_standardized_mse": total / count,
+                    "validation_standardized_mse": validation_mse,
+                    "validation_raw_mse": validation["mse"],
                     "seconds": time.perf_counter() - started,
                 }
             )
@@ -405,7 +442,8 @@ def train_v0_7(
             if detailed:
                 print(
                     f"[V0.7][train:{variant}] epoch={completed} "
-                    f"train_mse={total / count:.6g} val_mse={validation_mse:.6g}",
+                    f"train_standardized_mse={total / count:.6g} "
+                    f"val_standardized_mse={validation_mse:.6g}",
                     flush=True,
                 )
             if stale >= resolved.residual_training.patience:
@@ -443,13 +481,17 @@ def train_v0_7(
     else:
         model.residual_head.load_state_dict(load_residual_checkpoint(best_path)["closure_state"])
     test_metrics = _evaluate_loader(
-        model, test_loader, selected, resolved.residual_closure.include_parameters
+        model,
+        test_loader,
+        selected,
+        resolved.residual_closure.include_parameters,
+        residual_scale_cpu,
     )
     (destination / "evaluation" / "teacher_forced_metrics.json").write_text(
         json.dumps(test_metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(
-        f"[V0.7][train:{variant}] PASS best_val_mse={best_mse:.6g} "
+        f"[V0.7][train:{variant}] PASS best_val_standardized_mse={best_mse:.6g} "
         f"test_r2={test_metrics['r2']:.6g} run={destination}",
         flush=True,
     )

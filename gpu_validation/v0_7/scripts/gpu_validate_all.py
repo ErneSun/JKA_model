@@ -23,7 +23,7 @@ for import_root in (ROOT, ROOT / "src"):
 from eval.evaluate_v0_7 import evaluate_v0_7  # noqa: E402
 from jka_model.config import ProjectConfig, load_config, save_config  # noqa: E402
 from jka_model.residual import compare_residual_memory_v0_7  # noqa: E402
-from jka_model.utils import create_versioned_session, load_checkpoint  # noqa: E402
+from jka_model.utils import create_versioned_session, get_git_commit, load_checkpoint  # noqa: E402
 from train.prepare_v0_7 import prepare_v0_7_cache  # noqa: E402
 from train.train_v0_7 import _backbone_contract, train_v0_7  # noqa: E402
 
@@ -81,10 +81,15 @@ def _resolved(template: ProjectConfig, seed: int) -> ProjectConfig:
     return ProjectConfig.from_dict(payload)
 
 
-def _with_history(config: ProjectConfig, history: int) -> ProjectConfig:
+def _with_history(config: ProjectConfig, history: int, closure_seed: int) -> ProjectConfig:
     payload = config.to_dict()
     payload["residual_closure"]["history"] = history
-    payload["tags"] = [*payload["tags"], f"history-{history}"]
+    payload["residual_training"]["initialization_seed"] = closure_seed
+    payload["tags"] = [
+        *payload["tags"],
+        f"history-{history}",
+        f"closure-seed-{closure_seed}",
+    ]
     return ProjectConfig.from_dict(payload)
 
 
@@ -207,45 +212,71 @@ def main() -> None:
                 diagnostics_path=seed_root / "cache" / "residual_diagnostics.json",
                 device="cuda",
             )
-            for history in template.memory_sweep.history_lengths:
-                history_config = _with_history(configs[seed], history)
-                save_config(
-                    history_config,
-                    root / "configs" / f"seed_{seed}_h{history}.yaml",
-                )
-                variants = ["history", "instantaneous"]
-                if history == 1:
-                    variants = ["zero", "linear", *variants]
-                else:
-                    variants.append("shuffled_history")
-                for variant in variants:
-                    print(
-                        f"[V0.7][validation] seed={seed} H={history} {variant}: START",
-                        flush=True,
+            for closure_seed in template.memory_sweep.initialization_seeds:
+                for history in template.memory_sweep.history_lengths:
+                    history_config = _with_history(configs[seed], history, closure_seed)
+                    save_config(
+                        history_config,
+                        root / "configs" / f"seed_{seed}_closure_{closure_seed}_h{history}.yaml",
                     )
-                    _train_and_evaluate(
-                        config=history_config,
-                        backbone=backbones[seed],
-                        cache=cache_path,
-                        variant=variant,
-                        run_dir=seed_root / "runs" / f"h{history}" / variant,
-                        evaluation_path=(
-                            seed_root / "evaluation" / f"h{history}" / f"{variant}.json"
-                        ),
-                    )
-                    print(
-                        f"[V0.7][validation] seed={seed} H={history} {variant}: PASS",
-                        flush=True,
-                    )
+                    variants = ["history", "instantaneous"]
+                    if history == 1:
+                        variants = ["zero", "linear", *variants]
+                    else:
+                        variants.append("shuffled_history")
+                    for variant in variants:
+                        label = f"seed={seed} closure_seed={closure_seed} H={history} {variant}"
+                        print(f"[V0.7][validation] {label}: START", flush=True)
+                        _train_and_evaluate(
+                            config=history_config,
+                            backbone=backbones[seed],
+                            cache=cache_path,
+                            variant=variant,
+                            run_dir=(
+                                seed_root
+                                / "runs"
+                                / f"closure_{closure_seed}"
+                                / f"h{history}"
+                                / variant
+                            ),
+                            evaluation_path=(
+                                seed_root
+                                / "evaluation"
+                                / f"closure_{closure_seed}"
+                                / f"h{history}"
+                                / f"{variant}.json"
+                            ),
+                        )
+                        print(f"[V0.7][validation] {label}: PASS", flush=True)
             print(f"[V0.7][validation] seed={seed}: PASS", flush=True)
         print("[V0.7][validation] trained-result comparison: START", flush=True)
         classification = compare_residual_memory_v0_7(root, compact)
+        classification["workflow"] = {
+            "requested_validation_id": session.requested_id,
+            "resolved_validation_id": session.resolved_id,
+            "git_commit": get_git_commit(ROOT),
+            "software_tests_skipped": bool(args.skip_software_tests),
+            "software_tests_passed": not args.skip_software_tests,
+            "cuda_device": torch.cuda.get_device_name(0),
+            "backbone_seeds": args.seeds,
+            "closure_initialization_seeds": list(template.memory_sweep.initialization_seeds),
+            "status": "PASS",
+        }
+        (compact / "evaluation" / "memory_classification.json").write_text(
+            json.dumps(classification, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         for name in ("evaluation", "plots", "reports"):
             shutil.copytree(compact / name, root / "artifacts" / name)
         (compact / "summary.json").write_text(
             json.dumps(classification, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         shutil.copy2(compact / "reports" / "residual_decision_report.md", compact / "report.md")
+        (compact / "completion.json").write_text(
+            json.dumps(classification["workflow"], indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        shutil.copy2(compact / "completion.json", root / "artifacts" / "completion.json")
         print("[V0.7][validation] trained-result comparison: PASS", flush=True)
         print(
             "V0.7 VALIDATION COMPLETE status=PASS "

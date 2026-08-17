@@ -15,7 +15,10 @@ def test_v0_7_gpu_template_is_strict_and_complete() -> None:
     assert config.memory_sweep is not None
     assert config.memory_sweep.history_lengths == (1, 2, 4, 8, 16)
     assert config.memory_sweep.seed_consistency_fraction == 2 / 3
+    assert config.memory_sweep.initialization_seeds == (101, 211, 307)
+    assert config.residual_training.initialization_seed == 101
     assert config.v0_7_evaluation is not None
+    assert config.v0_7_evaluation.max_closure_burden == 0.25
     assert set(config.residual_closure.variants) == {
         "zero",
         "linear",
