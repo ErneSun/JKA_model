@@ -17,9 +17,17 @@
 - [x] Teacher-forced and closed-loop metrics are separate.
 - [x] Validation selects model/H before any test-set scientific metric is read.
 - [x] Physics acceptance combines inherited absolute limits, baseline-relative tolerance, and closure burden.
+- [x] Failed locked-test or physics acceptance forces the final route to `INCONCLUSIVE`.
 - [x] Standalone schema-7 checkpoints contain backbone and closure.
 - [x] New V0.7 tests and CPU end-to-end smoke pass.
 - [x] GPU workflow is non-silent and writes automatic reports.
-- [x] Results include completion/summary JSON, sweep CSV, classification JSON, five diagnostic plots, and two reports.
+- [x] Results include completion/summary JSON, primary assessment, secondary memory JSON, sweep CSV, seven diagnostic plots, and two reports.
+- [x] Residual significance and config-owned 1% energy threshold are recorded.
+- [x] Validation Markovian predictability and conditional history gain are hierarchically aggregated.
+- [x] R0/R1/R2/R3/INCONCLUSIVE routing and locked test confirmation are implemented.
+- [x] `residual_structure_assessment.json` is the primary machine-readable result.
+- [x] Raw/standardized/per-dimension residual metrics and scale fingerprint are recorded.
+- [x] Formal plots include residual magnitude and per-backbone history gain variability.
+- [x] Completion/failure schemas record exact 144-run status and failed-stage context.
 - [ ] Multi-seed RTX 5080 measurement.
 - [ ] Human review of scientific evidence.

@@ -37,9 +37,7 @@ class KnownLatentDataset:
             raise ValueError("true-latent keys must exactly match trajectory IDs")
         frozen: dict[str, Tensor] = {}
         for identifier, latent in self.true_latents.items():
-            record = next(
-                item for item in self.records if item.trajectory_id == identifier
-            )
+            record = next(item for item in self.records if item.trajectory_id == identifier)
             if latent.shape != (record.num_steps + 1, 2):
                 raise ValueError("true latent must have shape [T+1,2]")
             if latent.requires_grad or not torch.isfinite(latent).all():
@@ -92,9 +90,7 @@ def make_known_latent_problem_spec(
     nonlinear_observation: bool = True,
 ) -> ProblemSpec:
     names = (
-        ("q", "p", "q_squared", "q_times_p", "p_squared")
-        if nonlinear_observation
-        else ("q", "p")
+        ("q", "p", "q_squared", "q_times_p", "p_squared") if nonlinear_observation else ("q", "p")
     )
     return ProblemSpec(
         name=(
@@ -133,9 +129,7 @@ def generate_known_latent_trajectories(
     random = torch.Generator(device="cpu").manual_seed(seed)
     records: list[TrajectoryRecord] = []
     true_latents: dict[str, Tensor] = {}
-    observation_map = (
-        nonlinear_observation_map if nonlinear_observation else linear_observation_map
-    )
+    observation_map = nonlinear_observation_map if nonlinear_observation else linear_observation_map
     for index in range(config.num_trajectories):
         initial = -1.25 + 2.5 * torch.rand(2, generator=random, dtype=dtype)
         if config.variable_dt:
@@ -171,7 +165,5 @@ def generate_known_latent_trajectories(
             )
         )
         true_latents[identifier] = hidden
-    spec = make_known_latent_problem_spec(
-        config, nonlinear_observation=nonlinear_observation
-    )
+    spec = make_known_latent_problem_spec(config, nonlinear_observation=nonlinear_observation)
     return KnownLatentDataset(TrajectoryDataset(records), spec, true_latents)

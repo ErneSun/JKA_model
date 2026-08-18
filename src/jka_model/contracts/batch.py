@@ -188,9 +188,7 @@ class LatentState:
     def __post_init__(self) -> None:
         if self.z_k.ndim != 2:
             raise ValueError("z_k must have shape [B, d_k]")
-        if self.z_r is not None and (
-            self.z_r.ndim != 2 or self.z_r.shape[0] != self.z_k.shape[0]
-        ):
+        if self.z_r is not None and (self.z_r.ndim != 2 or self.z_r.shape[0] != self.z_k.shape[0]):
             raise ValueError("z_r must have shape [B, d_r]")
 
 

@@ -1391,13 +1391,15 @@ class MemorySweepConfig:
 
 @dataclass(frozen=True, slots=True)
 class V07EvaluationConfig:
-    """Evidence thresholds; memory strength is inferred rather than presumed."""
+    """Problem-agnostic thresholds for residual structure assessment."""
 
     rollout_horizons: tuple[int, ...] = (8, 16, 32)
     min_residual_rms: float = 1e-6
+    min_residual_significance: float = 0.01
     min_history_r2_gain: float = 0.02
     max_closure_burden: float = 0.25
     max_physics_degradation: float = 0.10
+    formal_record_count: int = 144
     seeds: tuple[int, ...] = (47, 53, 59)
 
     def __post_init__(self) -> None:
@@ -1405,20 +1407,28 @@ class V07EvaluationConfig:
             raise ValueError("V0.7 rollout horizons must be positive")
         if tuple(sorted(set(self.rollout_horizons))) != self.rollout_horizons:
             raise ValueError("V0.7 rollout horizons must be unique and increasing")
-        if self.min_residual_rms < 0 or self.min_history_r2_gain < 0:
+        if (
+            self.min_residual_rms < 0
+            or not 0 <= self.min_residual_significance < 1
+            or self.min_history_r2_gain < 0
+        ):
             raise ValueError("V0.7 evidence thresholds must be non-negative")
         if self.max_closure_burden <= 0 or self.max_physics_degradation < 0:
             raise ValueError("invalid V0.7 closure/physics threshold")
         if len(self.seeds) < 3 or len(set(self.seeds)) != len(self.seeds):
             raise ValueError("V0.7 scientific comparison requires at least three unique seeds")
+        if self.formal_record_count < 1:
+            raise ValueError("V0.7 formal_record_count must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "rollout_horizons": list(self.rollout_horizons),
             "min_residual_rms": self.min_residual_rms,
+            "min_residual_significance": self.min_residual_significance,
             "min_history_r2_gain": self.min_history_r2_gain,
             "max_closure_burden": self.max_closure_burden,
             "max_physics_degradation": self.max_physics_degradation,
+            "formal_record_count": self.formal_record_count,
             "seeds": list(self.seeds),
         }
 
@@ -1428,9 +1438,11 @@ class V07EvaluationConfig:
         allowed = {
             "rollout_horizons",
             "min_residual_rms",
+            "min_residual_significance",
             "min_history_r2_gain",
             "max_closure_burden",
             "max_physics_degradation",
+            "formal_record_count",
             "seeds",
         }
         _reject_unknown(data, allowed, "V0.7 evaluation config")
@@ -1439,6 +1451,9 @@ class V07EvaluationConfig:
                 int(value) for value in data.get("rollout_horizons", defaults.rollout_horizons)
             ),
             min_residual_rms=float(data.get("min_residual_rms", defaults.min_residual_rms)),
+            min_residual_significance=float(
+                data.get("min_residual_significance", defaults.min_residual_significance)
+            ),
             min_history_r2_gain=float(
                 data.get("min_history_r2_gain", defaults.min_history_r2_gain)
             ),
@@ -1446,6 +1461,7 @@ class V07EvaluationConfig:
             max_physics_degradation=float(
                 data.get("max_physics_degradation", defaults.max_physics_degradation)
             ),
+            formal_record_count=int(data.get("formal_record_count", defaults.formal_record_count)),
             seeds=tuple(int(seed) for seed in data.get("seeds", defaults.seeds)),
         )
 

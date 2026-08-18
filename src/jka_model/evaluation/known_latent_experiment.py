@@ -82,8 +82,7 @@ def _mean_rollout_metrics(metrics: list[LearnedRolloutMetrics]) -> dict[str, flo
         "persistence_raw_mse",
     )
     output: dict[str, float | bool] = {
-        name: sum(getattr(item, name) for item in metrics) / len(metrics)
-        for name in scalar_names
+        name: sum(getattr(item, name) for item in metrics) / len(metrics) for name in scalar_names
     }
     output["finite"] = all(item.finite for item in metrics)
     return output
@@ -160,9 +159,7 @@ def run_known_latent_experiment(
         model, test_records, normalizer, dataset.true_latents
     )
     alignment = fit_affine_latent_alignment(z_train, hidden_train)
-    alignment_metrics = evaluate_affine_latent_alignment(
-        alignment, z_test, hidden_test
-    )
+    alignment_metrics = evaluate_affine_latent_alignment(alignment, z_test, hidden_test)
     diagnostics = latent_diagnostics(z_test)
     horizon = config.representation_evaluation.rollout_horizon
     rollout_items = [

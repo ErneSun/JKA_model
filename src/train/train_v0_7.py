@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import time
 from contextlib import nullcontext
@@ -149,11 +150,7 @@ def _evaluate_loader(
         targets.append(target.cpu())
     prediction = torch.cat(predictions)
     target = torch.cat(targets)
-    metrics = closure_metrics(prediction, target)
-    if residual_scale is not None:
-        scale = residual_scale.detach().cpu().to(dtype=prediction.dtype)
-        metrics["standardized_mse"] = float(((prediction - target) / scale).square().mean())
-    return metrics
+    return closure_metrics(prediction, target, residual_scale)
 
 
 def _training_residual_scale(cache: ResidualCache) -> torch.Tensor:
@@ -161,6 +158,11 @@ def _training_residual_scale(cache: ResidualCache) -> torch.Tensor:
     scale = residuals.square().mean(dim=0).sqrt()
     relative_floor = float(residuals.square().mean().sqrt()) * 1e-3
     return scale.clamp_min(max(relative_floor, torch.finfo(scale.dtype).eps))
+
+
+def _residual_scale_fingerprint(scale: torch.Tensor) -> str:
+    value = scale.detach().cpu().contiguous().to(torch.float64)
+    return hashlib.sha256(value.numpy().tobytes()).hexdigest()
 
 
 def _loaders(cache: ResidualCache, config: ProjectConfig, variant: str):
@@ -227,6 +229,7 @@ def train_v0_7(
     set_global_seed(closure_seed, deterministic=resolved.training.deterministic)
     cache = load_residual_cache(cache_path)
     residual_scale_cpu = _training_residual_scale(cache)
+    residual_scale_fingerprint = _residual_scale_fingerprint(residual_scale_cpu)
     residual_scale = residual_scale_cpu.to(selected)
     source_sha = file_sha256(backbone_checkpoint)
     if cache.backbone_checkpoint_sha256 != source_sha:
@@ -277,6 +280,8 @@ def train_v0_7(
             raise ValueError("V0.7 resume config/variant mismatch")
         if resumed["cache_fingerprint"] != cache.fingerprint:
             raise ValueError("V0.7 resume residual cache mismatch")
+        if resumed["residual_scale_fingerprint"] != residual_scale_fingerprint:
+            raise ValueError("V0.7 resume residual scale mismatch")
         model.load_backbone_state_dict(resumed["backbone_state"])
         model.residual_head.load_state_dict(resumed["closure_state"], strict=True)
         if optimizer is not None:
@@ -313,8 +318,11 @@ def train_v0_7(
                 "parameter_matched_control": variant == "instantaneous",
                 "history_shuffled": variant == "shuffled_history",
                 "history_shuffle": variant == "shuffled_history",
+                "backbone_data_seed": resolved.training.seed,
                 "closure_initialization_seed": closure_seed,
+                "closure_init_seed": closure_seed,
                 "residual_training_scale": residual_scale_cpu.tolist(),
+                "residual_scale_fingerprint": residual_scale_fingerprint,
                 "residual_loss": "per_dimension_train_rms_standardized_mse",
                 "frozen_backbone": True,
                 "target_encoder_used_for_residual": False,
@@ -417,6 +425,9 @@ def train_v0_7(
                 "epoch": completed,
                 "global_step": global_step,
                 "closure_variant": variant,
+                "backbone_data_seed": resolved.training.seed,
+                "closure_init_seed": closure_seed,
+                "history_length_steps": resolved.residual_closure.history,
                 "backbone_state": model.backbone_state_dict(),
                 "closure_state": model.residual_head.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
@@ -433,6 +444,8 @@ def train_v0_7(
                 "split_manifest": cache.split_manifest,
                 "backbone_checkpoint_sha256": source_sha,
                 "cache_fingerprint": cache.fingerprint,
+                "residual_training_scale": residual_scale_cpu.tolist(),
+                "residual_scale_fingerprint": residual_scale_fingerprint,
                 "git_commit": get_git_commit(Path.cwd()),
             }
             save_residual_checkpoint(payload, latest_path)
@@ -458,6 +471,9 @@ def train_v0_7(
             "epoch": 0,
             "global_step": 0,
             "closure_variant": variant,
+            "backbone_data_seed": resolved.training.seed,
+            "closure_init_seed": closure_seed,
+            "history_length_steps": resolved.residual_closure.history,
             "backbone_state": model.backbone_state_dict(),
             "closure_state": model.residual_head.state_dict(),
             "optimizer_state": None,
@@ -474,6 +490,8 @@ def train_v0_7(
             "split_manifest": cache.split_manifest,
             "backbone_checkpoint_sha256": source_sha,
             "cache_fingerprint": cache.fingerprint,
+            "residual_training_scale": residual_scale_cpu.tolist(),
+            "residual_scale_fingerprint": residual_scale_fingerprint,
             "git_commit": get_git_commit(Path.cwd()),
         }
         save_residual_checkpoint(payload, latest_path)

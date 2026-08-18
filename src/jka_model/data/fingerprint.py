@@ -37,9 +37,7 @@ def data_fingerprint(
     if not identifiers or len(identifiers) != len(set(identifiers)):
         raise ValueError("fingerprint records must have non-empty unique IDs")
     digest = hashlib.sha256()
-    digest.update(
-        json.dumps(spec.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
-    )
+    digest.update(json.dumps(spec.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8"))
     for record in sorted(records, key=lambda item: item.trajectory_id):
         digest.update(record.trajectory_id.encode("utf-8"))
         try:

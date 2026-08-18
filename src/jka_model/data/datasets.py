@@ -79,9 +79,7 @@ class TrajectoryDataset(Sequence[TrajectoryRecord]):
     @overload
     def __getitem__(self, index: slice) -> tuple[TrajectoryRecord, ...]: ...
 
-    def __getitem__(
-        self, index: int | slice
-    ) -> TrajectoryRecord | tuple[TrajectoryRecord, ...]:
+    def __getitem__(self, index: int | slice) -> TrajectoryRecord | tuple[TrajectoryRecord, ...]:
         return self._records[index]
 
     def __iter__(self) -> Iterator[TrajectoryRecord]:

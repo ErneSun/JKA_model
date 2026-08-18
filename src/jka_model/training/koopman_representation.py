@@ -143,9 +143,7 @@ def _mean_losses(
 
 def _gradient_norm(parameters: list[Tensor]) -> float:
     norms = [
-        parameter.grad.detach().norm()
-        for parameter in parameters
-        if parameter.grad is not None
+        parameter.grad.detach().norm() for parameter in parameters if parameter.grad is not None
     ]
     if not norms:
         return 0.0
@@ -210,9 +208,7 @@ def train_koopman_representation(
         batch_size=training_config.batch_size,
         shuffle=False,
     )
-    initial_snapshot = _training_snapshot(
-        model, fixed_batches, loss_config, epoch=0
-    )
+    initial_snapshot = _training_snapshot(model, fixed_batches, loss_config, epoch=0)
     initial_losses = initial_snapshot.losses
     diagnostic_history = [initial_snapshot]
     random = torch.Generator(device="cpu").manual_seed(seed)

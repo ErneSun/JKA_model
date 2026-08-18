@@ -25,9 +25,7 @@ def _spatial_axes(state_raw: Tensor, spec: ProblemSpec) -> tuple[int, ...]:
         axes = tuple(range(state_raw.ndim - spec.spatial_dim, state_raw.ndim))
     else:
         channel_axis = state_raw.ndim - 1
-        axes = tuple(
-            range(state_raw.ndim - spec.spatial_dim - 1, state_raw.ndim - 1)
-        )
+        axes = tuple(range(state_raw.ndim - spec.spatial_dim - 1, state_raw.ndim - 1))
     if state_raw.shape[channel_axis] != len(spec.channels):
         raise ValueError("probe state channel count does not match ProblemSpec")
     return axes

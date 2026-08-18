@@ -19,10 +19,16 @@ from jka_model.residual import (
     closure_metrics,
     corrected_latent_rollout,
     load_residual_cache,
+    residual_structure_metrics,
 )
 from jka_model.residual.checkpoint import load_residual_checkpoint
 from train.train_v0_6 import initialize_v0_6_model
-from train.train_v0_7 import _batch_to_device, _require_v0_7
+from train.train_v0_7 import (
+    _batch_to_device,
+    _require_v0_7,
+    _residual_scale_fingerprint,
+    _training_residual_scale,
+)
 
 
 def _load_model(
@@ -55,6 +61,7 @@ def _teacher_forced_metrics(
     config: ProjectConfig,
     variant: str,
     device: torch.device,
+    residual_scale: torch.Tensor,
 ) -> dict[str, Any]:
     assert config.residual_closure and config.residual_training
     dataset = ResidualWindowDataset(
@@ -77,7 +84,7 @@ def _teacher_forced_metrics(
         )
         predictions.append(model.residual_head(history_z, history_dts, next_dt, parameters).cpu())
         targets.append(target.cpu())
-    return closure_metrics(torch.cat(predictions), torch.cat(targets))
+    return closure_metrics(torch.cat(predictions), torch.cat(targets), residual_scale)
 
 
 @torch.no_grad()
@@ -108,12 +115,15 @@ def evaluate_v0_7(
     if payload["cache_fingerprint"] != cache.fingerprint:
         raise ValueError("V0.7 evaluation cache/checkpoint mismatch")
     model = _load_model(resolved, payload, selected)
+    residual_scale = _training_residual_scale(cache)
     parameter_count = sum(parameter.numel() for parameter in model.residual_head.parameters())
     variant = str(payload["closure_variant"])
     teacher_forced_validation = _teacher_forced_metrics(
-        model, cache, "validation", resolved, variant, selected
+        model, cache, "validation", resolved, variant, selected, residual_scale
     )
-    teacher_forced = _teacher_forced_metrics(model, cache, "test", resolved, variant, selected)
+    teacher_forced = _teacher_forced_metrics(
+        model, cache, "test", resolved, variant, selected, residual_scale
+    )
     normalizer = ChannelStandardizer(eps=resolved.data.normalization.eps)
     normalizer.load_state_dict(payload["normalizer_state"])
     adapter = create_problem_adapter(resolved)
@@ -222,8 +232,15 @@ def evaluate_v0_7(
     ]
     result = {
         "phase": "v0.7",
+        "run_id": (
+            f"seed_{resolved.training.seed}-closure_"
+            f"{resolved.residual_training.initialization_seed}-h{history}-{variant}"
+        ),
+        "git_commit": payload["git_commit"],
         "seed": resolved.training.seed,
+        "backbone_data_seed": resolved.training.seed,
         "closure_initialization_seed": resolved.residual_training.initialization_seed,
+        "closure_init_seed": resolved.residual_training.initialization_seed,
         "variant": payload["closure_variant"],
         "closure_family": type(model.residual_head).__name__,
         "history_length_steps": history,
@@ -238,6 +255,12 @@ def evaluate_v0_7(
         "history_shuffle": payload["closure_variant"] == "shuffled_history",
         "teacher_forced": teacher_forced,
         "teacher_forced_validation": teacher_forced_validation,
+        "residual_scale": residual_scale.tolist(),
+        "residual_scale_fingerprint": _residual_scale_fingerprint(residual_scale),
+        "residual_structure": {
+            "validation": residual_structure_metrics(cache, "validation"),
+            "test": residual_structure_metrics(cache, "test"),
+        },
         "closed_loop": rollout,
         "provenance": {
             "backbone_checkpoint_sha256": cache.backbone_checkpoint_sha256,
@@ -248,6 +271,10 @@ def evaluate_v0_7(
             "normalizer_fingerprint": cache.normalizer_fingerprint,
             "evaluation_trajectory_ids": sorted(item.trajectory_id for item in test_records),
         },
+        "backbone_checkpoint_fingerprint": cache.backbone_checkpoint_sha256,
+        "data_fingerprint": cache.data_fingerprint,
+        "split_fingerprint": cache.split_fingerprint,
+        "normalizer_fingerprint": cache.normalizer_fingerprint,
         "rollout_uses_predicted_history": True,
         "target_encoder_used": False,
         "physics_used_for_training": False,

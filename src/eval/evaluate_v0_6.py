@@ -88,8 +88,7 @@ def evaluate_v0_6(
             "optimizer_update_step": saved.optimizer_update_step,
             "collapse_threshold": resolved.v0_6_evaluation.min_latent_std,
             "collapse_gate": (
-                online_statistics["min_dimension_std"]
-                >= resolved.v0_6_evaluation.min_latent_std
+                online_statistics["min_dimension_std"] >= resolved.v0_6_evaluation.min_latent_std
                 and target_statistics["min_dimension_std"]
                 >= resolved.v0_6_evaluation.min_latent_std
             ),

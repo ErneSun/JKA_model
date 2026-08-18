@@ -2,7 +2,7 @@
 
 The convergent test policy applies: run new V0.7 tests and only directly affected compatibility tests during development; reserve the full historical suite for release/high-risk changes.
 
-Covered contracts include exact residual formula, online-versus-EMA identity, stop-gradient, H=1 Markovian equivalence and paired initialization, zero-output initialization, window/next-dt alignment, no future leakage, frozen backbone, optimizer ownership, predicted-history rollout, parameter matching without RNG consumption, shuffled-history current-state preservation, validation-only selection, strict physics rejection, multi-initialization sweep provenance, classification schema, cache fingerprinting, schema-7 checkpoint, ID `-rN` allocation, and CPU cache/train/evaluate integration.
+Covered contracts include exact residual formula, online-versus-EMA identity, stop-gradient, train-only standardization, raw/normalized metric separation, H=1 paired equivalence, zero-output initialization, no future leakage, frozen ownership, predicted-history rollout, RNG-free analytical parameter matching, shuffled controls, nested seed ownership, validation-only route selection, locked test confirmation, all R0–R3 plus inconclusive routes, three-condition physics AND, exact record/provenance checks, completion/failure schemas, checkpoint scale provenance, and CPU cache/train/evaluate integration.
 
 Local command:
 

@@ -29,4 +29,3 @@ __all__ = [
     "TransitionOutput",
     "validate_trajectory_alignment",
 ]
-

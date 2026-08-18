@@ -18,6 +18,16 @@ z_{t+1}=z^{\rm base}_{t+1}+\Delta z_{t+1}.
 
 The correction is applied after the exact matrix-exponential Koopman step. No gate, residual state `z_R`, attention, RNN, GRU, LSTM, Mamba, re-encoding, or joint backbone fine-tuning exists in V0.7.
 
+The closure is a scientific probe, not yet the selected production architecture. V0.7 computes
+
+\[
+S_R=\frac{\mathbb E\|r^0\|^2}{\mathbb E\|z_{t+1}^{true}-z_t\|^2+\epsilon},\qquad
+P_R=1-\frac{E_{best}^{M}}{E_0+\epsilon},\qquad
+G_H=\frac{E_M-E_H}{E_M+\epsilon},
+\]
+
+and maps `(S_R,P_R,G_H)` to `R0/R1/R2/R3/INCONCLUSIVE`. Dynamic context `c_t`, Attention, operator coordinate `eta_t`, and adaptive `A_t` are explicitly deferred to later versions.
+
 For `H=1`, the past-interval sequence is empty and the closure sees exactly `(z_t, Δt_t, μ)`. The formal GPU experiment sweeps `H=[1,2,4,8,16]`; the target definition and frozen backbone never change with H.
 
 Module ownership:

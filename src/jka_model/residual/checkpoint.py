@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -21,6 +22,9 @@ REQUIRED_FIELDS = {
     "epoch",
     "global_step",
     "closure_variant",
+    "backbone_data_seed",
+    "closure_init_seed",
+    "history_length_steps",
     "backbone_state",
     "closure_state",
     "optimizer_state",
@@ -35,6 +39,8 @@ REQUIRED_FIELDS = {
     "split_manifest",
     "backbone_checkpoint_sha256",
     "cache_fingerprint",
+    "residual_training_scale",
+    "residual_scale_fingerprint",
     "git_commit",
 }
 
@@ -57,6 +63,20 @@ def validate_residual_checkpoint(payload: Mapping[str, Any]) -> None:
     resolved = ProjectConfig.from_dict(config)
     if payload["config_hash"] != stable_config_hash(resolved):
         raise ValueError("V0.7 checkpoint config hash mismatch")
+    if resolved.residual_training is None or resolved.residual_closure is None:
+        raise ValueError("V0.7 checkpoint config lacks residual sections")
+    if int(payload["backbone_data_seed"]) != resolved.training.seed:
+        raise ValueError("V0.7 checkpoint backbone/data seed mismatch")
+    if int(payload["closure_init_seed"]) != resolved.residual_training.initialization_seed:
+        raise ValueError("V0.7 checkpoint closure initialization seed mismatch")
+    if int(payload["history_length_steps"]) != resolved.residual_closure.history:
+        raise ValueError("V0.7 checkpoint history length mismatch")
+    scale = torch.as_tensor(payload["residual_training_scale"], dtype=torch.float64)
+    if scale.ndim != 1 or scale.numel() != resolved.koopman.state_dim or torch.any(scale <= 0):
+        raise ValueError("V0.7 checkpoint residual training scale is invalid")
+    fingerprint = hashlib.sha256(scale.contiguous().numpy().tobytes()).hexdigest()
+    if payload["residual_scale_fingerprint"] != fingerprint:
+        raise ValueError("V0.7 checkpoint residual scale fingerprint mismatch")
     if payload["backbone_state"] is None or payload["closure_state"] is None:
         raise ValueError("V0.7 standalone checkpoint lacks backbone or closure state")
 

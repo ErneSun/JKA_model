@@ -43,6 +43,53 @@ class _Tee:
             stream.flush()
 
 
+def validate_completion_payload(payload: dict[str, Any]) -> None:
+    required = {
+        "requested_validation_id",
+        "resolved_validation_id",
+        "git_commit",
+        "backbone_seeds",
+        "closure_initialization_seeds",
+        "expected_evaluation_records",
+        "actual_evaluation_records",
+        "all_expected_runs_completed",
+        "provenance_checks_passed",
+        "required_reports_produced",
+        "status",
+    }
+    if required - set(payload):
+        raise ValueError("V0.7 completion payload is incomplete")
+    if payload["status"] != "PASS" or not all(
+        bool(payload[key])
+        for key in (
+            "all_expected_runs_completed",
+            "provenance_checks_passed",
+            "required_reports_produced",
+        )
+    ):
+        raise ValueError("V0.7 completion payload cannot claim PASS")
+    if int(payload["actual_evaluation_records"]) != int(payload["expected_evaluation_records"]):
+        raise ValueError("V0.7 completion record count mismatch")
+
+
+def validate_failure_payload(payload: dict[str, Any]) -> None:
+    required = {
+        "validation_id",
+        "status",
+        "failed_stage",
+        "failed_run",
+        "error",
+        "completed_record_count",
+        "expected_record_count",
+        "last_valid_checkpoint",
+        "git_commit",
+    }
+    if required - set(payload) or payload.get("status") != "FAILED_INCOMPLETE":
+        raise ValueError("V0.7 failure payload is incomplete")
+    if int(payload["completed_record_count"]) > int(payload["expected_record_count"]):
+        raise ValueError("V0.7 failure record count is invalid")
+
+
 def _run_checked(command: list[str], log: Path, label: str) -> None:
     print(f"[V0.7][validation] {label}: START", flush=True)
     with log.open("w", encoding="utf-8") as stream:
@@ -151,20 +198,30 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="+", type=int, default=[47, 53, 59])
     parser.add_argument("--skip-software-tests", action="store_true")
     args = parser.parse_args()
-    if len(set(args.seeds)) < 3:
-        raise SystemExit("V0.7 scientific validation requires at least three unique seeds")
+    if len(args.seeds) != 3 or len(set(args.seeds)) != 3:
+        raise SystemExit("V0.7 scientific validation requires exactly three unique seeds")
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is unavailable")
-    session = create_versioned_session(ROOT / "runs" / "v0_7", args.validation_id)
+    results_root = ROOT / "gpu_validation" / "v0_7" / "results"
+    session = create_versioned_session(
+        ROOT / "runs" / "v0_7",
+        args.validation_id,
+        reserved_roots=(results_root,),
+    )
     root = session.path
     for name in ("software", "configs", "seeds", "artifacts", "logs"):
         (root / name).mkdir()
-    compact = ROOT / "gpu_validation" / "v0_7" / "results" / session.resolved_id
+    compact = results_root / session.resolved_id
     compact.mkdir(parents=True, exist_ok=False)
     workflow_log = (root / "logs" / "workflow.log").open("w", encoding="utf-8")
     original_stdout, original_stderr = sys.stdout, sys.stderr
     sys.stdout = _Tee(original_stdout, workflow_log)  # type: ignore[assignment]
     sys.stderr = _Tee(original_stderr, workflow_log)  # type: ignore[assignment]
+    current_stage = "session_initialization"
+    current_run: dict[str, Any] | None = None
+    completed_record_count = 0
+    expected_record_count = 144
+    last_valid_checkpoint: str | None = None
     try:
         print(
             f"[V0.7][validation] SESSION requested={args.validation_id} "
@@ -175,6 +232,7 @@ def main() -> None:
         if not Path(python).is_file():
             python = sys.executable
         if not args.skip_software_tests:
+            current_stage = "software_tests"
             _run_checked(
                 [
                     python,
@@ -196,7 +254,8 @@ def main() -> None:
         template = load_config(
             ROOT / "gpu_validation" / "v0_7" / "configs" / "gpu_residual_multiseed.yaml"
         )
-        assert template.memory_sweep
+        assert template.memory_sweep and template.v0_7_evaluation
+        expected_record_count = template.v0_7_evaluation.formal_record_count
         configs = {seed: _resolved(template, seed) for seed in args.seeds}
         backbones = _discover_backbones((ROOT / args.v0_6_root).resolve(), configs)
         for seed in args.seeds:
@@ -226,19 +285,23 @@ def main() -> None:
                         variants.append("shuffled_history")
                     for variant in variants:
                         label = f"seed={seed} closure_seed={closure_seed} H={history} {variant}"
+                        current_stage = "train_and_evaluate"
+                        current_run = {
+                            "backbone_data_seed": seed,
+                            "closure_init_seed": closure_seed,
+                            "history_length_steps": history,
+                            "variant": variant,
+                        }
                         print(f"[V0.7][validation] {label}: START", flush=True)
+                        run_dir = (
+                            seed_root / "runs" / f"closure_{closure_seed}" / f"h{history}" / variant
+                        )
                         _train_and_evaluate(
                             config=history_config,
                             backbone=backbones[seed],
                             cache=cache_path,
                             variant=variant,
-                            run_dir=(
-                                seed_root
-                                / "runs"
-                                / f"closure_{closure_seed}"
-                                / f"h{history}"
-                                / variant
-                            ),
+                            run_dir=run_dir,
                             evaluation_path=(
                                 seed_root
                                 / "evaluation"
@@ -247,8 +310,12 @@ def main() -> None:
                                 / f"{variant}.json"
                             ),
                         )
+                        completed_record_count += 1
+                        last_valid_checkpoint = str(run_dir / "checkpoints" / "best.pt")
                         print(f"[V0.7][validation] {label}: PASS", flush=True)
             print(f"[V0.7][validation] seed={seed}: PASS", flush=True)
+        current_stage = "residual_structure_comparison"
+        current_run = None
         print("[V0.7][validation] trained-result comparison: START", flush=True)
         classification = compare_residual_memory_v0_7(root, compact)
         classification["workflow"] = {
@@ -260,9 +327,18 @@ def main() -> None:
             "cuda_device": torch.cuda.get_device_name(0),
             "backbone_seeds": args.seeds,
             "closure_initialization_seeds": list(template.memory_sweep.initialization_seeds),
+            "expected_evaluation_records": expected_record_count,
+            "actual_evaluation_records": completed_record_count,
+            "all_expected_runs_completed": completed_record_count == expected_record_count,
+            "provenance_checks_passed": True,
+            "required_reports_produced": True,
             "status": "PASS",
         }
         (compact / "evaluation" / "memory_classification.json").write_text(
+            json.dumps(classification, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (compact / "evaluation" / "residual_structure_assessment.json").write_text(
             json.dumps(classification, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
@@ -272,8 +348,10 @@ def main() -> None:
             json.dumps(classification, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         shutil.copy2(compact / "reports" / "residual_decision_report.md", compact / "report.md")
+        completion = classification["workflow"]
+        validate_completion_payload(completion)
         (compact / "completion.json").write_text(
-            json.dumps(classification["workflow"], indent=2, sort_keys=True) + "\n",
+            json.dumps(completion, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         shutil.copy2(compact / "completion.json", root / "artifacts" / "completion.json")
@@ -282,6 +360,7 @@ def main() -> None:
             "V0.7 VALIDATION COMPLETE status=PASS "
             f"id={session.resolved_id} "
             f"learnability={classification['residual_learnability']} "
+            f"route={classification['residual_route']} "
             f"utility={classification['closed_loop_utility']} "
             f"memory={classification['memory_class']} report={compact / 'report.md'}",
             flush=True,
@@ -290,9 +369,16 @@ def main() -> None:
         failure = {
             "validation_id": session.resolved_id,
             "status": "FAILED_INCOMPLETE",
+            "failed_stage": current_stage,
+            "failed_run": current_run,
             "error": f"{type(error).__name__}: {error}",
+            "completed_record_count": completed_record_count,
+            "expected_record_count": expected_record_count,
+            "last_valid_checkpoint": last_valid_checkpoint,
+            "git_commit": get_git_commit(ROOT),
             "traceback": traceback.format_exc(),
         }
+        validate_failure_payload(failure)
         (compact / "failure.json").write_text(
             json.dumps(failure, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )

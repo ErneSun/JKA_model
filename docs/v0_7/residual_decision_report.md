@@ -2,10 +2,15 @@
 
 This is the version-controlled interpretation contract. A completed GPU session writes the populated report to `gpu_validation/v0_7/results/<id>/reports/residual_decision_report.md`.
 
-The report must answer separately:
+The report begins with:
 
-1. residual learnability: `STRONG / MODERATE / WEAK / NONE`;
-2. closed-loop utility: `POSITIVE / NEUTRAL / NEGATIVE`;
-3. memory class: `MARKOVIAN / SHORT_MEMORY / LONG_MEMORY_CANDIDATE / INCONCLUSIVE`.
+1. residual significance;
+2. residual learnability;
+3. conditional history gain;
+4. closed-loop utility;
+5. secondary memory class;
+6. three-condition physics acceptance;
+7. final `R0/R1/R2/R3/INCONCLUSIVE` route;
+8. evidence-bounded V0.8 recommendation.
 
-It must state effective H in steps and physical time, parameter-matched and shuffled-control outcomes, multi-seed consistency, physics non-inferiority, and the boundary that finite-history evidence is not an exact Mori–Zwanzig kernel.
+It must state validation route selection, locked test confirmation, effective H in steps and physical time, parameter-matched and shuffled controls, both levels of seed consistency, and each physics gate. Finite-history evidence is not an exact Mori–Zwanzig kernel.

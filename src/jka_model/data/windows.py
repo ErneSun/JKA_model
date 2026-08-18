@@ -42,9 +42,7 @@ class TrajectoryWindowDataset(Dataset[ProblemBatch]):
                 raise ValueError(
                     f"trajectory {record.trajectory_id!r} is too short for history/horizon"
                 )
-            self._references.extend(
-                (record_index, t) for t in range(first_t, last_t + 1)
-            )
+            self._references.extend((record_index, t) for t in range(first_t, last_t + 1))
 
     def __len__(self) -> int:
         return len(self._references)
@@ -56,9 +54,7 @@ class TrajectoryWindowDataset(Dataset[ProblemBatch]):
         future_stop = t + self.horizon + 1
         context_raw = record.states_raw[context_start : t + 1]
         future_raw = record.states_raw[t + 1 : future_stop]
-        history_actions = (
-            None if record.actions is None else record.actions[context_start:t]
-        )
+        history_actions = None if record.actions is None else record.actions[context_start:t]
         future_actions = None if record.actions is None else record.actions[t : t + self.horizon]
         return ProblemBatch(
             context_states_raw=context_raw.unsqueeze(0),
@@ -70,9 +66,7 @@ class TrajectoryWindowDataset(Dataset[ProblemBatch]):
             history_dts=record.dts[context_start:t].unsqueeze(0),
             future_dts=record.dts[t : t + self.horizon].unsqueeze(0),
             mu_static=(None if record.mu_static is None else record.mu_static.unsqueeze(0)),
-            coordinates=(
-                None if record.coordinates is None else record.coordinates.unsqueeze(0)
-            ),
+            coordinates=(None if record.coordinates is None else record.coordinates.unsqueeze(0)),
             cell_weights=(
                 None if record.cell_weights is None else record.cell_weights.unsqueeze(0)
             ),

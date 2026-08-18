@@ -78,9 +78,7 @@ def damped_oscillator_analytic_state(
     envelope = torch.exp(-gamma * times)
     carrier = x0 * cosine + coefficient * sine
     position = envelope * carrier
-    velocity = envelope * (
-        -gamma * carrier - x0 * omega_d * sine + coefficient * omega_d * cosine
-    )
+    velocity = envelope * (-gamma * carrier - x0 * omega_d * sine + coefficient * omega_d * cosine)
     return torch.stack((position, velocity), dim=-1)
 
 
@@ -169,11 +167,7 @@ def generate_damped_oscillator_trajectories(
 
 def _duffing_rhs(state: Tensor, config: DuffingConfig) -> Tensor:
     position, velocity = state[0], state[1]
-    acceleration = (
-        -config.delta * velocity
-        - config.alpha * position
-        - config.beta * position**3
-    )
+    acceleration = -config.delta * velocity - config.alpha * position - config.beta * position**3
     return torch.stack((velocity, acceleration))
 
 
@@ -227,9 +221,7 @@ def generate_duffing_trajectories(
                 trajectory_id=f"duffing-{index:04d}",
                 states_raw=torch.stack(states),
                 dts=torch.full((config.num_steps,), config.dt, dtype=dtype),
-                mu_static=torch.tensor(
-                    [config.delta, config.alpha, config.beta], dtype=dtype
-                ),
+                mu_static=torch.tensor([config.delta, config.alpha, config.beta], dtype=dtype),
                 metadata={"system": "duffing", "integrator": "rk4", "seed": seed},
             )
         )

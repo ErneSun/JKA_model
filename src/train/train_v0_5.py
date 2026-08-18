@@ -442,26 +442,21 @@ def train_v0_5(
     best_path = run.run_dir / "checkpoints" / "best_forecast.pt"
     best_physics_path = run.run_dir / "checkpoints" / "best_physics.pt"
     best_post_warmup_path = run.run_dir / "checkpoints" / "best_forecast_post_warmup.pt"
-    best_physics_post_warmup_path = (
-        run.run_dir / "checkpoints" / "best_physics_post_warmup.pt"
-    )
+    best_physics_post_warmup_path = run.run_dir / "checkpoints" / "best_physics_post_warmup.pt"
     field_loss_config = resolved.field_loss
     assert field_loss_config is not None
 
     def physics_selection_value(row: dict[str, Any]) -> float:
-        return (
-            field_loss_config.lambda_mass * float(row["val_mass"])
-            + field_loss_config.lambda_operator * float(row["val_operator"])
-        )
+        return field_loss_config.lambda_mass * float(
+            row["val_mass"]
+        ) + field_loss_config.lambda_operator * float(row["val_operator"])
 
     best_physics_value = min(
         (physics_selection_value(row) for row in prior_rows),
         default=float("inf"),
     )
     first_full_physics_epoch = resolved.v0_5_training.physics_warmup_epochs + 1
-    post_warmup_rows = [
-        row for row in prior_rows if int(row["epoch"]) >= first_full_physics_epoch
-    ]
+    post_warmup_rows = [row for row in prior_rows if int(row["epoch"]) >= first_full_physics_epoch]
     best_post_warmup_value = min(
         (float(row["val_rollout"]) for row in post_warmup_rows),
         default=float("inf"),

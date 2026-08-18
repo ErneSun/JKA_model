@@ -34,9 +34,7 @@ class KoopmanEncoder(nn.Module):
         if hidden_layers not in {0, 1, 2}:
             raise ValueError("encoder hidden_layers must be 0, 1, or 2")
         if hidden_layers == 0:
-            layers: list[nn.Module] = [
-                nn.Linear(input_dim, latent_dim, dtype=dtype, device=device)
-            ]
+            layers: list[nn.Module] = [nn.Linear(input_dim, latent_dim, dtype=dtype, device=device)]
         else:
             layers = [
                 nn.Linear(input_dim, hidden_dim, dtype=dtype, device=device),

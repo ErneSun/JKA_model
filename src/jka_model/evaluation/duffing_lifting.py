@@ -81,9 +81,7 @@ def run_duffing_lifting_diagnostic(config: ProjectConfig) -> DuffingLiftingDiagn
     direct_fit = train_direct_koopman(
         direct, direct_states, direct_targets, direct_dts, direct_config
     )
-    normalizer = ChannelStandardizer(eps=config.data.normalization.eps).fit(
-        records, manifest, spec
-    )
+    normalizer = ChannelStandardizer(eps=config.data.normalization.eps).fit(records, manifest, spec)
     windows = TrajectoryWindowDataset(
         train_records,
         history=config.data.history,
@@ -119,9 +117,7 @@ def run_duffing_lifting_diagnostic(config: ProjectConfig) -> DuffingLiftingDiagn
     finite = True
     for record in test_records:
         direct_prediction = direct.rollout(record.states_raw[0], record.dts[:horizon])
-        direct_metrics = evaluate_rollout(
-            direct_prediction, record.states_raw[: horizon + 1]
-        )
+        direct_metrics = evaluate_rollout(direct_prediction, record.states_raw[: horizon + 1])
         lifted_metrics, _, _, _ = evaluate_learned_trajectory(
             lifted, record, normalizer, horizon=horizon
         )

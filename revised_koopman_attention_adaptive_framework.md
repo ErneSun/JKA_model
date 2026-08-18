@@ -148,83 +148,563 @@ A normalized variant can be
 A robust denominator should be used when the true latent increment is very small.
 
 Small \(m_t\) suggests the nominal operator is locally adequate; large or rapidly increasing \(m_t\) may indicate regime transition, parameter change, transient behavior, unmodeled forcing, or degradation of the current Koopman approximation.
+## 7. Residual Structure Assessment: the new routing layer
 
-## 7. Attention input
+The revised architecture should not assume that every physical problem requires the same residual model.
 
-Attention must not depend on future ground-truth residuals at inference time.
-
-Define the causal latent history
-
-\[
-\mathcal H_t=
-\{z_{t-H+1}^K,\ldots,z_t^K\}.
-\]
-
-A more general future form is
-
-\[
-\mathcal I_t
-=
-(
-z_{t-H:t}^K,
-a_{t-H:t},
-\mu_{t-H:t},
-o_{t-H:t}^{exo},
-\Delta t
-).
-\]
-
-Then
+The nominal residual remains
 
 \[
 \boxed{
-c_t=\mathcal A_\psi(\mathcal I_t)
+r_{t+1}^{0}
+=
+z_{t+1}^{\rm true}
+-
+e^{A_0\Delta t_t}z_t^K.
 }
 \]
 
-where \(c_t\) is the learned dynamic context representation.
+However, the structure of \(r^0\) can depend strongly on:
 
-## 8. Residual as teacher, not inference-time input
+- the physical problem;
+- the selected Koopman latent coordinates;
+- the latent dimension;
+- the sampling interval;
+- the operating regime;
+- the amount of unresolved physics;
+- external forcing;
+- stochasticity and measurement noise.
 
-During training, \(r_{t+1}^{0}\) is available and provides supervision:
+Therefore, before selecting Attention, a Markovian MLP, or any closure family, the model should perform a **Residual Structure Assessment**.
 
-\[
-\mathcal H_t
-\rightarrow
-\mathcal A_\psi
-\rightarrow
-c_t
-\rightarrow
-\hat r_{t+1}^{0}.
-\]
-
-Define the residual head
+The assessment answers three sequential questions:
 
 \[
 \boxed{
-\hat r_{t+1}^{0}
+\text{Is the residual significant?}
+\rightarrow
+\text{Is it learnable?}
+\rightarrow
+\text{Does history add predictive information?}
+}
+\]
+
+This assessment becomes the main routing mechanism between V0.7 and V0.8.
+
+---
+
+## 8. Residual significance
+
+A residual that is technically nonzero may still be too small to justify an additional model.
+
+Define a residual significance score such as
+
+\[
+\boxed{
+S_R
 =
-R_\phi(c_t,z_t^K,\Delta t_t)
+\frac{
+\mathbb E\|r_{t+1}^{0}\|^2
+}{
+\mathbb E\|z_{t+1}^{\rm true}-z_t^K\|^2+\epsilon
+}.
+}
+\]
+
+Alternative robust normalizations may be used if the true latent increment is close to zero.
+
+Interpretation:
+
+\[
+S_R \ll 1
+\]
+
+means the nominal Koopman model already explains most of the relevant latent evolution.
+
+This case should not trigger a correction model merely because a residual can be measured.
+
+The preferred decision is
+
+\[
+\boxed{
+\text{RESIDUAL ACTION = NONE}
+}
+\]
+
+unless later evidence shows that the small residual is scientifically important.
+
+---
+
+## 9. Residual learnability
+
+The residual can be decomposed conceptually into predictable and innovation components.
+
+Let \(\mathcal I_t\) denote the information available at prediction time. Then
+
+\[
+\boxed{
+r_{t+1}^{0}
+=
+\mathbb E[r_{t+1}^{0}\mid\mathcal I_t]
++
+\varepsilon_{t+1},
 }
 \]
 
 with
 
 \[
+\mathbb E[\varepsilon_{t+1}\mid\mathcal I_t]=0.
+\]
+
+The learnable component is
+
+\[
 \boxed{
-L_R
+r_{t+1}^{\rm pred}
 =
-\left\|
-\hat r_{t+1}^{0}
--
-r_{t+1}^{0}
-\right\|^2.
+\mathbb E[r_{t+1}^{0}\mid\mathcal I_t].
 }
 \]
 
-Thus residual teaches Attention which part of the upcoming dynamics the nominal Koopman model is likely to miss.
+The key question is whether the predictable component is large enough and stable enough to outperform simple baselines on held-out trajectories.
 
-## 9. Dynamic context representation \(c_t\)
+A practical residual predictability score can be defined as
+
+\[
+\boxed{
+P_R
+=
+1-
+\frac{E_{\rm best}}{E_0+\epsilon},
+}
+\]
+
+where
+
+- \(E_0\) is the error of a simple baseline such as zero residual or mean residual;
+- \(E_{\rm best}\) is the held-out error of the best admissible probe model.
+
+A high \(P_R\) indicates meaningful predictable structure.
+
+A low \(P_R\) means only:
+
+\[
+\boxed{
+\text{the residual is not predictably learnable from the currently available information.}
+}
+\]
+
+It must **not** automatically be interpreted as pure data noise.
+
+Possible causes include:
+
+1. measurement/data noise;
+2. missing exogenous variables;
+3. insufficient Koopman latent coordinates;
+4. inadequate encoder or Koopman training;
+5. unresolved stochastic forcing;
+6. hidden physical variables;
+7. numerical/modeling error.
+
+Therefore the unlearnable branch is a **diagnostic branch**, not automatically a denoising branch.
+
+---
+
+## 10. What “history dependence” means
+
+Two states can have nearly identical present latent coordinates,
+
+\[
+z_t^{(A)}\approx z_t^{(B)},
+\]
+
+while arriving there through different histories.
+
+If
+
+\[
+r_{t+1}^{(A)}\neq r_{t+1}^{(B)},
+\]
+
+then the present state \(z_t\) is not sufficient to determine the residual.
+
+In operational terms, history dependence means:
+
+\[
+\boxed{
+\text{past latent states provide predictive information about }r_{t+1}^{0}
+\text{ beyond the information already contained in }z_t.
+}
+\]
+
+This is stronger than saying that the residual time series has autocorrelation.
+
+The real test is whether
+
+\[
+F_H(z_{t-H:t},\ldots)
+\]
+
+predicts the residual better than
+
+\[
+F_M(z_t,\ldots)
+\]
+
+under matched conditions.
+
+---
+
+## 11. Markovian and history-dependent probe models
+
+Define the instantaneous information set
+
+\[
+\boxed{
+\mathcal I_t^{M}
+=
+(z_t^K,\Delta t_t,\mu_t,a_t,o_t^{exo},\ldots)
+}
+\]
+
+and the historical information set
+
+\[
+\boxed{
+\mathcal I_t^{H}
+=
+(z_{t-H:t}^K,
+\Delta t_{t-H:t},
+\mu_{t-H:t},
+a_{t-H:t},
+o_{t-H:t}^{exo},
+\ldots).
+}
+\]
+
+Use a Markovian probe
+
+\[
+\boxed{
+\hat r_{t+1}^{M}
+=
+F_M(\mathcal I_t^{M})
+}
+\]
+
+and a history-aware probe
+
+\[
+\boxed{
+\hat r_{t+1}^{H}
+=
+F_H(\mathcal I_t^{H}).
+}
+\]
+
+Let their held-out errors be
+
+\[
+E_M,\qquad E_H.
+\]
+
+Define the conditional history gain
+
+\[
+\boxed{
+G_H
+=
+\frac{
+E_M-E_H
+}{
+E_M+\epsilon
+}.
+}
+\]
+
+A positive and statistically stable \(G_H\) means history contains useful information beyond the current state.
+
+---
+
+## 12. Controls required before claiming history dependence
+
+History dependence should not be inferred merely because a larger temporal model has lower error.
+
+At minimum, the comparison should consider:
+
+- held-out trajectories;
+- matched data split;
+- identical Koopman backbone;
+- identical normalization;
+- comparable optimization budget;
+- approximately parameter-matched Markovian and historical probes;
+- multiple random seeds for strong claims;
+- shuffled-history control.
+
+A shuffled-history control should preserve the current state \(z_t\) while destroying useful ordering or correspondence in older states.
+
+If
+
+\[
+F_H
+\]
+
+outperforms both
+
+\[
+F_M
+\]
+
+and
+
+\[
+F_{H,\rm shuffled},
+\]
+
+the evidence for genuine temporal information is much stronger.
+
+History length \(H\) may still be swept as a secondary diagnostic, but V0.7 no longer needs to force every problem into a universal Markovian/short-memory/long-memory category.
+
+---
+
+## 13. The four residual cases
+
+The revised system should distinguish four cases.
+
+### R0 — Residual negligible
+
+\[
+S_R \text{ is sufficiently small.}
+\]
+
+Interpretation:
+
+\[
+\boxed{
+\text{The nominal Koopman model is already sufficient for the tested problem/regime.}
+}
+\]
+
+Action:
+
+\[
+\boxed{
+\text{No residual/context correction is required.}
+}
+\]
+
+---
+
+### R1 — Residual significant but not predictably learnable
+
+\[
+S_R \text{ large enough},
+\qquad
+P_R \text{ weak}.
+\]
+
+Interpretation:
+
+\[
+\boxed{
+\text{The current information set does not contain a stable deterministic predictor of the residual.}
+}
+\]
+
+This does not imply pure noise.
+
+The diagnosis should test, where relevant:
+
+- denoising/data quality;
+- missing parameters;
+- missing external forcing;
+- latent dimension and encoder adequacy;
+- stochastic closure;
+- uncertainty modeling;
+- problem formulation.
+
+Action:
+
+\[
+\boxed{
+\text{Diagnose before introducing a deterministic residual learner.}
+}
+\]
+
+---
+
+### R2 — Residual learnable without meaningful history gain
+
+\[
+P_R \text{ strong},
+\qquad
+G_H \approx 0
+\]
+
+within matched experimental uncertainty.
+
+Interpretation:
+
+\[
+\boxed{
+r_{t+1}^{0}
+\approx
+F(z_t^K,\Delta t_t,\mu_t,\ldots).
+}
+\]
+
+The residual is approximately Markovian with respect to the current resolved representation.
+
+Action:
+
+\[
+\boxed{
+\text{Use an instantaneous context encoder, not Attention by default.}
+}
+\]
+
+---
+
+### R3 — Residual learnable with meaningful history gain
+
+\[
+P_R \text{ strong},
+\qquad
+G_H>0
+\]
+
+with stable held-out evidence.
+
+Interpretation:
+
+\[
+\boxed{
+r_{t+1}^{0}
+\approx
+F(z_{t-H:t}^K,\ldots)
+}
+\]
+
+and the history contains useful information not recoverable from \(z_t^K\) alone.
+
+Action:
+
+\[
+\boxed{
+\text{Use a temporal context encoder such as causal Attention.}
+}
+\]
+
+---
+
+## 14. Residual Structure Router
+
+The residual assessment can therefore be summarized as
+
+\[
+\boxed{
+\Phi_{\rm context}
+=
+\begin{cases}
+\varnothing,
+&
+R0:\ \text{residual negligible},
+\\[2mm]
+\text{diagnostic / stochastic branch},
+&
+R1:\ \text{significant but unlearnable},
+\\[2mm]
+\Phi_M(z_t^K,\Delta t,\mu,\ldots),
+&
+R2:\ \text{learnable, no history gain},
+\\[2mm]
+\Phi_H(z_{t-H:t}^K,\Delta t,\mu,\ldots),
+&
+R3:\ \text{learnable, history-dependent}.
+\end{cases}
+}
+\]
+
+This is **one architecture with a residual-structure router**, not four unrelated world models.
+
+---
+
+## 15. Unified context interface for R2 and R3
+
+The main architectural rule is:
+
+\[
+\boxed{
+\text{R2 and R3 use different context encoders but the same downstream interface.}
+}
+\]
+
+### R2: instantaneous context
+
+For a learnable residual with no history gain,
+
+\[
+\boxed{
+c_t
+=
+\Phi_M(z_t^K,\Delta t_t,\mu_t,\ldots).
+}
+\]
+
+The preferred initial implementation is a small MLP.
+
+Example:
+
+\[
+d_K
+\rightarrow
+d_{\rm hidden}
+\rightarrow
+d_c,
+\qquad
+d_c\ll d_K.
+\]
+
+Here \(c_t\) means:
+
+\[
+\boxed{
+\text{the compact part of the current state that is relevant to Koopman mismatch and adaptation.}
+}
+\]
+
+No temporal Attention is required.
+
+---
+
+### R3: historical context
+
+For a learnable residual with history gain,
+
+\[
+\boxed{
+c_t
+=
+\Phi_H(z_{t-H:t}^K,\Delta t,\mu,\ldots).
+}
+\]
+
+The preferred initial implementation is a small causal Attention encoder.
+
+Here \(c_t\) means:
+
+\[
+\boxed{
+\text{a compact temporal summary relevant to Koopman mismatch and adaptation.}
+}
+\]
+
+Thus the semantic meaning of \(c_t\) remains unified even though the encoder family changes.
+
+---
+
+## 16. Meaning of \(c_t\)
 
 Define
 
@@ -236,110 +716,138 @@ d_c\ll d_K.
 }
 \]
 
-Its semantic role is
+The fundamental distinction is
 
 \[
 \boxed{
-c_t = \text{compact temporal dynamic context}
-}
-\]
-
-with the distinction
-
-\[
-\boxed{
-z_t^K = \text{where the system is}
-}
-\]
-
-and
-
-\[
-\boxed{
-c_t = \text{what dynamical context the system is currently in}.
-}
-\]
-
-It may implicitly encode onset of regime change, dominant-frequency changes, damping/growth changes, changing mode importance, upcoming Koopman mismatch, transient evolution, or parameter-dependent dynamical context.
-
-No explicit \(c_t^{true}\) is required; \(c_t\) is learned through downstream tasks.
-
-## 10. Recommended Attention construction
-
-A simple causal temporal Attention model can use
-
-\[
-x_i
+z_t^K
 =
-P_z z_i^K
-+
-P_t(\Delta t_i)
-+
-P_\mu\mu_i
-+\cdots
-\]
-
-followed by
-
-\[
-h_{t-H:t}
-=
-\operatorname{Attention}_{\rm causal}(x_{t-H:t}).
-\]
-
-Use the last causal token \(h_t\) and project
-
-\[
-\boxed{
-c_t=P_c h_t.
+\text{where the system currently is}
 }
 \]
 
-This preserves causal semantics without requiring a special CLS token.
+versus
 
-## 11. Three context heads
+\[
+\boxed{
+c_t
+=
+\text{what information about the current dynamical context is relevant to Koopman mismatch/adaptation}.
+}
+\]
 
-### 11.1 Residual head
+For R2, \(c_t\) is extracted from the current state.
+
+For R3, \(c_t\) is extracted from the causal state history.
+
+No explicit ground-truth \(c_t^{true}\) is required.
+
+It is a learned bottleneck trained through downstream objectives.
+
+---
+
+## 17. Residual supervision of the context representation
+
+Regardless of whether \(c_t\) comes from an MLP or Attention, it should first be validated by residual prediction.
+
+Define
 
 \[
 \boxed{
 \hat r_{t+1}^{0}
 =
-R_\phi(c_t,z_t^K,\Delta t_t)
+R_\phi(c_t,z_t^K,\Delta t_t).
 }
 \]
 
-Question: what will the nominal Koopman model fail to explain next?
+The residual supervision loss is
 
-### 11.2 Adequacy/change head
+\[
+\boxed{
+L_{\rm residual}
+=
+\left\|
+\hat r_{t+1}^{0}
+-
+r_{t+1}^{0}
+\right\|^2.
+}
+\]
+
+Residual is therefore the main teacher signal for context learning.
+
+The key principle is:
+
+\[
+\boxed{
+\text{Residual supervises }c_t,
+\text{ but future ground-truth residual is not an inference-time input.}
+}
+\]
+
+---
+
+## 18. Koopman adequacy head
+
+The same context can predict the expected magnitude of nominal Koopman mismatch:
 
 \[
 \boxed{
 \hat m_{t+1}
 =
-Q_\chi(c_t)
+Q_\chi(c_t).
 }
 \]
 
-Question: how inadequate is the nominal Koopman model likely to be?
+A simple target is
 
-A later classifier may estimate \(p_{{\rm change},t}\), but continuous mismatch prediction should be preferred before hard labels are introduced.
+\[
+m_{t+1}
+=
+\|r_{t+1}^{0}\|.
+\]
 
-### 11.3 Operator-adaptation head
+This head answers:
 
 \[
 \boxed{
-\eta_t=G_\omega(c_t)
+\text{How inadequate is the nominal Koopman model likely to be next?}
 }
 \]
 
-Question: how should the current Koopman dynamics change?
+A later change-probability head may be introduced if a scientifically justified definition of regime change exists, but V0.8 should prefer continuous mismatch targets before hard binary labels.
 
-## 12. Context-conditioned Koopman adaptation
+---
 
-Attention should not output an unrestricted \(d_K\times d_K\) matrix.
+## 19. Meaning of \(\eta_t\)
 
-The preferred first route is low-rank modulation:
+After \(c_t\) has been validated, a later operator-adaptation head produces
+
+\[
+\boxed{
+\eta_t
+=
+G_\omega(c_t).
+}
+\]
+
+The role of \(\eta_t\) is fundamentally different from \(c_t\).
+
+\[
+\boxed{
+c_t = \text{context description}
+}
+\]
+
+whereas
+
+\[
+\boxed{
+\eta_t = \text{operator-adjustment coordinates}.
+}
+\]
+
+A useful intuitive form is
 
 \[
 \boxed{
@@ -347,11 +855,63 @@ A_t
 =
 A_0
 +
-U\,\operatorname{diag}(\eta_t)\,V^\top
+\sum_{i=1}^{r}
+\eta_{t,i}B_i.
 }
 \]
 
-where
+The learned matrices
+
+\[
+B_1,\ldots,B_r
+\]
+
+represent admissible directions in generator space, while
+
+\[
+\eta_{t,i}
+\]
+
+determines how strongly each direction is activated at time \(t\).
+
+Thus
+
+\[
+\boxed{
+z_t
+\rightarrow
+c_t
+\rightarrow
+\eta_t
+\rightarrow
+A_t
+}
+\]
+
+means:
+
+1. observe the current resolved state/context;
+2. summarize the relevant dynamical context;
+3. decide how the nominal operator should change;
+4. construct the adapted Koopman generator.
+
+---
+
+## 20. Low-rank adaptive Koopman operator
+
+The preferred primary implementation remains
+
+\[
+\boxed{
+A_t
+=
+A_0
++
+U\operatorname{diag}(\eta_t)V^\top
+}
+\]
+
+with
 
 \[
 U,V\in\mathbb R^{d_K\times r},
@@ -359,15 +919,18 @@ U,V\in\mathbb R^{d_K\times r},
 r\ll d_K.
 \]
 
-Then
+Equivalently,
 
 \[
-\eta_t\in\mathbb R^r
+A_t
+=
+A_0
++
+\sum_{i=1}^{r}
+\eta_{t,i}B_i.
 \]
 
-controls only a restricted family of generator variations.
-
-Adaptive propagation:
+The adaptive propagation is
 
 \[
 \boxed{
@@ -377,17 +940,23 @@ e^{A_t\Delta t_t}z_t^K.
 }
 \]
 
-## 13. Alternative route: Mixture of Koopman operators
+The low-rank restriction prevents the context encoder from freely rewriting the full Koopman dynamics.
 
-For more discrete regime switching, use \(A_1,\ldots,A_M\) and
+---
+
+## 21. Alternative: Mixture of Koopman generators
+
+For problems with clearly discrete dynamical regimes, a secondary route is
 
 \[
-\alpha_t=\operatorname{softmax}(Wc_t),
+\alpha_t
+=
+\operatorname{softmax}(Wc_t),
 \qquad
-\sum_{m=1}^{M}\alpha_{t,m}=1.
+\sum_{m=1}^{M}\alpha_{t,m}=1
 \]
 
-Then
+and
 
 \[
 \boxed{
@@ -398,11 +967,13 @@ A_t
 }
 \]
 
-This is a secondary route for clearly multi-regime systems; low-rank modulation remains the primary first experiment.
+This route should be treated as an alternative architecture for sufficiently discrete regime switching, not the universal default.
 
-## 14. Residual decomposition after operator adaptation
+---
 
-Nominal residual:
+## 22. Residual decomposition after operator adaptation
+
+The nominal residual is
 
 \[
 r_{t+1}^{0}
@@ -412,7 +983,7 @@ z_{t+1}^{\rm true}
 e^{A_0\Delta t_t}z_t^K.
 \]
 
-Operator-explainable part:
+The part explained by operator adaptation is
 
 \[
 \boxed{
@@ -426,7 +997,7 @@ e^{A_0\Delta t_t}
 }
 \]
 
-Remaining residual:
+The remaining residual is
 
 \[
 \boxed{
@@ -450,29 +1021,11 @@ r_{t+1}^{rem}.
 }
 \]
 
-This is a central mathematical decomposition of the revised architecture.
+This remains one of the central mathematical decompositions of the architecture.
 
-## 15. Interpretation of the decomposition
+---
 
-\[
-\boxed{
-r^{op}
-}
-\]
-
-is the residual explainable by adapting Koopman dynamics.
-
-\[
-\boxed{
-r^{rem}
-}
-\]
-
-is what remains unexplained even after adaptive operator selection/modulation.
-
-This prevents the residual closure from being forced to compensate for an inappropriate fixed operator.
-
-## 16. Operator-explained fraction
+## 23. Operator-explained fraction
 
 Define
 
@@ -491,23 +1044,81 @@ Define
 
 Interpretation:
 
-- \(\Gamma_{op}\approx1\): adaptation explains most nominal residual;
-- \(\Gamma_{op}\approx0\): adaptation explains little;
-- negative values: adaptation worsened the mismatch.
+- \(\Gamma_{op}\approx 1\): operator adaptation explains most nominal residual;
+- \(\Gamma_{op}\approx 0\): adaptation explains little;
+- \(\Gamma_{op}<0\): adaptation worsens the residual.
 
-## 17. Optional remaining residual closure
+This metric directly tests whether the residual was caused mainly by an inappropriate fixed Koopman operator.
 
-Only if \(r^{rem}\) remains non-negligible, stable, and learnable should an explicit closure state be introduced:
+---
+
+## 24. Identifiability constraint
+
+The operator adaptation and additive residual correction must not be freely trained together from the beginning.
+
+Otherwise both can explain the same prediction error:
+
+\[
+r^0
+\approx
+r^{op}
+\]
+
+or
+
+\[
+r^0
+\approx
+\hat r^{closure},
+\]
+
+making the decomposition scientifically ambiguous.
+
+Therefore the development order must remain:
+
+\[
+\boxed{
+\text{Residual assessment}
+\rightarrow
+\text{Context learning}
+\rightarrow
+\text{Operator adaptation}
+\rightarrow
+\text{Residual reassessment}
+\rightarrow
+\text{Closure only if necessary}.
+}
+\]
+
+---
+
+## 25. Optional remaining residual closure
+
+Only if
+
+\[
+r^{rem}
+\]
+
+is still:
+
+1. non-negligible;
+2. stable;
+3. predictably learnable;
+
+should an explicit closure state be introduced.
+
+For example,
 
 \[
 \boxed{
 z_t^R
 =
-M_\rho(c_t,z_{t-H:t}^K).
+M_\rho(c_t,z_{t-H:t}^K)
 }
 \]
 
-Then
+and
 
 \[
 \boxed{
@@ -517,7 +1128,7 @@ C_R(z_t^R).
 }
 \]
 
-Final prediction:
+The final prediction becomes
 
 \[
 \boxed{
@@ -529,7 +1140,7 @@ e^{A_t\Delta t_t}z_t^K
 }
 \]
 
-The semantic role of \(z_R\) becomes
+The semantic role of \(z_R\) is
 
 \[
 \boxed{
@@ -539,12 +1150,16 @@ z_R
 }
 \]
 
-## 18. PhysicsConstraint
+---
+
+## 26. PhysicsConstraint
 
 Decode
 
 \[
-\hat U_{t+1}=D(\hat z_{t+1})
+\hat U_{t+1}
+=
+D(\hat z_{t+1})
 \]
 
 and apply
@@ -555,172 +1170,129 @@ PhysicsConstraint(\hat U_{t+1}).
 }
 \]
 
-The long-term architecture is
+The long-term architecture therefore becomes
 
 \[
 \boxed{
 \text{JEPA representation}
 +
-\text{dynamic-context Attention}
+\text{Residual Structure Assessment}
 +
-\text{adaptive Koopman}
+\text{Adaptive Context Family}
 +
-\text{optional residual closure}
+\text{Adaptive Koopman}
++
+\text{Optional Residual Closure}
 +
 \text{PhysicsConstraint}.
 }
 \]
 
-## 19. Roles of the main variables
+---
 
-| Object | Mathematical role |
-|---|---|
-| \(U_t\) | full physical state |
-| \(z_t^K\) | current dynamical coordinate |
-| JEPA | stabilizes predictive representation |
-| \(A_0\) | nominal/persistent Koopman dynamics |
-| \(r^0\) | nominal Koopman mismatch |
-| \(m_t\) | Koopman inadequacy indicator |
-| \(c_t\) | compact temporal dynamic context |
-| \(\eta_t\) | operator-adaptation coordinates |
-| \(A_t\) | context-conditioned Koopman generator |
-| \(r^{op}\) | residual explained by operator adaptation |
-| \(r^{rem}\) | residual remaining after adaptive Koopman |
-| \(z_R\) | unresolved closure state |
-| PhysicsConstraint | physical admissibility/consistency |
+# 27. Updated Version Roadmap
 
-## 20. Main architectural changes
+## V0.7 — Residual Structure Assessment & Koopman Adequacy
 
-### Change 1 — Residual is no longer automatically identified with \(z_R\)
-
-Old:
-
-\[
-r\rightarrow z_R\rightarrow Attention\rightarrow correction.
-\]
-
-New:
+### Single core scientific question
 
 \[
 \boxed{
-r^0
-\rightarrow
-\text{learnability and Koopman-adequacy analysis}
+\text{What structure, if any, exists in the nominal Koopman residual }r^0?
 }
 \]
 
-followed by context learning and operator adaptation.
+V0.7 should no longer be framed primarily as a memory-classification version.
 
-### Change 2 — Attention still learns residual structure
+Its goal is to determine whether residual modeling is scientifically justified and, if so, what information is required.
+
+### V0.7-A — Residual significance
+
+Measure
+
+\[
+S_R
+\]
+
+and determine whether residual correction is worth considering.
+
+Output:
 
 \[
 \boxed{
-\mathcal H_t
-\rightarrow
-Attention
-\rightarrow
-c_t
-\rightarrow
-\hat r^0
+\text{RESIDUAL SIGNIFICANCE:
+NEGLIGIBLE / NON-NEGLIGIBLE}
 }
 \]
 
-Residual remains a primary teacher signal, but residual prediction is no longer the sole purpose of Attention.
+### V0.7-B — Residual learnability
 
-### Change 3 — Introduce \(c_t\)
+Use zero, linear, small nonlinear, and other appropriately controlled probes to determine whether \(r^0\) contains predictable structure.
 
-Instead of
-
-\[
-Attention\rightarrow\Delta z,
-\]
-
-use
+Output:
 
 \[
 \boxed{
-Attention\rightarrow c_t
+\text{RESIDUAL LEARNABILITY:
+STRONG / MODERATE / WEAK / NONE}
 }
 \]
 
-then
+The label NONE/WEAK must not automatically be interpreted as data noise.
+
+### V0.7-C — Conditional history gain
+
+Compare
 
 \[
-c_t
-\rightarrow
-(\hat r^0,\hat m,\eta_t).
+F_M(z_t,\ldots)
 \]
 
-### Change 4 — Attention can feed back into Koopman dynamics
+against
 
 \[
-\boxed{
-A_t=\mathcal G(A_0,c_t).
-}
+F_H(z_{t-H:t},\ldots).
 \]
 
-This allows the model to represent a changing local dynamical law.
-
-## 21. Identifiability issue
-
-If adaptive operator and residual correction are trained freely at the same time, both can explain the same mismatch.
-
-Therefore
+Use
 
 \[
-r^0=r^{op}+r^{rem}
-\]
-
-is not uniquely identifiable under unconstrained joint training.
-
-The architecture must therefore be developed in stages.
-
-# 22. Revised Version Roadmap
-
-## V0.7 — Residual Learnability & Koopman Adequacy
-
-### Core question
-
-\[
-\boxed{
-r_{t+1}^{0}
+G_H
 =
-z_{t+1}^{\rm true}
--
-e^{A_0\Delta t_t}z_t^K
-}
+\frac{E_M-E_H}{E_M+\epsilon}
 \]
 
-Does this residual contain stable, non-random, learnable structure?
+together with matched controls.
 
-### Keep the current V0.7 work
-
-- residual extraction;
-- residual statistics;
-- zero closure baseline;
-- linear predictor;
-- tiny MLP probe;
-- history diagnostic;
-- Mori–Zwanzig-inspired interpretation;
-- closed-loop probe.
-
-### New emphasis
-
-Report
+Output:
 
 \[
 \boxed{
-\text{RESIDUAL LEARNABILITY}
-=
-\text{STRONG / MODERATE / WEAK / NONE}
+\text{HISTORY GAIN:
+PRESENT / ABSENT / INCONCLUSIVE}
 }
 \]
 
-using held-out metrics such as \(R^2\), NRMSE, and MSE.
+### V0.7-D — Residual routing decision
 
-### Koopman adequacy
+The final result should classify the tested problem/backbone/regime as:
 
-Analyze
+\[
+\boxed{
+R0,\ R1,\ R2,\ \text{or }R3.
+}
+\]
+
+where
+
+- R0 = residual negligible;
+- R1 = residual significant but not predictably learnable;
+- R2 = residual learnable, no meaningful history gain;
+- R3 = residual learnable, meaningful history gain.
+
+### V0.7-E — Koopman adequacy
+
+Retain
 
 \[
 m_t=\|r_{t+1}^{0}\|
@@ -728,113 +1300,163 @@ m_t=\|r_{t+1}^{0}\|
 
 and robust normalized variants.
 
-Check whether high mismatch is structured in time/state space and whether it identifies transient or poorly modeled regions.
+Analyze whether residual magnitude is structured in time or state space and whether it can serve as a useful Koopman inadequacy signal.
 
-### Change-signal potential
+### V0.7-F — Existing memory analysis
 
-Analyze
+Existing history-length sweeps, ACF diagnostics, Mori–Zwanzig-inspired interpretation, and closed-loop probes remain useful.
 
-\[
-m_t
-\]
+However, they become supporting evidence rather than the main universal classification target.
 
-and
+### V0.7 completion result
 
-\[
-\Delta m_t=m_t-m_{t-1}
-\]
+V0.7 must end with a machine-readable decision conceptually equivalent to:
 
-as potential future supervision for context/change detection.
+```text
+RESIDUAL_SIGNIFICANCE: NEGLIGIBLE / NON_NEGLIGIBLE
+RESIDUAL_LEARNABILITY: STRONG / MODERATE / WEAK / NONE
+HISTORY_GAIN: PRESENT / ABSENT / INCONCLUSIVE
+RESIDUAL_ROUTE: R0 / R1 / R2 / R3
+```
 
-### Memory classification
+This result determines whether and how V0.8 proceeds.
 
-Existing Markovian/short-memory/long-memory diagnostics may remain, but are secondary because the classification is problem- and representation-dependent.
+---
 
-### V0.7 final gates
-
-1. Is \(r^0\) meaningfully learnable?
-2. Can causal history predict \(r^0\) or its magnitude?
-3. Does residual provide a useful Koopman inadequacy signal?
-
-## V0.8 — Residual-Supervised Temporal Context Attention
+## V0.8 — Residual-Supervised Dynamic Context Learning
 
 ### Core question
 
 \[
 \boxed{
-\text{Can causal temporal history produce a compact }c_t
+\text{Given the residual structure selected by V0.7, can we learn a compact }c_t
 \text{ that predicts nominal Koopman mismatch?}
 }
 \]
 
-### Context
+V0.8 is no longer synonymous with Attention.
+
+It is a **context-family version**.
+
+### R0 path
+
+If V0.7 returns R0:
+
+\[
+\boxed{
+\text{Do not train a context correction module.}
+}
+\]
+
+The Koopman-only baseline is retained.
+
+### R1 path
+
+If V0.7 returns R1:
+
+\[
+\boxed{
+\text{Do not blindly train deterministic Attention/MLP closure.}
+}
+\]
+
+Enter a diagnostic branch:
+
+- data quality;
+- missing variables;
+- latent adequacy;
+- external forcing;
+- stochastic modeling.
+
+### R2 path — Instantaneous context
+
+Use
 
 \[
 \boxed{
 c_t
 =
-\mathcal A_\psi(z_{t-H:t}^K,\Delta t)
+\Phi_M(z_t^K,\Delta t,\mu,\ldots)
 }
 \]
 
-with later extension to \(a,\mu,o^{exo}\).
+with a small MLP as the default.
 
-### Residual head
+No Attention is required.
+
+### R3 path — Historical context
+
+Use
 
 \[
 \boxed{
+c_t
+=
+\Phi_H(z_{t-H:t}^K,\Delta t,\mu,\ldots)
+}
+\]
+
+with small causal Attention as the primary temporal encoder.
+
+### Unified V0.8 heads
+
+For both R2 and R3:
+
+\[
+\boxed{
+c_t
+\rightarrow
 \hat r_{t+1}^{0}
-=
-R_\phi(c_t,z_t^K,\Delta t_t)
 }
 \]
 
-with
+and
 
 \[
 \boxed{
-L_R
+c_t
+\rightarrow
+\hat m_{t+1}.
+}
+\]
+
+The main losses are
+
+\[
+L_{\rm residual}
 =
-\|\hat r_{t+1}^{0}-r_{t+1}^{0}\|^2.
-}
+\|\hat r_{t+1}^{0}-r_{t+1}^{0}\|^2
 \]
 
-### Adequacy head
+and an adequacy-prediction loss such as
 
 \[
-\boxed{
-\hat m_{t+1}=Q_\chi(c_t)
-}
-\]
-
-with
-
-\[
-L_Q
+L_{\rm adequacy}
 =
 |\hat m_{t+1}-m_{t+1}|^2.
 \]
 
-### Critical restriction
+### Critical V0.8 restriction
 
 Keep
 
 \[
-A=A_0.
+\boxed{
+A_t=A_0.
+}
 \]
 
-V0.8 must not yet modify the Koopman operator.
+V0.8 must validate context learning **before** the context is allowed to modify Koopman dynamics.
 
-### Main comparisons
+### Main V0.8 scientific outputs
 
-- history MLP;
-- causal Attention;
-- parameter-matched controls;
-- shuffled-history controls.
+1. Was the V0.7 route correct?
+2. Does the chosen context encoder outperform appropriate controls?
+3. Does \(c_t\) predict residual structure?
+4. Does \(c_t\) predict Koopman inadequacy?
+5. For R3, does causal Attention outperform parameter-matched instantaneous and shuffled-history controls?
 
-### V0.8 output
-
-A validated dynamic-context representation \(c_t\), plus residual and adequacy probe heads.
+---
 
 ## V0.9 — Context-Conditioned Adaptive Koopman
 
@@ -842,26 +1464,37 @@ A validated dynamic-context representation \(c_t\), plus residual and adequacy p
 
 \[
 \boxed{
-\text{Can }c_t
-\text{ adapt Koopman dynamics and explain nominal residual?}
+\text{Can the validated context }c_t
+\text{ modify the Koopman generator and explain nominal residual?}
 }
 \]
 
-### Critical training rule
+At this point R2 and R3 **converge to the same downstream interface**.
 
-Disable direct residual correction during the primary experiment.
-
-Only allow
+The source of \(c_t\) may differ:
 
 \[
-c_t\rightarrow A_t.
+c_t
+=
+\begin{cases}
+\Phi_M(z_t), & R2,\\
+\Phi_H(z_{t-H:t}), & R3,
+\end{cases}
 \]
 
-### Primary route: low-rank modulation
+but the downstream operator adaptation is identical.
+
+### Operator adaptation
 
 \[
-\eta_t=G_\omega(c_t)
+\boxed{
+\eta_t
+=
+G_\omega(c_t)
+}
 \]
+
+followed by
 
 \[
 \boxed{
@@ -873,17 +1506,31 @@ U\operatorname{diag}(\eta_t)V^\top.
 }
 \]
 
-### Alternative: mixture of Koopman generators
+Equivalent basis form:
 
 \[
-\alpha_t=\operatorname{softmax}(Wc_t)
+A_t
+=
+A_0
++
+\sum_i\eta_{t,i}B_i.
 \]
+
+### Critical V0.9 restriction
+
+During the primary experiment, disable additive residual correction.
+
+Prediction must be
 
 \[
 \boxed{
-A_t=\sum_m\alpha_{t,m}A_m.
+\hat z_{t+1}
+=
+e^{A_t\Delta t_t}z_t.
 }
 \]
+
+This isolates the explanatory power of operator adaptation.
 
 ### Primary loss
 
@@ -894,32 +1541,22 @@ L_A
 \left\|
 z_{t+1}^{\rm true}
 -
-e^{A_t\Delta t_t}z_t^K
+e^{A_t\Delta t_t}z_t
 \right\|^2.
 }
 \]
 
-Include multi-step rollout.
+Include multi-step rollout evaluation.
 
-### Regularization
+### Alternative operator family
 
-For example
+Mixture-of-Koopman may be evaluated for sufficiently discrete regime-switching problems, but is not the default.
 
-\[
-L_{\Delta A}
-=
-\|\Delta A_t\|_F^2.
-\]
-
-Temporal smoothness may be tested carefully but must not suppress genuine abrupt switching.
-
-### Auxiliary heads
-
-V0.8 residual/adequacy heads may remain as auxiliary losses, but predicted residual must not enter the primary state prediction.
+---
 
 ## V1.0 — Adaptive Koopman Physical World Model Baseline
 
-Architecture:
+### Architecture
 
 \[
 \boxed{
@@ -927,11 +1564,13 @@ PhysicsConstraint
 +
 JEPA\ z_K
 +
-Temporal\ Context
+Selected\ Context\ Encoder
 +
 Adaptive\ Koopman
 }
 \]
+
+### Main task
 
 Recompute
 
@@ -941,11 +1580,17 @@ r_{t+1}^{rem}
 =
 z_{t+1}^{\rm true}
 -
-e^{A_t\Delta t_t}z_t^K.
+e^{A_t\Delta t_t}z_t.
 }
 \]
 
-Compare against \(r^0\) using
+Compare it against
+
+\[
+r_{t+1}^{0}.
+\]
+
+### Main metric
 
 \[
 \boxed{
@@ -955,30 +1600,54 @@ Compare against \(r^0\) using
 \frac{
 \mathbb E\|r^{rem}\|^2
 }{
-\mathbb E\|r^0\|^2+\epsilon
+\mathbb E\|r^{0}\|^2+\epsilon
 }.
 }
 \]
 
-Core question:
-
-> How much of the original residual was caused by an inappropriate fixed Koopman operator?
-
-If \(r^{rem}\approx0\), an explicit \(z_R\) may not be necessary.
-
-## V1.1 — Remaining Residual Closure
-
-Proceed only if \(r^{rem}\) remains non-negligible and learnable.
+### Scientific question
 
 \[
 \boxed{
-z_t^R=M_\rho(c_t,z_{t-H:t}^K)
+\text{How much of the nominal residual was actually due to an inadequate fixed Koopman operator?}
 }
 \]
 
+If
+
+\[
+r^{rem}
+\]
+
+is negligible, the architecture should stop here rather than introduce \(z_R\) unnecessarily.
+
+---
+
+## V1.1 — Remaining Residual Reassessment and Optional Closure
+
+Before creating a full residual closure, reassess
+
+\[
+r^{rem}
+\]
+
+using the same philosophy as V0.7.
+
+Ask:
+
+1. Is \(r^{rem}\) significant?
+2. Is \(r^{rem}\) learnable?
+3. Does \(r^{rem}\) still require history?
+
+Only if the answer justifies deterministic closure should \(z_R\) be introduced.
+
+Then
+
 \[
 \boxed{
-\Delta z_{t+1}^{R}=C_R(z_t^R)
+z_t^R
+=
+M_\rho(c_t,z_{t-H:t}^K)
 }
 \]
 
@@ -988,32 +1657,28 @@ and
 \boxed{
 \hat z_{t+1}
 =
-e^{A_t\Delta t_t}z_t^K
+e^{A_t\Delta t_t}z_t
 +
-\Delta z_{t+1}^{R}.
+C_R(z_t^R).
 }
 \]
 
-Here
+Thus \(z_R\) is reserved for genuinely unresolved dynamics after operator adaptation.
 
-\[
-\boxed{
-z_R
-=
-\text{unresolved closure after adaptive Koopman dynamics}.
-}
-\]
+---
 
 ## V1.2 — Controlled Joint Fine-Tuning
 
-Only after all earlier modules are independently validated should controlled joint training be attempted.
+Only after the previous components are independently validated should joint training be attempted.
 
-Possible trainable modules:
+Possible trainable modules include
 
 \[
 E_\theta,
 \quad
-\mathcal A_\psi,
+\Phi_{\rm context},
+\quad
+G_\omega,
 \quad
 A_t,
 \quad
@@ -1022,89 +1687,110 @@ z_R,
 D.
 \]
 
-Strict regularization and matched ablations are required so that Attention or residual closure does not absorb all dynamics and destroy Koopman interpretability.
+Strict controls are required to prevent the context encoder or residual closure from absorbing the full dynamics and making Koopman structure meaningless.
 
-# 23. Roadmap summary
+---
+
+# 28. Updated architecture summary
+
+The revised logic is
 
 \[
 \boxed{
-V0.7
+\text{Koopman Backbone}
+\rightarrow
+\text{Nominal Residual}
+\rightarrow
+\text{Residual Structure Assessment}
+\rightarrow
+\text{Context Family Selection}
+\rightarrow
+\text{Adaptive Koopman}
+\rightarrow
+\text{Residual Reassessment}
+\rightarrow
+\text{Closure if necessary}.
+}
+\]
+
+The context family is
+
+\[
+\boxed{
+\Phi_{\rm context}
 =
-Residual\ Learnability
+\begin{cases}
+\varnothing, & R0,\\
+\text{diagnostic/stochastic}, & R1,\\
+\Phi_M, & R2,\\
+\Phi_H, & R3.
+\end{cases}
+}
+\]
+
+For the two deterministic learnable cases,
+
+\[
+\boxed{
+R2:
+\quad
+z_t
+\rightarrow
+\text{small MLP}
+\rightarrow
+c_t
+}
+\]
+
+and
+
+\[
+\boxed{
+R3:
+\quad
+z_{t-H:t}
+\rightarrow
+\text{causal Attention}
+\rightarrow
+c_t.
+}
+\]
+
+After \(c_t\), both branches share the same interface:
+
+\[
+\boxed{
+c_t
+\rightarrow
+\left(
+\hat r_{t+1}^{0},
+\hat m_{t+1},
+\eta_t
+\right).
+}
+\]
+
+In V0.8 only \(\hat r^0\) and \(\hat m\) are active as context-validation heads.
+
+In V0.9, \(\eta_t\) becomes active and modifies Koopman dynamics:
+
+\[
+\boxed{
+A_t
+=
+A_0
 +
-Koopman\ Adequacy
+\sum_i\eta_{t,i}B_i.
 }
 \]
 
-\[
-\Downarrow
-\]
+---
 
-\[
-\boxed{
-V0.8
-=
-Residual\text{-}Supervised\ Attention
-+
-Dynamic\ Context\ c_t
-}
-\]
+# 29. Final mathematical core
 
-\[
-\Downarrow
-\]
+The latest framework can be condensed to the following sequence.
 
-\[
-\boxed{
-V0.9
-=
-Context\text{-}Conditioned\ Adaptive\ Koopman
-}
-\]
-
-\[
-\Downarrow
-\]
-
-\[
-\boxed{
-V1.0
-=
-Adaptive\ Koopman\ World\ Model
-+
-Residual\ Reassessment
-}
-\]
-
-\[
-\Downarrow
-\]
-
-if necessary,
-
-\[
-\boxed{
-V1.1
-=
-Remaining\ Residual\ Closure
-+
-z_R
-}
-\]
-
-\[
-\Downarrow
-\]
-
-\[
-\boxed{
-V1.2
-=
-Controlled\ Joint\ Fine\text{-}Tuning
-}
-\]
-
-# 24. Final mathematical core
+### Nominal Koopman model
 
 \[
 \boxed{
@@ -1114,29 +1800,62 @@ z_t^K=E_\theta(U_t)
 
 \[
 \boxed{
-r_{t+1}^{0}
+z_{t+1}^{0}
 =
-z_{t+1}^{\rm true}
--
 e^{A_0\Delta t_t}z_t^K
 }
 \]
 
 \[
 \boxed{
-c_t
+r_{t+1}^{0}
 =
-Attention(z_{t-H:t}^K,\ldots)
+z_{t+1}^{\rm true}
+-
+z_{t+1}^{0}
 }
 \]
 
-with
+### Residual structure assessment
+
+\[
+\boxed{
+(S_R,P_R,G_H)
+\rightarrow
+R0/R1/R2/R3
+}
+\]
+
+### Context selection
+
+\[
+\boxed{
+c_t
+=
+\begin{cases}
+\Phi_M(z_t,\ldots), & R2,\\
+\Phi_H(z_{t-H:t},\ldots), & R3.
+\end{cases}
+}
+\]
+
+### Residual-supervised context learning
 
 \[
 \boxed{
 c_t
 \rightarrow
-(\hat r^0,\hat m,\eta_t)
+(\hat r_{t+1}^{0},\hat m_{t+1})
+}
+\]
+
+### Operator adaptation
+
+\[
+\boxed{
+\eta_t
+=
+G_\omega(c_t)
 }
 \]
 
@@ -1150,7 +1869,7 @@ U\operatorname{diag}(\eta_t)V^\top
 }
 \]
 
-and
+### Residual decomposition
 
 \[
 \boxed{
@@ -1174,7 +1893,9 @@ e^{A_t\Delta t}z_t
 }
 \]
 
-followed, only if necessary, by
+### Optional closure
+
+Only if \(r^{rem}\) remains significant and learnable,
 
 \[
 \boxed{
@@ -1186,34 +1907,978 @@ C_R(z_t^R).
 }
 \]
 
-## 25. Final interpretation
+---
 
-The revised architecture is
+# 30. Final interpretation
+
+The architecture should no longer be described simply as
+
+\[
+\text{Koopman + Attention}.
+\]
+
+The more accurate description is
 
 \[
 \boxed{
 \text{JEPA Representation}
 +
-\text{Residual Diagnosis}
+\text{Koopman Backbone}
 +
-\text{Attention Dynamic Context}
+\text{Residual Structure Assessment}
++
+\text{Adaptive Context Family}
 +
 \text{Adaptive Koopman}
 +
 \text{Optional Residual Closure}
 +
-\text{PhysicsConstraint}
+\text{PhysicsConstraint}.
 }
 \]
 
-The key conceptual improvement is that residual is no longer treated as a single monolithic correction target.
+Attention remains an important component, but it is selected specifically when the tested residual contains useful history-dependent information.
 
-Instead,
+For learnable residuals that do not benefit from history, a smaller instantaneous context model should be preferred.
+
+The final scientific principle is therefore:
 
 \[
 \boxed{
-\text{Residual first tells us why and where nominal Koopman is inadequate.}
+\text{Measure residual structure first; choose model complexity only when the residual structure justifies it.}
+}
+
+---
+
+# 31. V0.8–V1.0 Physical Benchmark Program
+
+The post-V0.7 versions should no longer continue indefinitely on the simplest periodic advection–diffusion toy problem.
+
+The reason is structural: V0.8 and later versions now test
+
+\[
+\boxed{
+\text{history-dependent context}
+\rightarrow
+\text{dynamic-context representation}
+\rightarrow
+\text{adaptive Koopman dynamics},
 }
 \]
 
-Attention learns the temporal structure of this inadequacy, the learned context adapts the operator itself, and only the genuinely unexplained remainder is delegated to a final closure module.
+so the benchmark itself must contain sufficiently rich transient dynamics and, from V0.9 onward, controlled changes in operating conditions.
+
+The preferred strategy is to use **one continuous physical problem family from V0.8 through V1.0**, rather than changing to an unrelated PDE at every version.
+
+This allows the scientific progression
+
+\[
+\boxed{
+\text{fixed-condition transient dynamics}
+\rightarrow
+\text{controlled condition change}
+\rightarrow
+\text{unseen condition transitions}
+}
+\]
+
+to correspond directly to the architectural progression
+
+\[
+\boxed{
+c_t
+\rightarrow
+\eta_t
+\rightarrow
+A_t.
+}
+\]
+
+---
+
+## 31.1 Benchmark selection principle
+
+V0.8 should use a problem that is expected to contain rich temporal structure, but it must still pass the V0.7 Residual Structure Assessment.
+
+A fluid problem should **not** be declared R3 merely because it is a fluid problem.
+
+The intended workflow is:
+
+\[
+\boxed{
+\text{candidate transient flow problem}
+\rightarrow
+\text{V0.7 assessment}
+\rightarrow
+R3\ \text{confirmation}
+\rightarrow
+\text{formal V0.8 benchmark}.
+}
+\]
+
+The formal V0.8 benchmark should therefore satisfy
+
+\[
+S_R > 0,
+\qquad
+P_R > 0,
+\qquad
+G_H > 0
+\]
+
+with statistically credible held-out evidence.
+
+If the chosen problem is unexpectedly classified as R2, the architecture should respect that result and use the instantaneous-context branch instead of forcing Attention.
+
+---
+
+## 31.2 Preferred main benchmark: 2D cylinder wake
+
+The preferred V0.8–V1.0 main physical benchmark is
+
+\[
+\boxed{
+\text{two-dimensional incompressible cylinder wake}.
+}
+\]
+
+This problem is attractive because a compact low-dimensional Koopman representation can experience:
+
+- initial transient development;
+- vortex-formation history;
+- amplitude growth toward vortex shedding;
+- oscillatory limit-cycle behavior;
+- phase-dependent dynamics;
+- controllable Reynolds-number changes;
+- controllable inflow boundary-condition changes.
+
+The same geometry and PDE can therefore support several consecutive versions without changing the basic problem definition.
+
+---
+
+## 31.3 V0.8 physical problem: fixed-condition transient cylinder wake
+
+The V0.8 benchmark should first keep the physical operating condition fixed.
+
+For example,
+
+\[
+U_\infty(t)=U_0,
+\qquad
+Re(t)=Re_0.
+\]
+
+Different trajectories should be generated from different initial perturbations or physically admissible initial states, while the governing PDE, geometry, and boundary conditions remain fixed.
+
+The trajectory should contain the transition from initial transient flow toward developed vortex shedding.
+
+The V0.8 physical question becomes
+
+\[
+\boxed{
+\text{Under a fixed physical condition, does causal history contain information that helps predict }r^0?
+}
+\]
+
+The model remains
+
+\[
+A_t=A_0.
+\]
+
+For an R3 problem,
+
+\[
+\boxed{
+z_{t-H:t}
+\rightarrow
+\Phi_H
+\rightarrow
+c_t
+\rightarrow
+(\hat r_{t+1}^{0},\hat m_{t+1}).
+}
+\]
+
+No operator adaptation is activated yet.
+
+This isolates the scientific role of history and dynamic-context learning.
+
+---
+
+## 31.4 Why fixed boundary conditions are important in V0.8
+
+If V0.8 simultaneously introduces changing inlet conditions and temporal Attention, then two effects become mixed:
+
+1. history dependence under a single dynamical law;
+2. changing dynamical law due to changing operating conditions.
+
+V0.8 should separate these effects.
+
+Therefore the preferred sequence is
+
+\[
+\boxed{
+\text{V0.8: fixed operating condition}
+}
+\]
+
+followed by
+
+\[
+\boxed{
+\text{V0.9: controlled operating-condition variation}.
+}
+\]
+
+This keeps each version associated with one main scientific question.
+
+---
+
+# 32. V0.9 Physical Benchmark: Controlled Boundary/Operating-Condition Change
+
+V0.9 activates context-conditioned Koopman adaptation.
+
+Therefore the physical problem should contain a controlled situation in which the nominal generator
+
+\[
+A_0
+\]
+
+is expected to become insufficient.
+
+The simplest and preferred mechanism is a controlled change of inflow velocity and therefore Reynolds number.
+
+---
+
+## 32.1 Abrupt change
+
+A step change may be defined as
+
+\[
+U_\infty(t)
+=
+\begin{cases}
+U_1, & t<t_c,\\
+U_2, & t\ge t_c.
+\end{cases}
+\]
+
+Correspondingly,
+
+\[
+Re_1
+\rightarrow
+Re_2.
+\]
+
+The model must determine whether the previously learned context representation can produce
+
+\[
+\eta_t
+\]
+
+that modifies
+
+\[
+A_0
+\]
+
+into a suitable
+
+\[
+A_t.
+\]
+
+The primary pipeline is
+
+\[
+\boxed{
+z_{t-H:t}
+\rightarrow
+c_t
+\rightarrow
+\eta_t
+\rightarrow
+A_t
+\rightarrow
+e^{A_t\Delta t}z_t.
+}
+\]
+
+The additive residual correction remains disabled during the primary V0.9 experiment.
+
+---
+
+## 32.2 Smooth change
+
+A second experiment should use a smooth ramp
+
+\[
+U_\infty(t)
+=
+U_1
++
+(U_2-U_1)s(t),
+\]
+
+where \(s(t)\) is a smooth transition function.
+
+This tests continuous operator modulation rather than abrupt switching.
+
+The low-rank operator model
+
+\[
+\boxed{
+A_t
+=
+A_0
++
+U\operatorname{diag}(\eta_t)V^\top
+}
+\]
+
+is particularly suitable for this experiment.
+
+---
+
+## 32.3 Abrupt versus smooth operator adaptation
+
+The two V0.9 transition types have different scientific interpretations.
+
+### Smooth transition
+
+Tests whether
+
+\[
+\eta_t
+\]
+
+behaves as a continuous modulation coordinate.
+
+### Abrupt transition
+
+Tests whether the context representation can react quickly to a change in the active dynamical regime.
+
+A Mixture-of-Koopman alternative may be considered for clearly discrete switching, while low-rank continuous modulation remains the primary route.
+
+---
+
+# 33. Known-condition and latent-inferred-condition experiments
+
+The V0.9 benchmark should preferably contain two levels.
+
+## 33.1 Known-condition experiment
+
+Provide the current operating parameter explicitly:
+
+\[
+\boxed{
+c_t
+=
+\Phi_H(z_{t-H:t},Re_t)
+}
+\]
+
+or the corresponding R2 instantaneous form.
+
+This tests whether a parameter-conditioned adaptive Koopman architecture can function correctly.
+
+It is the easier architectural sanity check.
+
+---
+
+## 33.2 Latent-inferred-condition experiment
+
+Do not provide the true \(Re_t\) or inlet-change label.
+
+Use only the dynamical history:
+
+\[
+\boxed{
+c_t
+=
+\Phi_H(z_{t-H:t}).
+}
+\]
+
+Then evaluate whether \(c_t\) can infer enough information from the observed dynamics to drive a useful
+
+\[
+\eta_t
+\]
+
+and adaptive generator.
+
+This experiment directly tests the intended idea that
+
+\[
+\boxed{
+\text{dynamic context can be inferred from the evolution itself}.
+}
+\]
+
+If the latent-inferred model approaches the known-condition model, that provides strong evidence that \(c_t\) captures meaningful dynamical context.
+
+---
+
+# 34. V1.0 Physical Benchmark: Unseen Condition Transitions
+
+V1.0 should continue using the same cylinder-wake family.
+
+The goal is no longer merely to reproduce one known transition.
+
+The model should be evaluated on transitions that differ from training conditions.
+
+Training may include several examples such as
+
+\[
+Re_a\rightarrow Re_b,
+\qquad
+Re_b\rightarrow Re_c,
+\qquad
+Re_c\rightarrow Re_b.
+\]
+
+Testing should include held-out combinations such as
+
+\[
+Re_d\rightarrow Re_e
+\]
+
+with one or more of the following differences:
+
+- unseen initial Reynolds number;
+- unseen final Reynolds number;
+- unseen transition time;
+- unseen ramp rate;
+- reverse transition;
+- repeated condition changes.
+
+The V1.0 scientific question becomes
+
+\[
+\boxed{
+\text{Does }c_t\rightarrow\eta_t\rightarrow A_t
+\text{ generalize as an operator-adaptation mechanism rather than memorizing one transition?}
+}
+\]
+
+The main residual comparison remains
+
+\[
+r^0
+=
+r^{op}
++
+r^{rem}
+\]
+
+and
+
+\[
+\Gamma_{op}
+=
+1-
+\frac{
+\mathbb E\|r^{rem}\|^2
+}{
+\mathbb E\|r^0\|^2+\epsilon
+}.
+\]
+
+---
+
+# 35. Benchmark continuity across versions
+
+The preferred progression is therefore
+
+\[
+\boxed{
+\text{V0.8:
+fixed-condition transient cylinder wake}
+}
+\]
+
+\[
+\Downarrow
+\]
+
+\[
+\boxed{
+\text{V0.9:
+smooth and abrupt inflow/Re changes}
+}
+\]
+
+\[
+\Downarrow
+\]
+
+\[
+\boxed{
+\text{V1.0:
+unseen operating-condition transitions}
+}
+\]
+
+\[
+\Downarrow
+\]
+
+\[
+\boxed{
+\text{V1.1:
+reassess }r^{rem}\text{ and add closure only if justified}.
+}
+\]
+
+Using the same PDE and geometry makes the scientific progression more interpretable and allows V0.8 context learning to serve as a real foundation for V0.9 adaptive dynamics.
+
+---
+
+# 36. Single-GPU Compute Constraint
+
+All post-V0.7 benchmark design should satisfy the practical requirement
+
+\[
+\boxed{
+\text{formal training and validation must be feasible on one NVIDIA RTX 5080}.
+}
+\]
+
+Multi-GPU training must not be required for the baseline research program.
+
+The user has ample system RAM and storage, so dataset caching, trajectory storage, offline preprocessing, and residual-cache generation may use CPU memory and disk aggressively when useful.
+
+The main bottleneck to control is GPU VRAM and training-time complexity.
+
+---
+
+## 36.1 Compute-design principle
+
+The project should prefer
+
+\[
+\boxed{
+\text{scientifically sufficient resolution}
+}
+\]
+
+over unnecessarily large CFD or neural-network scale.
+
+The purpose of V0.8–V1.0 is to test the architecture:
+
+- residual structure;
+- context learning;
+- operator adaptation;
+- generalization across controlled operating changes.
+
+It is not yet intended to reproduce high-Reynolds-number production CFD.
+
+---
+
+## 36.2 Recommended 2D CFD scale
+
+The first formal cylinder-wake dataset should remain moderate.
+
+A practical initial target is approximately
+
+\[
+N_x\times N_y
+\sim
+\mathcal O(10^4-10^5)
+\]
+
+grid/cell degrees of freedom rather than multi-million-cell CFD.
+
+For structured or Cartesian formulations, a starting resolution in the broad range
+
+\[
+\boxed{
+128\times64
+\ \text{to}\
+256\times128
+}
+\]
+
+is suitable for architecture development, subject to the actual immersed-boundary/body representation and numerical stability.
+
+Higher resolution should only be introduced after the architecture passes at smaller scale.
+
+---
+
+## 36.3 Dataset storage strategy
+
+Because system RAM and storage are not the primary limitation, trajectories should preferably be:
+
+1. generated or collected offline;
+2. stored on disk;
+3. normalized using train-only statistics;
+4. optionally memory-mapped;
+5. converted into latent/residual caches where scientifically appropriate.
+
+In particular, once the V0.6/V0.7 backbone is frozen, it is reasonable to precompute:
+
+\[
+z_t^K,
+\qquad
+r_{t+1}^{0},
+\qquad
+m_t
+\]
+
+for V0.7/V0.8 context experiments.
+
+This can greatly reduce repeated GPU decoding/encoding cost.
+
+The cache must preserve checkpoint, split, normalization, data, and residual-definition fingerprints.
+
+---
+
+## 36.4 Latent dimension
+
+The initial post-V0.7 flow benchmark should keep
+
+\[
+d_K
+\]
+
+moderate.
+
+A preferred exploratory range is
+
+\[
+\boxed{
+d_K\sim 16-64.
+}
+\]
+
+The value should be chosen from representation-quality and residual-significance studies rather than made large by default.
+
+If a larger \(d_K\) dramatically removes the residual, that is itself an important scientific result and should be reported rather than hidden by adding a larger closure model.
+
+---
+
+## 36.5 Context dimension
+
+The context bottleneck should remain smaller than the Koopman latent:
+
+\[
+\boxed{
+d_c\ll d_K.
+}
+\]
+
+A practical initial range is
+
+\[
+\boxed{
+d_c\sim4-16.
+}
+\]
+
+This prevents \(c_t\) from becoming a second unrestricted latent state.
+
+---
+
+## 36.6 Attention scale for R3
+
+The R3 Attention encoder should remain intentionally small.
+
+A suitable first search space is approximately:
+
+- 2–4 causal Attention blocks;
+- model width 64–128;
+- 2–4 attention heads;
+- moderate history length;
+- no giant Transformer backbone;
+- no full spatial-grid Transformer.
+
+Attention operates on the **Koopman latent history**, not directly on every CFD grid point.
+
+Therefore its complexity is approximately governed by the history length and latent embedding dimension, not the full physical grid size.
+
+This is essential for single-5080 feasibility.
+
+---
+
+## 36.7 History length
+
+The history horizon should be discovered empirically rather than made extremely long.
+
+A staged sweep such as
+
+\[
+H\in\{1,2,4,8,16,32\}
+\]
+
+may be used depending on sampling rate.
+
+Only the smallest history length that captures most stable history gain should be retained for formal training.
+
+The physical memory time
+
+\[
+T_H
+=
+\sum_{j=t-H+1}^{t}\Delta t_j
+\]
+
+should be reported along with step count.
+
+---
+
+## 36.8 Batch size and sequence strategy
+
+Formal experiments should use the largest batch size that fits comfortably on one RTX 5080, but architecture decisions must not depend on very large batches.
+
+Preferred strategies include:
+
+- latent-cache training for V0.8;
+- mixed precision where numerically safe;
+- gradient accumulation if required;
+- short-to-moderate rollout windows during training;
+- longer closed-loop rollouts mainly during evaluation;
+- checkpointing/resume;
+- CPU-side data caching/prefetching.
+
+---
+
+## 36.9 Decoder usage
+
+The physical decoder can be one of the largest memory consumers.
+
+Therefore V0.8 residual/context training should primarily operate in latent space after the backbone is validated and frozen.
+
+Physical-space decoding should be used for:
+
+- validation;
+- selected training regularization if scientifically required;
+- PhysicsConstraint evaluation;
+- long-rollout physical metrics.
+
+It should not be redundantly executed for every auxiliary residual probe if this does not affect the scientific question.
+
+---
+
+## 36.10 Adaptive Koopman cost
+
+The adaptive generator should remain computationally modest.
+
+Low-rank modulation
+
+\[
+A_t
+=
+A_0+
+U\operatorname{diag}(\eta_t)V^\top
+\]
+
+is preferable to producing a fully unrestricted matrix at every time step.
+
+With moderate
+
+\[
+d_K
+\]
+
+and low rank
+
+\[
+r,
+\]
+
+matrix-exponential propagation remains manageable on a single GPU.
+
+The model should avoid a large ensemble of high-dimensional Koopman experts unless the low-rank route clearly fails and mixture modeling is scientifically justified.
+
+---
+
+## 36.11 CFD generation versus network training
+
+The architecture program should distinguish two costs:
+
+### CFD/data generation
+
+Can be performed offline and may use CPU resources, large system memory, and storage.
+
+### Neural-network training
+
+Must remain compatible with one RTX 5080.
+
+The benchmark should therefore avoid requiring extremely expensive high-fidelity transient CFD generation for every training epoch.
+
+Prefer reusable offline trajectories.
+
+---
+
+## 36.12 CPU-first and single-GPU workflow
+
+The preferred workflow remains:
+
+\[
+\boxed{
+\text{local CPU/MPS smoke test}
+\rightarrow
+\text{Git commit/push}
+\rightarrow
+\text{single RTX 5080 formal run}.
+}
+\]
+
+All critical tensor-shape, causal-history, residual-alignment, checkpoint, and routing tests must remain runnable without the RTX 5080.
+
+GPU runs should be reserved for:
+
+- formal context training;
+- larger history sweeps;
+- adaptive-Koopman rollout;
+- multi-seed validation;
+- full physical decoding.
+
+---
+
+# 37. Fallback benchmark if cylinder wake is too expensive
+
+If the selected cylinder-wake solver or dataset generation proves unnecessarily expensive for the architectural question, a lower-cost fallback is
+
+\[
+\boxed{
+\text{2D lid-driven cavity with time-varying lid velocity}.
+}
+\]
+
+The operating condition can be changed through
+
+\[
+U_{\rm lid}(t).
+\]
+
+Advantages include:
+
+- simple geometry;
+- simple boundary control;
+- no open outflow boundary;
+- relatively low computational cost;
+- straightforward smooth and abrupt condition changes.
+
+However, if computationally feasible on one RTX 5080, the cylinder wake remains the preferred benchmark because its transient and oscillatory dynamics are richer for testing history-dependent context.
+
+---
+
+# 38. Updated post-V0.7 experimental program
+
+The recommended overall experiment sequence is now:
+
+### V0.7
+
+Develop and validate the general
+
+\[
+\boxed{
+\text{Residual Structure Assessment}
+}
+\]
+
+and obtain R0/R1/R2/R3 routing.
+
+### V0.8
+
+Use a candidate transient flow problem and first verify that it is R3.
+
+Then train
+
+\[
+\boxed{
+z_{t-H:t}
+\rightarrow
+Attention
+\rightarrow
+c_t
+\rightarrow
+(\hat r^0,\hat m)
+}
+\]
+
+under fixed operating conditions.
+
+If the benchmark is classified R2 instead, use the instantaneous MLP route and record that scientific result rather than forcing R3.
+
+### V0.9
+
+On the same geometry/PDE, introduce controlled smooth and abrupt boundary-condition or Reynolds-number changes.
+
+Activate
+
+\[
+\boxed{
+c_t
+\rightarrow
+\eta_t
+\rightarrow
+A_t.
+}
+\]
+
+Compare known-condition and latent-inferred-condition settings.
+
+### V1.0
+
+Evaluate unseen transition times, rates, and operating-condition pairs.
+
+Quantify
+
+\[
+r^0,
+\qquad
+r^{op},
+\qquad
+r^{rem},
+\qquad
+\Gamma_{op}.
+\]
+
+### V1.1
+
+Reassess the remaining residual.
+
+Only introduce \(z_R\) if its significance and learnability justify a closure model.
+
+### V1.2
+
+Perform controlled joint fine-tuning only after every preceding architectural component has independently demonstrated value.
+
+---
+
+# 39. Final hardware-aware design principle
+
+The benchmark should be difficult enough to expose the need for dynamic context and adaptive Koopman dynamics, but not so large that computational scale becomes the dominant research problem.
+
+The preferred principle is
+
+\[
+\boxed{
+\text{minimum physical and model complexity required to falsify the architectural hypothesis}.
+}
+\]
+
+For the present project this means:
+
+\[
+\boxed{
+\text{2D flow}
++
+\text{moderate spatial resolution}
++
+\text{compact }z_K
++
+\text{small context model}
++
+\text{low-rank adaptive Koopman}
++
+\text{single RTX 5080}.
+}
+\]
+
+This constraint should be treated as part of the architecture design rather than as an afterthought.

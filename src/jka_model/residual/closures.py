@@ -99,11 +99,38 @@ def _mlp(input_dim: int, hidden_dim: int, depth: int, output_dim: int) -> nn.Seq
     return nn.Sequential(*layers)
 
 
-def _mlp_parameter_count(input_dim: int, hidden_dim: int, depth: int, output_dim: int) -> int:
+def analytical_mlp_parameter_count(
+    input_dim: int, hidden_dim: int, depth: int, output_dim: int
+) -> int:
+    """Count dense MLP parameters without allocating modules or consuming RNG."""
+    if min(input_dim, hidden_dim, depth, output_dim) < 1:
+        raise ValueError("MLP dimensions and depth must be positive")
     first = input_dim * hidden_dim + hidden_dim
     hidden = max(depth - 1, 0) * (hidden_dim * hidden_dim + hidden_dim)
     output = hidden_dim * output_dim + output_dim
     return first + hidden + output
+
+
+def solve_parameter_matched_width(
+    *,
+    instantaneous_input_dim: int,
+    history_input_dim: int,
+    history_hidden_dim: int,
+    depth: int,
+    output_dim: int,
+) -> int:
+    """Find the closest integer control width using analytical counts only."""
+    target_count = analytical_mlp_parameter_count(
+        history_input_dim, history_hidden_dim, depth, output_dim
+    )
+    candidate_widths = range(1, max(history_hidden_dim * 4, 2))
+    return min(
+        candidate_widths,
+        key=lambda width: abs(
+            analytical_mlp_parameter_count(instantaneous_input_dim, width, depth, output_dim)
+            - target_count
+        ),
+    )
 
 
 class InstantaneousMLPClosure(BaseClosure):
@@ -158,15 +185,13 @@ def build_closure(
         # closely as integer widths allow. This prevents capacity from masquerading
         # as temporal-memory evidence.
         history_input_dim = history * latent_dim + history + parameter_dim
-        target_count = _mlp_parameter_count(history_input_dim, hidden_dim, depth, latent_dim)
         instantaneous_input_dim = latent_dim + 1 + parameter_dim
-        candidate_widths = range(1, max(hidden_dim * 4, 2))
-        matched_width = min(
-            candidate_widths,
-            key=lambda width: abs(
-                _mlp_parameter_count(instantaneous_input_dim, width, depth, latent_dim)
-                - target_count
-            ),
+        matched_width = solve_parameter_matched_width(
+            instantaneous_input_dim=instantaneous_input_dim,
+            history_input_dim=history_input_dim,
+            history_hidden_dim=hidden_dim,
+            depth=depth,
+            output_dim=latent_dim,
         )
         return InstantaneousMLPClosure(latent_dim, history, parameter_dim, matched_width, depth)
     if variant in {"history", "shuffled_history"}:

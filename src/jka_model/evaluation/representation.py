@@ -41,9 +41,7 @@ def encode_records_for_alignment(
                 raise ValueError("missing evaluation-only true latent")
             model_state = normalizer.transform(record.states_raw)
             z_k = model.encode(model_state)
-            true_state = true_latents[record.trajectory_id].to(
-                dtype=z_k.dtype, device=z_k.device
-            )
+            true_state = true_latents[record.trajectory_id].to(dtype=z_k.dtype, device=z_k.device)
             if true_state.shape[0] != z_k.shape[0]:
                 raise ValueError("true and learned latent trajectory lengths differ")
             learned.append(z_k)
@@ -71,9 +69,7 @@ def evaluate_learned_trajectory(
         )
         latent = latent[0]
         encoded_truth = model.encode(model_truth)
-        one_step_latent = model.core.step(
-            encoded_truth[:-1], record.dts[:horizon]
-        )
+        one_step_latent = model.core.step(encoded_truth[:-1], record.dts[:horizon])
         decoded_model = decoded_model_batch[0]
         decoded_raw = normalizer.inverse_transform(decoded_model)
     model_metrics = evaluate_rollout(decoded_model, model_truth)

@@ -322,22 +322,16 @@ class AdvectionDiffusionSpectralStepConstraint2D:
         dx, dy = spec.grid.spacing
         real_dtype = prev_state_raw.dtype
         device = prev_state_raw.device
-        angular_x = 2.0 * torch.pi * torch.fft.fftfreq(
-            nx, d=dx, device=device, dtype=real_dtype
-        )
-        angular_y = 2.0 * torch.pi * torch.fft.fftfreq(
-            ny, d=dy, device=device, dtype=real_dtype
-        )
+        angular_x = 2.0 * torch.pi * torch.fft.fftfreq(nx, d=dx, device=device, dtype=real_dtype)
+        angular_y = 2.0 * torch.pi * torch.fft.fftfreq(ny, d=dy, device=device, dtype=real_dtype)
         wave_x = angular_x.view(1, 1, nx, 1)
         wave_y = angular_y.view(1, 1, 1, ny)
         cx = mu_static[:, 0].to(device=device, dtype=real_dtype).view(-1, 1, 1, 1)
         cy = mu_static[:, 1].to(device=device, dtype=real_dtype).view(-1, 1, 1, 1)
         nu = mu_static[:, 2].to(device=device, dtype=real_dtype).view(-1, 1, 1, 1)
-        generator = (
-            -nu * (wave_x.square() + wave_y.square())
-        ).to(torch.complex128 if real_dtype == torch.float64 else torch.complex64) - 1j * (
-            cx * wave_x + cy * wave_y
-        )
+        generator = (-nu * (wave_x.square() + wave_y.square())).to(
+            torch.complex128 if real_dtype == torch.float64 else torch.complex64
+        ) - 1j * (cx * wave_x + cy * wave_y)
         dt_view = dt.to(device=device, dtype=real_dtype).view(-1, 1, 1, 1)
         previous_spectrum = torch.fft.fftn(prev_state_raw, dim=(-2, -1))
         evolved = torch.fft.ifftn(

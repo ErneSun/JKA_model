@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,8 +19,13 @@ class VersionedSession:
     revision: int
 
 
-def create_versioned_session(root: str | Path, requested_id: str) -> VersionedSession:
-    """Atomically create ``id`` or the first free ``id-rN`` directory."""
+def create_versioned_session(
+    root: str | Path,
+    requested_id: str,
+    *,
+    reserved_roots: Iterable[str | Path] = (),
+) -> VersionedSession:
+    """Atomically create ``id`` or the first ID free in all artifact roots."""
     if not _VALID_ID.fullmatch(requested_id):
         raise ValueError(
             "validation id may contain only letters, digits, dots, dashes, underscores"
@@ -28,10 +34,14 @@ def create_versioned_session(root: str | Path, requested_id: str) -> VersionedSe
     base = match.group("base") if match else requested_id
     start_revision = int(match.group("revision")) if match else 0
     root_path = Path(root)
+    reserved = tuple(Path(item) for item in reserved_roots)
     root_path.mkdir(parents=True, exist_ok=True)
     revision = start_revision
     while True:
         candidate = base if revision == 0 else f"{base}-r{revision}"
+        if any((reserved_root / candidate).exists() for reserved_root in reserved):
+            revision += 1
+            continue
         path = root_path / candidate
         try:
             path.mkdir(parents=False, exist_ok=False)

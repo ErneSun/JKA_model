@@ -59,4 +59,3 @@ def evaluate_rollout(prediction: Tensor, truth: Tensor) -> RolloutMetrics:
         persistence_mse=float(persistence_mse.detach().item()),
         finite=finite,
     )
-

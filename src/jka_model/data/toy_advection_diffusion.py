@@ -83,26 +83,18 @@ def generate_advection_diffusion_trajectories(
         c = _uniform(generator, config.c_min, config.c_max, dtype=dtype)
         nu = _uniform(generator, config.nu_min, config.nu_max, dtype=dtype)
         if config.variable_dt:
-            multipliers = 0.7 + 0.6 * torch.rand(
-                config.num_steps, generator=generator, dtype=dtype
-            )
+            multipliers = 0.7 + 0.6 * torch.rand(config.num_steps, generator=generator, dtype=dtype)
             dts = config.base_dt * multipliers
         else:
             dts = torch.full((config.num_steps,), config.base_dt, dtype=dtype)
         times = torch.cat((torch.zeros(1, dtype=dtype), torch.cumsum(dts, dim=0)))
         offset = _uniform(generator, 0.8, 1.2, dtype=dtype)
-        amplitudes = 0.08 + 0.12 * torch.rand(
-            config.modes, generator=generator, dtype=dtype
-        )
-        phases = 2.0 * math.pi * torch.rand(
-            config.modes, generator=generator, dtype=dtype
-        )
+        amplitudes = 0.08 + 0.12 * torch.rand(config.modes, generator=generator, dtype=dtype)
+        phases = 2.0 * math.pi * torch.rand(config.modes, generator=generator, dtype=dtype)
         state = torch.full((config.num_steps + 1, config.nx), offset, dtype=dtype)
         for mode_index in range(config.modes):
             wave_number = 2.0 * math.pi * (mode_index + 1) / config.length
-            phase = wave_number * (
-                x[None, :] - c * times[:, None]
-            ) + phases[mode_index]
+            phase = wave_number * (x[None, :] - c * times[:, None]) + phases[mode_index]
             decay = torch.exp(-nu * wave_number**2 * times)[:, None]
             state += amplitudes[mode_index] * decay * torch.sin(phase)
         state[:, -1] = state[:, 0]

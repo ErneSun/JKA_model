@@ -118,13 +118,9 @@ def compute_representation_loss(
     prediction = model.core.rollout(z_current, batch.future_dts)[:, 1:]
     one_step = (prediction[:, 0] - z_future[:, 0]).square().mean()
     multi_step = (prediction - z_future).square().mean()
-    reconstruction = reconstruction_loss(
-        model.decode(latent_sequence), observation_sequence
-    )
+    reconstruction = reconstruction_loss(model.decode(latent_sequence), observation_sequence)
     variance = variance_loss(latent_sequence, min_std=config.min_std)
-    spectral = stability_regularizer(
-        model.core.generator_matrix(), margin=config.stability_margin
-    )
+    spectral = stability_regularizer(model.core.generator_matrix(), margin=config.stability_margin)
     total = (
         config.lambda_k * one_step
         + config.lambda_multi * multi_step

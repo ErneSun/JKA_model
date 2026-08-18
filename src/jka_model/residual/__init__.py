@@ -1,5 +1,6 @@
 """V0.7 Koopman residual identification and minimal closure."""
 
+from jka_model.residual.assessment import assess_residual_structure
 from jka_model.residual.cache import (
     ResidualCache,
     ResidualTrajectory,
@@ -13,13 +14,16 @@ from jka_model.residual.closures import (
     LinearClosure,
     ResidualKoopmanModel,
     ZeroClosure,
+    analytical_mlp_parameter_count,
     build_closure,
+    solve_parameter_matched_width,
 )
 from jka_model.residual.dataset import ResidualWindowDataset
 from jka_model.residual.diagnostics import (
     classify_memory_evidence,
     closure_metrics,
     residual_statistics,
+    residual_structure_metrics,
 )
 from jka_model.residual.memory import (
     classify_memory_sweep,
@@ -39,6 +43,8 @@ __all__ = [
     "ResidualTrajectory",
     "ResidualWindowDataset",
     "ZeroClosure",
+    "analytical_mlp_parameter_count",
+    "assess_residual_structure",
     "build_closure",
     "build_residual_cache",
     "closure_metrics",
@@ -49,7 +55,9 @@ __all__ = [
     "load_residual_cache",
     "load_evaluation_records",
     "make_v0_7_synthetic_memory_cache",
+    "residual_structure_metrics",
     "residual_statistics",
     "save_residual_cache",
+    "solve_parameter_matched_width",
     "validate_sweep_provenance",
 ]

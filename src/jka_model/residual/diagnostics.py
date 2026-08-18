@@ -10,6 +10,27 @@ from torch import Tensor
 from jka_model.residual.cache import ResidualCache
 
 
+def residual_structure_metrics(cache: ResidualCache, split: str) -> dict[str, Any]:
+    """Return closure-independent residual scale and Koopman adequacy metrics."""
+    trajectories = cache.select(split)
+    if not trajectories:
+        raise ValueError(f"no residual trajectories in split {split}")
+    residual = torch.cat([item.residuals.double() for item in trajectories])
+    true_increment = torch.cat(
+        [(item.latents[1:] - item.latents[:-1]).double() for item in trajectories]
+    )
+    residual_energy = residual.square().sum(dim=-1).mean()
+    increment_energy = true_increment.square().sum(dim=-1).mean()
+    return {
+        "split": split,
+        "sample_count": residual.shape[0],
+        "residual_rms": float(residual.square().mean().sqrt()),
+        "true_increment_rms": float(true_increment.square().mean().sqrt()),
+        "residual_significance": float(residual_energy / increment_energy.clamp_min(1e-12)),
+        "per_dimension_residual_rms": residual.square().mean(dim=0).sqrt().tolist(),
+    }
+
+
 def _correlation(left: Tensor, right: Tensor, eps: float = 1e-12) -> float:
     left = left.double().flatten()
     right = right.double().flatten()
@@ -37,6 +58,8 @@ def residual_statistics(cache: ResidualCache, split: str, max_acf_lag: int) -> d
     base_next = next_latent - residual
     base_increment = base_next - latent
     true_increment = next_latent - latent
+    residual_energy = residual.square().sum(dim=-1).mean()
+    true_increment_energy = true_increment.square().sum(dim=-1).mean()
     base_increment_norm = base_increment.norm(dim=-1)
     closure_burden = residual_norm / (residual_norm + base_increment_norm + 1e-12)
     centered = residual - residual.mean(dim=0)
@@ -83,6 +106,8 @@ def residual_statistics(cache: ResidualCache, split: str, max_acf_lag: int) -> d
         "std": per_dim_std.tolist(),
         "per_dimension_variance": residual.var(dim=0, unbiased=False).tolist(),
         "rms": float(residual.square().mean().sqrt()),
+        "residual_significance": float(residual_energy / true_increment_energy.clamp_min(1e-12)),
+        "true_increment_rms": float(true_increment.square().mean().sqrt()),
         "normalized_rms_by_true_increment": float(
             residual.square().mean().sqrt() / true_increment.square().mean().sqrt().clamp_min(1e-12)
         ),
@@ -125,7 +150,9 @@ def residual_statistics(cache: ResidualCache, split: str, max_acf_lag: int) -> d
     }
 
 
-def closure_metrics(prediction: Tensor, target: Tensor) -> dict[str, Any]:
+def closure_metrics(
+    prediction: Tensor, target: Tensor, residual_scale: Tensor | None = None
+) -> dict[str, Any]:
     if prediction.shape != target.shape or prediction.ndim != 2:
         raise ValueError("closure predictions and targets must have shape [N,d]")
     prediction = prediction.double()
@@ -141,14 +168,29 @@ def closure_metrics(prediction: Tensor, target: Tensor) -> dict[str, Any]:
     r2 = 0.0 if global_total <= 1e-15 else float(1.0 - error.square().sum() / global_total)
     cosine = torch.nn.functional.cosine_similarity(prediction, target, dim=-1, eps=1e-12)
     target_rms = target.square().mean().sqrt()
-    return {
+    per_dimension_mse = error.square().mean(dim=0)
+    per_dimension_target_rms = target.square().mean(dim=0).sqrt()
+    result = {
         "mse": float(error.square().mean()),
         "target_rms": float(target_rms),
         "normalized_rmse": float(error.square().mean().sqrt() / target_rms.clamp_min(1e-12)),
         "r2": r2,
+        "per_dimension_mse": per_dimension_mse.tolist(),
+        "per_dimension_target_rms": per_dimension_target_rms.tolist(),
+        "per_dimension_normalized_rmse": (
+            per_dimension_mse.sqrt() / per_dimension_target_rms.clamp_min(1e-12)
+        ).tolist(),
         "per_dimension_r2": per_dimension_r2.tolist(),
         "mean_cosine_similarity": float(cosine.mean()),
     }
+    if residual_scale is not None:
+        scale = residual_scale.detach().double().reshape(1, -1)
+        if scale.shape[1] != target.shape[1] or torch.any(scale <= 0):
+            raise ValueError("residual_scale must be positive with shape [latent_dim]")
+        standardized = error / scale
+        result["standardized_mse"] = float(standardized.square().mean())
+        result["per_dimension_standardized_mse"] = standardized.square().mean(dim=0).tolist()
+    return result
 
 
 def classify_memory_evidence(
