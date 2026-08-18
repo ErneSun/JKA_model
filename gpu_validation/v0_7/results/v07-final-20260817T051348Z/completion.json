@@ -1,0 +1,19 @@
+{
+  "backbone_seeds": [
+    47,
+    53,
+    59
+  ],
+  "closure_initialization_seeds": [
+    101,
+    211,
+    307
+  ],
+  "cuda_device": "NVIDIA GeForce RTX 5080",
+  "git_commit": "367de7c7bec68a9ad1a3f9650235485c794bb94a",
+  "requested_validation_id": "v07-final-20260817T051348Z",
+  "resolved_validation_id": "v07-final-20260817T051348Z",
+  "software_tests_passed": true,
+  "software_tests_skipped": false,
+  "status": "PASS"
+}
