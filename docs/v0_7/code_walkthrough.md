@@ -4,7 +4,7 @@
 - `src/jka_model/residual/dataset.py`: fixed-history, split-safe, dt-aligned windows and shuffled control.
 - `src/jka_model/residual/closures.py`: five closure variants and frozen-backbone composite.
 - `src/jka_model/residual/diagnostics.py`: residual statistics, prediction metrics, evidence labels.
-- `src/jka_model/residual/assessment.py`: validation-first significance/predictability/history gates and R0–R3 routing.
+- `src/jka_model/residual/assessment.py`: validation-first magnitude diagnostics plus predictability/history gates and R1–R3 routing.
 - `src/jka_model/residual/rollout.py`: teacher-free corrected latent rollout.
 - `src/jka_model/residual/memory.py`: exact 144-record provenance validation, secondary memory aggregation, primary assessment integration, plots, and reports.
 - `src/jka_model/residual/checkpoint.py`: standalone schema-7 checkpoint validation.

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from jka_model.config import ProjectConfig
 from jka_model.problems.advection_diffusion_2d import AdvectionDiffusion2DProblemAdapter
 from jka_model.problems.base import ProblemAdapter
+from jka_model.problems.cylinder_wake_2d import CylinderWake2DProblemAdapter
 
 ProblemAdapterFactory = Callable[[ProjectConfig], ProblemAdapter]
 
@@ -17,8 +18,15 @@ def _advection_diffusion_2d(config: ProjectConfig) -> ProblemAdapter:
     return AdvectionDiffusion2DProblemAdapter(config.advection_diffusion_2d)
 
 
+def _cylinder_wake_2d(config: ProjectConfig) -> ProblemAdapter:
+    if config.cylinder_wake_2d is None:
+        raise ValueError("cylinder_wake_2d requires its problem config")
+    return CylinderWake2DProblemAdapter(config.cylinder_wake_2d)
+
+
 _FACTORIES: dict[str, ProblemAdapterFactory] = {
     "periodic_advection_diffusion_2d": _advection_diffusion_2d,
+    "cylinder_wake_2d": _cylinder_wake_2d,
 }
 
 

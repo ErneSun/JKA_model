@@ -468,39 +468,20 @@ History length \(H\) may still be swept as a secondary diagnostic, but V0.7 no l
 
 ---
 
-## 13. The four residual cases
+## 13. The three residual routes
 
-The revised system should distinguish four cases.
-
-### R0 — Residual negligible
+The revised system should distinguish three structural routes. The magnitude
 
 \[
-S_R \text{ is sufficiently small.}
+S_R
 \]
 
-Interpretation:
+is always recorded, but it is not a discard gate: a small one-step residual can
+accumulate into a material long-horizon error.
+
+### R1 — Residual not predictably learnable
 
 \[
-\boxed{
-\text{The nominal Koopman model is already sufficient for the tested problem/regime.}
-}
-\]
-
-Action:
-
-\[
-\boxed{
-\text{No residual/context correction is required.}
-}
-\]
-
----
-
-### R1 — Residual significant but not predictably learnable
-
-\[
-S_R \text{ large enough},
-\qquad
 P_R \text{ weak}.
 \]
 
@@ -607,13 +588,9 @@ The residual assessment can therefore be summarized as
 \Phi_{\rm context}
 =
 \begin{cases}
-\varnothing,
-&
-R0:\ \text{residual negligible},
-\\[2mm]
 \text{diagnostic / stochastic branch},
 &
-R1:\ \text{significant but unlearnable},
+R1:\ \text{not stably learnable},
 \\[2mm]
 \Phi_M(z_t^K,\Delta t,\mu,\ldots),
 &
@@ -626,7 +603,7 @@ R3:\ \text{learnable, history-dependent}.
 }
 \]
 
-This is **one architecture with a residual-structure router**, not four unrelated world models.
+This is **one architecture with a residual-structure router**, not three unrelated world models.
 
 ---
 
@@ -1204,9 +1181,10 @@ The long-term architecture therefore becomes
 
 V0.7 should no longer be framed primarily as a memory-classification version.
 
-Its goal is to determine whether residual modeling is scientifically justified and, if so, what information is required.
+Its goal is to determine what predictable structure exists in the residual and
+what information is required to represent it.
 
-### V0.7-A — Residual significance
+### V0.7-A — Residual magnitude diagnostic
 
 Measure
 
@@ -1214,14 +1192,16 @@ Measure
 S_R
 \]
 
-and determine whether residual correction is worth considering.
+as a reference-scale diagnostic. The result must not be used to discard the
+residual or terminate routing, because temporal accumulation can amplify a
+small one-step discrepancy.
 
 Output:
 
 \[
 \boxed{
-\text{RESIDUAL SIGNIFICANCE:
-NEGLIGIBLE / NON-NEGLIGIBLE}
+\text{RESIDUAL MAGNITUDE:
+LOW / MATERIAL / INCONCLUSIVE}
 }
 \]
 
@@ -1279,14 +1259,13 @@ The final result should classify the tested problem/backbone/regime as:
 
 \[
 \boxed{
-R0,\ R1,\ R2,\ \text{or }R3.
+R1,\ R2,\ \text{or }R3.
 }
 \]
 
 where
 
-- R0 = residual negligible;
-- R1 = residual significant but not predictably learnable;
+- R1 = residual not predictably learnable from the tested information;
 - R2 = residual learnable, no meaningful history gain;
 - R3 = residual learnable, meaningful history gain.
 
@@ -1313,10 +1292,10 @@ However, they become supporting evidence rather than the main universal classifi
 V0.7 must end with a machine-readable decision conceptually equivalent to:
 
 ```text
-RESIDUAL_SIGNIFICANCE: NEGLIGIBLE / NON_NEGLIGIBLE
+RESIDUAL_MAGNITUDE: LOW_MAGNITUDE / MATERIAL_MAGNITUDE / INCONCLUSIVE
 RESIDUAL_LEARNABILITY: STRONG / MODERATE / WEAK / NONE
 HISTORY_GAIN: PRESENT / ABSENT / INCONCLUSIVE
-RESIDUAL_ROUTE: R0 / R1 / R2 / R3
+RESIDUAL_ROUTE: R1 / R2 / R3 / INCONCLUSIVE
 ```
 
 This result determines whether and how V0.8 proceeds.
@@ -1337,18 +1316,6 @@ This result determines whether and how V0.8 proceeds.
 V0.8 is no longer synonymous with Attention.
 
 It is a **context-family version**.
-
-### R0 path
-
-If V0.7 returns R0:
-
-\[
-\boxed{
-\text{Do not train a context correction module.}
-}
-\]
-
-The Koopman-only baseline is retained.
 
 ### R1 path
 
@@ -1720,7 +1687,6 @@ The context family is
 \Phi_{\rm context}
 =
 \begin{cases}
-\varnothing, & R0,\\
 \text{diagnostic/stochastic}, & R1,\\
 \Phi_M, & R2,\\
 \Phi_H, & R3.
@@ -1820,9 +1786,9 @@ z_{t+1}^{0}
 
 \[
 \boxed{
-(S_R,P_R,G_H)
+(P_R,G_H)\quad\text{with diagnostic }S_R
 \rightarrow
-R0/R1/R2/R3
+R1/R2/R3
 }
 \]
 
@@ -2781,7 +2747,7 @@ Develop and validate the general
 }
 \]
 
-and obtain R0/R1/R2/R3 routing.
+and obtain R1/R2/R3 routing while retaining residual magnitude as a diagnostic.
 
 ### V0.8
 

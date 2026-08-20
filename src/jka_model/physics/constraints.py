@@ -340,6 +340,73 @@ class AdvectionDiffusionSpectralStepConstraint2D:
         return {self.name: (pred_state_raw - evolved).square().mean()}
 
 
+def _batched_valid_mask(metadata: Mapping[str, Any] | None, state: Tensor) -> Tensor:
+    mask = _metadata_tensor(metadata, "valid_mask").to(device=state.device, dtype=torch.bool)
+    if mask.ndim == 2:
+        mask = mask.unsqueeze(0).expand(state.shape[0], -1, -1)
+    if mask.shape != (state.shape[0], *state.shape[-2:]):
+        raise ValueError("cylinder valid_mask must have shape [B,Nx,Ny] or [Nx,Ny]")
+    return mask
+
+
+@dataclass(frozen=True, slots=True)
+class CylinderDivergenceConstraint2D:
+    """Incompressibility penalty over fluid cells for [u,v,p] states."""
+
+    name: str = "cylinder_divergence_2d"
+
+    def loss(
+        self,
+        pred_state_raw: Tensor,
+        *,
+        spec: ProblemSpec | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        **_: Any,
+    ) -> Mapping[str, Tensor]:
+        if spec is None or spec.grid.spacing is None or pred_state_raw.ndim != 4:
+            raise ValueError("cylinder divergence requires [B,C,Nx,Ny] and grid spacing")
+        if pred_state_raw.shape[1] < 2:
+            raise ValueError("cylinder divergence requires u and v channels")
+        dx, dy = spec.grid.spacing
+        u, v = pred_state_raw[:, 0], pred_state_raw[:, 1]
+        divergence = torch.zeros_like(u)
+        divergence[:, 1:-1, 1:-1] = (u[:, 2:, 1:-1] - u[:, :-2, 1:-1]) / (2 * dx) + (
+            v[:, 1:-1, 2:] - v[:, 1:-1, :-2]
+        ) / (2 * dy)
+        mask = _batched_valid_mask(metadata, pred_state_raw)
+        interior = mask.clone()
+        interior[:, (0, -1), :] = False
+        interior[:, :, (0, -1)] = False
+        values = divergence[interior]
+        return {self.name: values.square().mean() if values.numel() else divergence.new_zeros(())}
+
+
+@dataclass(frozen=True, slots=True)
+class CylinderBoundaryConstraint2D:
+    """Fixed inlet/far-field velocity and cylinder no-slip penalty."""
+
+    name: str = "cylinder_boundary_2d"
+
+    def loss(
+        self,
+        pred_state_raw: Tensor,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        **_: Any,
+    ) -> Mapping[str, Tensor]:
+        if pred_state_raw.ndim != 4 or pred_state_raw.shape[1] < 2:
+            raise ValueError("cylinder boundary requires [B,C,Nx,Ny] with u and v")
+        mask = _batched_valid_mask(metadata, pred_state_raw)
+        solid = ~mask
+        u, v = pred_state_raw[:, 0], pred_state_raw[:, 1]
+        no_slip = (u[solid].square() + v[solid].square()).mean()
+        far_u = torch.cat((u[:, 0, :], u[:, :, 0], u[:, :, -1]), dim=1)
+        far_v = torch.cat((v[:, 0, :], v[:, :, 0], v[:, :, -1]), dim=1)
+        far_field = (far_u - 1.0).square().mean() + far_v.square().mean()
+        outlet = (pred_state_raw[:, :2, -1] - pred_state_raw[:, :2, -2]).square().mean()
+        return {self.name: no_slip + far_field + outlet}
+
+
 def evaluate_constraints(
     constraints: Sequence[PhysicsConstraint],
     batch: ProblemBatch,

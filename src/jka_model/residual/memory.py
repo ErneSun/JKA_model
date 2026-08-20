@@ -560,7 +560,7 @@ def classify_memory_sweep(
         else "LIMITED"
     )
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "selection_protocol": (
             "validation_residual_nrmse_selects_model_and_memory_candidate_then_test_confirms"
         ),
@@ -597,7 +597,6 @@ def classify_memory_sweep(
     result.update(assessment)
     result["evidence"]["residual_structure"] = assessment_evidence
     result["v0_8_recommendation"] = {
-        "R0": "NO_CONTEXT_CORRECTION_REQUIRED",
         "R1": "DIAGNOSTIC_BRANCH",
         "R2": "INSTANTANEOUS_DYNAMIC_CONTEXT",
         "R3": "TEMPORAL_DYNAMIC_CONTEXT",
@@ -619,7 +618,7 @@ def _decision_report(classification: dict[str, Any]) -> str:
     lines = [
         "# V0.7 final scientific decision",
         "",
-        f"**RESIDUAL SIGNIFICANCE:** `{classification['residual_significance']}`  ",
+        f"**RESIDUAL MAGNITUDE (DIAGNOSTIC):** `{classification['residual_magnitude']}`  ",
         f"**RESIDUAL LEARNABILITY:** `{classification['residual_learnability']}`  ",
         f"**CONDITIONAL HISTORY GAIN:** `{classification['conditional_history_gain']}`  ",
         f"**CLOSED-LOOP CLOSURE UTILITY:** `{classification['closed_loop_utility']}`  ",
@@ -634,10 +633,13 @@ def _decision_report(classification: dict[str, Any]) -> str:
         f"confirmation: `{classification['test_confirmation_pass']}`. Confidence: "
         f"`{classification['confidence']}`.",
         "",
-        f"Residual significance threshold: "
+        f"Residual magnitude reference threshold: "
         f"`{classification['thresholds']['min_residual_significance']}`. Validation "
-        f"significance by backbone seed: "
-        f"`{evidence['residual_structure']['residual_significance_validation_by_seed']}`.",
+        f"magnitude ratio by backbone seed: "
+        f"`{evidence['residual_structure']['residual_magnitude_validation_by_seed']}`.",
+        "",
+        "Magnitude is diagnostic only: low instantaneous energy does not discard the residual "
+        "or create an early-exit route, because small errors may accumulate in time.",
         "",
         "Predictability is `1 - best Markovian validation standardized MSE / zero "
         "standardized MSE`, using train-split per-dimension RMS. "
@@ -718,7 +720,6 @@ def _decision_report(classification: dict[str, Any]) -> str:
 def _route_report(classification: dict[str, Any]) -> str:
     route_name = classification["residual_route"]
     route = {
-        "R0": "No context learner. Keep the Koopman-only route.",
         "R1": (
             "Enter the diagnostic branch for data quality, missing observables/forcing, latent "
             "adequacy, stochasticity, or Koopman capacity. Do not add Attention by default."

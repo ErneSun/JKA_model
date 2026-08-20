@@ -16,6 +16,7 @@ from jka_model.constants import (
     PROJECT_VERSION,
     SUPPORTED_CONFIG_PROJECT_VERSIONS,
     V0_6_PROJECT_VERSION,
+    V0_7_PROJECT_VERSION,
 )
 from jka_model.contracts import DtMode
 from jka_model.training import TrainStage
@@ -1467,6 +1468,323 @@ class V07EvaluationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CylinderWake2DConfig:
+    """Fixed-condition low-Mach D2Q9 cylinder-wake data-generation contract."""
+
+    num_trajectories: int = 12
+    num_steps: int = 160
+    nx: int = 256
+    ny: int = 128
+    x_min: float = -8.0
+    x_max: float = 16.0
+    y_min: float = -6.0
+    y_max: float = 6.0
+    cylinder_x: float = 0.0
+    cylinder_y: float = 0.0
+    cylinder_diameter: float = 1.0
+    reynolds_number: float = 100.0
+    u_infinity: float = 1.0
+    lattice_inflow_velocity: float = 0.08
+    solver_steps_per_snapshot: int = 20
+    perturbation_amplitude: float = 0.015
+    time_varying_boundary: bool = False
+    dataset_path: str = ""
+
+    def __post_init__(self) -> None:
+        if self.num_trajectories < 3 or self.num_steps < 2:
+            raise ValueError("V0.8 cylinder data requires at least 3 trajectories and 2 steps")
+        if self.nx < 32 or self.ny < 16:
+            raise ValueError("V0.8 cylinder grid requires nx>=32 and ny>=16")
+        if not self.x_min < self.cylinder_x < self.x_max:
+            raise ValueError("cylinder center must lie inside the x domain")
+        if not self.y_min < self.cylinder_y < self.y_max:
+            raise ValueError("cylinder center must lie inside the y domain")
+        if (
+            min(
+                self.x_max - self.x_min,
+                self.y_max - self.y_min,
+                self.cylinder_diameter,
+                self.reynolds_number,
+                self.u_infinity,
+                self.lattice_inflow_velocity,
+            )
+            <= 0
+        ):
+            raise ValueError("V0.8 cylinder physical scales must be positive")
+        if self.lattice_inflow_velocity >= 0.12:
+            raise ValueError("D2Q9 low-Mach contract requires lattice inflow velocity < 0.12")
+        if self.solver_steps_per_snapshot < 1 or self.perturbation_amplitude < 0:
+            raise ValueError("invalid cylinder sampling or perturbation setting")
+        if self.time_varying_boundary:
+            raise ValueError("V0.8 forbids time-varying cylinder-wake boundaries")
+        radius = 0.5 * self.cylinder_diameter
+        if (
+            self.cylinder_x - radius <= self.x_min
+            or self.cylinder_x + radius >= self.x_max
+            or self.cylinder_y - radius <= self.y_min
+            or self.cylinder_y + radius >= self.y_max
+        ):
+            raise ValueError("cylinder must be strictly separated from the domain boundary")
+        if self.lattice_relaxation_time <= 0.505:
+            raise ValueError("D2Q9 relaxation time is too close to the stability limit 0.5")
+
+    @property
+    def dx(self) -> float:
+        return (self.x_max - self.x_min) / self.nx
+
+    @property
+    def dy(self) -> float:
+        return (self.y_max - self.y_min) / self.ny
+
+    @property
+    def cylinder_diameter_cells(self) -> float:
+        return self.cylinder_diameter / self.dx
+
+    @property
+    def lattice_viscosity(self) -> float:
+        return self.lattice_inflow_velocity * self.cylinder_diameter_cells / self.reynolds_number
+
+    @property
+    def lattice_relaxation_time(self) -> float:
+        return 0.5 + 3.0 * self.lattice_viscosity
+
+    @property
+    def snapshot_dt(self) -> float:
+        return (
+            self.solver_steps_per_snapshot
+            * self.lattice_inflow_velocity
+            / self.cylinder_diameter_cells
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> CylinderWake2DConfig:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.8 cylinder-wake config")
+        values = {name: data.get(name, getattr(defaults, name)) for name in allowed}
+        for name in {"num_trajectories", "num_steps", "nx", "ny", "solver_steps_per_snapshot"}:
+            values[name] = int(values[name])
+        values["time_varying_boundary"] = bool(values["time_varying_boundary"])
+        values["dataset_path"] = str(values["dataset_path"])
+        for name in allowed - {
+            "num_trajectories",
+            "num_steps",
+            "nx",
+            "ny",
+            "solver_steps_per_snapshot",
+            "time_varying_boundary",
+            "dataset_path",
+        }:
+            values[name] = float(values[name])
+        return cls(**values)
+
+
+@dataclass(frozen=True, slots=True)
+class V08RoutingConfig:
+    """Evidence-owned context-family selection; benchmark names never select a route."""
+
+    mode: str = "auto"
+    v0_7_result: str = ""
+
+    def __post_init__(self) -> None:
+        if self.mode != "auto":
+            raise ValueError("V0.8 formal routing mode must be auto")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"mode": self.mode, "v0_7_result": self.v0_7_result}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V08RoutingConfig:
+        _reject_unknown(data, {"mode", "v0_7_result"}, "V0.8 routing config")
+        return cls(mode=str(data.get("mode", "auto")), v0_7_result=str(data.get("v0_7_result", "")))
+
+
+@dataclass(frozen=True, slots=True)
+class V08ContextConfig:
+    """Compact R2/R3 context model shared-output contract."""
+
+    family: str = "auto"
+    context_dim: int = 8
+    history_length: int = 8
+    width: int = 64
+    layers: int = 2
+    heads: int = 4
+    ffn_multiplier: int = 2
+    dropout: float = 0.0
+    include_parameters: bool = True
+
+    def __post_init__(self) -> None:
+        if self.family not in {
+            "auto",
+            "instantaneous",
+            "instantaneous_matched",
+            "attention",
+            "history_mlp",
+        }:
+            raise ValueError("unknown V0.8 context family")
+        if self.context_dim not in {4, 8, 16} or self.history_length < 1:
+            raise ValueError("V0.8 requires d_c in {4,8,16} and positive history")
+        if not 1 <= self.layers <= 4 or not 1 <= self.width <= 128:
+            raise ValueError("V0.8 context depth/width exceeds the compact-model boundary")
+        if self.heads < 1 or self.width % self.heads != 0 or self.ffn_multiplier < 1:
+            raise ValueError("invalid V0.8 Attention heads or FFN multiplier")
+        if not 0 <= self.dropout < 1:
+            raise ValueError("V0.8 context dropout must lie in [0,1)")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V08ContextConfig:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.8 context config")
+        return cls(
+            family=str(data.get("family", defaults.family)),
+            context_dim=int(data.get("context_dim", defaults.context_dim)),
+            history_length=int(data.get("history_length", defaults.history_length)),
+            width=int(data.get("width", defaults.width)),
+            layers=int(data.get("layers", defaults.layers)),
+            heads=int(data.get("heads", defaults.heads)),
+            ffn_multiplier=int(data.get("ffn_multiplier", defaults.ffn_multiplier)),
+            dropout=float(data.get("dropout", defaults.dropout)),
+            include_parameters=bool(data.get("include_parameters", defaults.include_parameters)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class V08TrainingConfig:
+    """Context-only optimization and exact-resume settings."""
+
+    epochs: int = 80
+    batch_size: int = 256
+    learning_rate: float = 1.0e-3
+    weight_decay: float = 1.0e-5
+    lambda_adequacy: float = 0.2
+    gradient_clip_norm: float = 1.0
+    patience: int = 16
+    precision: str = "amp_bf16"
+    context_initialization_seed: int = 401
+
+    def __post_init__(self) -> None:
+        if self.epochs < 1 or self.batch_size < 1 or self.learning_rate <= 0:
+            raise ValueError("V0.8 epochs, batch size, and learning rate must be positive")
+        if self.weight_decay < 0 or self.lambda_adequacy < 0:
+            raise ValueError("V0.8 loss weights must be non-negative")
+        if self.gradient_clip_norm <= 0 or self.patience < 1:
+            raise ValueError("invalid V0.8 clipping or patience")
+        if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
+            raise ValueError("invalid V0.8 precision")
+        if self.context_initialization_seed < 0:
+            raise ValueError("V0.8 context seed must be non-negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V08TrainingConfig:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.8 training config")
+        values = {name: data.get(name, getattr(defaults, name)) for name in allowed}
+        for name in {"epochs", "batch_size", "patience", "context_initialization_seed"}:
+            values[name] = int(values[name])
+        for name in {
+            "learning_rate",
+            "weight_decay",
+            "lambda_adequacy",
+            "gradient_clip_norm",
+        }:
+            values[name] = float(values[name])
+        values["precision"] = str(values["precision"])
+        return cls(**values)
+
+
+@dataclass(frozen=True, slots=True)
+class V08EvaluationConfig:
+    """Locked scientific acceptance thresholds for dynamic context."""
+
+    rollout_horizons: tuple[int, ...] = (8, 16, 32, 80)
+    material_relative_gain: float = 0.02
+    min_context_effective_rank: float = 2.0
+    max_closure_burden: float = 0.25
+    max_physics_degradation: float = 0.10
+    max_divergence_mse: float = 0.02
+    max_boundary_mse: float = 0.05
+    seed_consistency_fraction: float = 2.0 / 3.0
+    context_initialization_seeds: tuple[int, ...] = (401, 503, 607)
+
+    def __post_init__(self) -> None:
+        if tuple(sorted(set(self.rollout_horizons))) != self.rollout_horizons:
+            raise ValueError("V0.8 rollout horizons must be unique and increasing")
+        if not self.rollout_horizons or self.rollout_horizons[0] < 1:
+            raise ValueError("V0.8 rollout horizons must be positive")
+        if not 0 <= self.material_relative_gain < 1:
+            raise ValueError("V0.8 material gain must lie in [0,1)")
+        if self.min_context_effective_rank <= 1 or self.max_closure_burden <= 0:
+            raise ValueError("invalid V0.8 context-rank or burden threshold")
+        if (
+            self.max_physics_degradation < 0
+            or self.max_divergence_mse <= 0
+            or self.max_boundary_mse <= 0
+            or not 0.5 <= self.seed_consistency_fraction <= 1
+        ):
+            raise ValueError("invalid V0.8 physics/seed threshold")
+        if len(self.context_initialization_seeds) < 3 or len(
+            set(self.context_initialization_seeds)
+        ) != len(self.context_initialization_seeds):
+            raise ValueError("V0.8 formal evaluation requires three unique context seeds")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rollout_horizons": list(self.rollout_horizons),
+            "material_relative_gain": self.material_relative_gain,
+            "min_context_effective_rank": self.min_context_effective_rank,
+            "max_closure_burden": self.max_closure_burden,
+            "max_physics_degradation": self.max_physics_degradation,
+            "max_divergence_mse": self.max_divergence_mse,
+            "max_boundary_mse": self.max_boundary_mse,
+            "seed_consistency_fraction": self.seed_consistency_fraction,
+            "context_initialization_seeds": list(self.context_initialization_seeds),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V08EvaluationConfig:
+        defaults = cls()
+        allowed = set(defaults.to_dict())
+        _reject_unknown(data, allowed, "V0.8 evaluation config")
+        return cls(
+            rollout_horizons=tuple(
+                int(value) for value in data.get("rollout_horizons", defaults.rollout_horizons)
+            ),
+            material_relative_gain=float(
+                data.get("material_relative_gain", defaults.material_relative_gain)
+            ),
+            min_context_effective_rank=float(
+                data.get("min_context_effective_rank", defaults.min_context_effective_rank)
+            ),
+            max_closure_burden=float(data.get("max_closure_burden", defaults.max_closure_burden)),
+            max_physics_degradation=float(
+                data.get("max_physics_degradation", defaults.max_physics_degradation)
+            ),
+            max_divergence_mse=float(data.get("max_divergence_mse", defaults.max_divergence_mse)),
+            max_boundary_mse=float(data.get("max_boundary_mse", defaults.max_boundary_mse)),
+            seed_consistency_fraction=float(
+                data.get("seed_consistency_fraction", defaults.seed_consistency_fraction)
+            ),
+            context_initialization_seeds=tuple(
+                int(value)
+                for value in data.get(
+                    "context_initialization_seeds", defaults.context_initialization_seeds
+                )
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DataConfig:
     """Static data expectations shared by V0.2+ pipelines."""
 
@@ -1599,6 +1917,11 @@ class ProjectConfig:
     residual_training: ResidualTrainingConfig | None = None
     memory_sweep: MemorySweepConfig | None = None
     v0_7_evaluation: V07EvaluationConfig | None = None
+    cylinder_wake_2d: CylinderWake2DConfig | None = None
+    v0_8_routing: V08RoutingConfig | None = None
+    v0_8_context: V08ContextConfig | None = None
+    v0_8_training: V08TrainingConfig | None = None
+    v0_8_evaluation: V08EvaluationConfig | None = None
     project_version: str = PROJECT_VERSION
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -1624,28 +1947,30 @@ class ProjectConfig:
             section is not None for section in v0_4_sections
         ):
             raise ValueError("V0.4 config must provide all representation sections together")
-        v0_5_sections = (
-            self.advection_diffusion_2d,
+        field_learning_sections = (
             self.field_autoencoder,
             self.field_loss,
             self.v0_5_training,
             self.v0_5_evaluation,
         )
-        if any(section is not None for section in v0_5_sections) and not all(
-            section is not None for section in v0_5_sections
-        ):
-            raise ValueError("V0.5 config must provide all field-learning sections together")
+        field_problem_sections = (self.advection_diffusion_2d, self.cylinder_wake_2d)
+        if any(section is not None for section in field_learning_sections + field_problem_sections):
+            if not all(section is not None for section in field_learning_sections):
+                raise ValueError("field-learning configs must provide all architecture sections")
+            if sum(section is not None for section in field_problem_sections) != 1:
+                raise ValueError("field learning requires exactly one physical-problem config")
         v0_6_sections = (self.jepa_loss, self.ema, self.v0_6_evaluation)
         if any(section is not None for section in v0_6_sections) and not all(
             section is not None for section in v0_6_sections
         ):
             raise ValueError("V0.6 config must provide JEPA loss, EMA, and evaluation together")
         if any(section is not None for section in v0_6_sections) and not all(
-            section is not None for section in v0_5_sections
+            section is not None for section in field_learning_sections
         ):
             raise ValueError("V0.6 must inherit every V0.5 field-learning section")
         if any(section is not None for section in v0_6_sections) and self.project_version not in {
             V0_6_PROJECT_VERSION,
+            V0_7_PROJECT_VERSION,
             PROJECT_VERSION,
         }:
             raise ValueError(
@@ -1665,18 +1990,66 @@ class ProjectConfig:
             section is not None for section in v0_6_sections
         ):
             raise ValueError("V0.7 must inherit every V0.6 section")
-        if (
-            any(section is not None for section in v0_7_sections)
-            and self.project_version != PROJECT_VERSION
-        ):
-            raise ValueError("V0.7 sections require project_version 0.7.0")
+        if any(section is not None for section in v0_7_sections) and self.project_version not in {
+            V0_7_PROJECT_VERSION,
+            PROJECT_VERSION,
+        }:
+            raise ValueError("V0.7 sections require project_version 0.7.0 or 0.8.0")
         if self.memory_sweep is not None and self.advection_diffusion_2d is not None:
             if self.memory_sweep.history_lengths[-1] >= self.advection_diffusion_2d.num_steps:
                 raise ValueError("V0.7 maximum history must be shorter than each trajectory")
+        v0_8_sections = (
+            self.cylinder_wake_2d,
+            self.v0_8_routing,
+            self.v0_8_context,
+            self.v0_8_training,
+            self.v0_8_evaluation,
+        )
+        if any(section is not None for section in v0_8_sections) and not all(
+            section is not None for section in v0_8_sections
+        ):
+            raise ValueError(
+                "V0.8 config must provide cylinder, routing, context, training, and evaluation"
+            )
+        if any(section is not None for section in v0_8_sections):
+            if self.project_version != PROJECT_VERSION:
+                raise ValueError("V0.8 sections require project_version 0.8.0")
+            if not all(section is not None for section in v0_7_sections):
+                raise ValueError("V0.8 must inherit the complete V0.7 residual assessment contract")
+            assert self.cylinder_wake_2d and self.v0_8_context
+            if self.data.problem_name != "cylinder_wake_2d":
+                raise ValueError("V0.8 data problem_name must be cylinder_wake_2d")
+            if self.data.action_dim != 0 or self.data.parameter_dim != 3:
+                raise ValueError("V0.8 cylinder data requires action_dim=0/parameter_dim=3")
+            if self.data.dt_mode is not DtMode.CONSTANT:
+                raise ValueError("V0.8 cylinder benchmark uses fixed snapshot dt")
+            if (
+                self.data.constant_dt is None
+                or abs(self.data.constant_dt - self.cylinder_wake_2d.snapshot_dt) > 1e-9
+            ):
+                raise ValueError("V0.8 data.constant_dt must match cylinder snapshot_dt")
+            if self.field_autoencoder is None or self.field_autoencoder.input_channels != 3:
+                raise ValueError("V0.8 cylinder model state is [u,v,p] with three channels")
+            if self.koopman is None or self.koopman.state_dim != self.field_autoencoder.latent_dim:
+                raise ValueError("V0.8 Koopman state_dim must equal the field latent dimension")
+            if not self.koopman.trainable or self.koopman.dtype != "float32":
+                raise ValueError("V0.8 reuses the trainable float32 V0.6 Koopman contract")
+            if self.data.normalization.kind != "standard" or self.data.horizon < 2:
+                raise ValueError("V0.8 requires train-only standardization and multi-step training")
+            if self.v0_5_evaluation and (
+                self.v0_5_evaluation.long_horizon > self.cylinder_wake_2d.num_steps
+            ):
+                raise ValueError("V0.8 field rollout horizon exceeds cylinder trajectory length")
+            if self.memory_sweep and (
+                self.memory_sweep.history_lengths[-1] >= self.cylinder_wake_2d.num_steps
+            ):
+                raise ValueError("V0.8 cylinder trajectories are too short for the V0.7 sweep")
+            if self.v0_8_context.history_length >= self.cylinder_wake_2d.num_steps:
+                raise ValueError("V0.8 context history must be shorter than each trajectory")
         if (
             any(section is not None for section in v0_3_sections)
             or any(section is not None for section in v0_4_sections)
-            or any(section is not None for section in v0_5_sections)
+            or any(section is not None for section in field_learning_sections)
         ) and self.koopman is None:
             raise ValueError("versioned Koopman experiments require a Koopman config")
         if self.oscillator is not None:
@@ -1811,6 +2184,15 @@ class ProjectConfig:
             "v0_7_evaluation": None
             if self.v0_7_evaluation is None
             else self.v0_7_evaluation.to_dict(),
+            "cylinder_wake_2d": None
+            if self.cylinder_wake_2d is None
+            else self.cylinder_wake_2d.to_dict(),
+            "v0_8_routing": None if self.v0_8_routing is None else self.v0_8_routing.to_dict(),
+            "v0_8_context": None if self.v0_8_context is None else self.v0_8_context.to_dict(),
+            "v0_8_training": None if self.v0_8_training is None else self.v0_8_training.to_dict(),
+            "v0_8_evaluation": None
+            if self.v0_8_evaluation is None
+            else self.v0_8_evaluation.to_dict(),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }
@@ -1845,6 +2227,11 @@ class ProjectConfig:
                 "residual_training",
                 "memory_sweep",
                 "v0_7_evaluation",
+                "cylinder_wake_2d",
+                "v0_8_routing",
+                "v0_8_context",
+                "v0_8_training",
+                "v0_8_evaluation",
                 "project_version",
                 "tags",
             },
@@ -2010,6 +2397,41 @@ class ProjectConfig:
                 if data.get("v0_7_evaluation") is None
                 else V07EvaluationConfig.from_dict(
                     _ensure_mapping(data["v0_7_evaluation"], "V0.7 evaluation config")
+                )
+            ),
+            cylinder_wake_2d=(
+                None
+                if data.get("cylinder_wake_2d") is None
+                else CylinderWake2DConfig.from_dict(
+                    _ensure_mapping(data["cylinder_wake_2d"], "V0.8 cylinder-wake config")
+                )
+            ),
+            v0_8_routing=(
+                None
+                if data.get("v0_8_routing") is None
+                else V08RoutingConfig.from_dict(
+                    _ensure_mapping(data["v0_8_routing"], "V0.8 routing config")
+                )
+            ),
+            v0_8_context=(
+                None
+                if data.get("v0_8_context") is None
+                else V08ContextConfig.from_dict(
+                    _ensure_mapping(data["v0_8_context"], "V0.8 context config")
+                )
+            ),
+            v0_8_training=(
+                None
+                if data.get("v0_8_training") is None
+                else V08TrainingConfig.from_dict(
+                    _ensure_mapping(data["v0_8_training"], "V0.8 training config")
+                )
+            ),
+            v0_8_evaluation=(
+                None
+                if data.get("v0_8_evaluation") is None
+                else V08EvaluationConfig.from_dict(
+                    _ensure_mapping(data["v0_8_evaluation"], "V0.8 evaluation config")
                 )
             ),
             project_version=str(data.get("project_version", PROJECT_VERSION)),

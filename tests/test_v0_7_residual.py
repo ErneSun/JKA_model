@@ -627,20 +627,22 @@ def test_memory_classification_schema() -> None:
         "LONG_MEMORY_CANDIDATE",
         "INCONCLUSIVE",
     }
-    assert result["residual_route"] in {"R0", "R1", "R2", "R3", "INCONCLUSIVE"}
+    assert result["residual_route"] in {"R1", "R2", "R3", "INCONCLUSIVE"}
     assert result["physics_acceptance"] in {"PASS", "FAIL"}
 
 
-def test_r0_route_for_negligible_residual() -> None:
-    records = _sweep_records()
+def test_low_magnitude_residual_is_still_routed_by_learnability() -> None:
+    records = _r2_records()
     for record in records:
         record["residual_structure"]["validation"]["residual_significance"] = 0.001
-        record["residual_structure"]["test"]["residual_significance"] = 0.001
+        record["residual_structure"]["test"]["residual_significance"] = 0.2
     result = classify_memory_sweep(records, validate_sweep_provenance(records))
-    assert result["residual_route"] == "R0"
+    assert result["residual_magnitude"] == "LOW_MAGNITUDE"
+    assert result["residual_magnitude_test_consistent"] is False
+    assert result["residual_route"] == "R2"
 
 
-def test_r1_route_for_significant_unlearnable_residual() -> None:
+def test_r1_route_for_unlearnable_residual() -> None:
     records = _sweep_records()
     result = classify_memory_sweep(records, validate_sweep_provenance(records))
     assert result["residual_route"] == "R1"

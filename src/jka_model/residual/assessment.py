@@ -1,4 +1,4 @@
-"""Problem-agnostic V0.7 residual structure assessment and R0/R1/R2/R3 routing."""
+"""Problem-agnostic V0.7 residual structure assessment and R1/R2/R3 routing."""
 
 from __future__ import annotations
 
@@ -43,27 +43,24 @@ def _label_predictability(
     return "NONE"
 
 
-def _label_significance(by_seed: dict[int, float], threshold: float, consistency: float) -> str:
-    non_negligible = _fraction([value >= threshold for value in by_seed.values()])
-    negligible = _fraction([value < threshold for value in by_seed.values()])
-    if non_negligible >= consistency:
-        return "NON_NEGLIGIBLE"
-    if negligible >= consistency:
-        return "NEGLIGIBLE"
+def _label_magnitude(by_seed: dict[int, float], threshold: float, consistency: float) -> str:
+    material = _fraction([value >= threshold for value in by_seed.values()])
+    low = _fraction([value < threshold for value in by_seed.values()])
+    if material >= consistency:
+        return "MATERIAL_MAGNITUDE"
+    if low >= consistency:
+        return "LOW_MAGNITUDE"
     return "INCONCLUSIVE"
 
 
-def _route(significance: str, learnability: str, history_gain: str) -> str:
-    if significance == "NEGLIGIBLE":
-        return "R0"
-    if significance != "NON_NEGLIGIBLE":
-        return "INCONCLUSIVE"
+def _route(learnability: str, history_gain: str) -> str:
     if learnability in {"WEAK", "NONE"}:
         return "R1"
-    if history_gain == "ABSENT":
-        return "R2"
-    if history_gain == "PRESENT":
-        return "R3"
+    if learnability in {"STRONG", "MODERATE"}:
+        if history_gain == "ABSENT":
+            return "R2"
+        if history_gain == "PRESENT":
+            return "R3"
     return "INCONCLUSIVE"
 
 
@@ -109,21 +106,15 @@ def assess_residual_structure(
     consistency = float(sweep["seed_consistency_fraction"])
     material = float(sweep["material_relative_gain"])
 
-    significance_validation_by_seed: dict[int, float] = {}
-    significance_test_by_seed: dict[int, float] = {}
+    magnitude_validation_by_seed: dict[int, float] = {}
+    magnitude_test_by_seed: dict[int, float] = {}
     for seed in seeds:
         reference = grouped[(seed, initializations[0], "zero", 1)]["residual_structure"]
-        significance_validation_by_seed[seed] = float(
-            reference["validation"]["residual_significance"]
-        )
-        significance_test_by_seed[seed] = float(reference["test"]["residual_significance"])
-    significance_threshold = float(evaluation["min_residual_significance"])
-    significance = _label_significance(
-        significance_validation_by_seed, significance_threshold, consistency
-    )
-    significance_test = _label_significance(
-        significance_test_by_seed, significance_threshold, consistency
-    )
+        magnitude_validation_by_seed[seed] = float(reference["validation"]["residual_significance"])
+        magnitude_test_by_seed[seed] = float(reference["test"]["residual_significance"])
+    magnitude_threshold = float(evaluation["min_residual_significance"])
+    magnitude = _label_magnitude(magnitude_validation_by_seed, magnitude_threshold, consistency)
+    magnitude_test = _label_magnitude(magnitude_test_by_seed, magnitude_threshold, consistency)
 
     markov_selection: dict[tuple[int, int], dict[str, Any]] = {}
     predictability_validation: dict[tuple[int, int], float] = {}
@@ -227,8 +218,9 @@ def assess_residual_structure(
     else:
         history_gain = "INCONCLUSIVE"
 
-    preliminary_route = _route(significance, learnability, history_gain)
-    route_confirmed = significance_test == significance
+    preliminary_route = _route(learnability, history_gain)
+    magnitude_test_consistent = magnitude_test == magnitude
+    route_confirmed = preliminary_route != "INCONCLUSIVE"
     if preliminary_route in {"R2", "R3"}:
         route_confirmed = route_confirmed and test_learnability in {"STRONG", "MODERATE"}
     elif preliminary_route == "R1":
@@ -378,11 +370,13 @@ def assess_residual_structure(
         else "LIMITED"
     )
     return {
-        "assessment_schema_version": 1,
+        "assessment_schema_version": 2,
         "assessment_protocol": (
-            "validation_route_selection_then_locked_test_confirmation_with_nested_seeds"
+            "all_residuals_retained_validation_structure_route_then_locked_test_confirmation"
         ),
-        "residual_significance": significance,
+        "routing_policy": "all_nominal_residuals_enter_R1_R2_R3_structure_assessment",
+        "residual_magnitude": magnitude,
+        "residual_magnitude_test_consistent": magnitude_test_consistent,
         "residual_predictability": {
             "validation_by_backbone_seed": {
                 str(key): value for key, value in validation_predictability_by_seed.items()
@@ -419,17 +413,18 @@ def assess_residual_structure(
         "residual_route": final_route,
         "confidence": confidence,
         "thresholds": {
-            "min_residual_significance": significance_threshold,
+            "min_residual_significance": magnitude_threshold,
+            "residual_significance_role": "diagnostic_only_not_a_routing_gate",
             "material_history_gain": material,
             "seed_consistency_fraction": consistency,
             "max_closure_burden": float(evaluation["max_closure_burden"]),
         },
         "evidence": {
-            "residual_significance_validation_by_seed": {
-                str(key): value for key, value in significance_validation_by_seed.items()
+            "residual_magnitude_validation_by_seed": {
+                str(key): value for key, value in magnitude_validation_by_seed.items()
             },
-            "residual_significance_test_by_seed": {
-                str(key): value for key, value in significance_test_by_seed.items()
+            "residual_magnitude_test_by_seed": {
+                str(key): value for key, value in magnitude_test_by_seed.items()
             },
             "markovian_validation_selection": {
                 f"seed_{seed}_init_{initialization}": {

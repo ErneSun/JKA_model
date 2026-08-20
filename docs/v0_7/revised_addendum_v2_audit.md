@@ -22,11 +22,14 @@ the existing V0.7 residual target remain the mathematical baseline.
 The primary evidence chain is now:
 
 ```text
-residual significance S_R
-  -> Markovian predictability P_R
+residual magnitude diagnostic S_R
+  + Markovian predictability P_R
   -> conditional causal-history gain G_H
-  -> R0 / R1 / R2 / R3 / INCONCLUSIVE
+  -> R1 / R2 / R3 / INCONCLUSIVE
 ```
+
+`S_R` describes scale but never discards a residual. This preserves small
+one-step discrepancies whose effect may accumulate during long rollouts.
 
 Primary prediction and gain comparisons use the per-latent-dimension training
 RMS standardized MSE. Validation selects the admissible closure and H; the
@@ -62,10 +65,12 @@ only as a secondary diagnostic. It no longer selects the V0.8 architecture.
 
 V0.7 does not introduce Attention, Transformer, recurrent memory, adaptive
 Koopman operators, online adaptation, or a new scientific benchmark. Those are
-eligible only after the R0-R3 evidence route is confirmed.
+eligible only after the R1-R3 evidence route is confirmed.
 
 ## Verification state
 
 Focused local V0.7 tests and the necessary V0.6/config/checkpoint compatibility
-tests pass. A fresh 144-record GPU run is still required because the checkpoint
-schema, residual-scale provenance, primary metrics, and route logic changed.
+tests passed before the R1–R3 route revision. Per explicit request, no tests were
+executed for this decision-only change. Existing 144-record evaluation evidence
+can be reclassified without retraining; its generated reports remain historical
+until that reclassification is requested.

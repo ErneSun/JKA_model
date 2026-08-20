@@ -17,7 +17,12 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
 from jka_model.config import ProjectConfig, load_config, save_config
-from jka_model.constants import ARCHITECTURE_REVISION, CHECKPOINT_SCHEMA_VERSION, PROJECT_VERSION
+from jka_model.constants import (
+    ARCHITECTURE_REVISION,
+    CHECKPOINT_SCHEMA_VERSION,
+    V0_7_CHECKPOINT_SCHEMA_VERSION,
+    V0_7_PROJECT_VERSION,
+)
 from jka_model.residual import (
     ResidualCache,
     ResidualKoopmanModel,
@@ -80,6 +85,7 @@ def _backbone_contract(config: ProjectConfig) -> dict[str, Any]:
         "data",
         "koopman",
         "advection_diffusion_2d",
+        "cylinder_wake_2d",
         "field_autoencoder",
         "field_loss",
         "v0_5_evaluation",
@@ -209,6 +215,12 @@ def train_v0_7(
     resolved = load_config(config) if isinstance(config, (str, Path)) else config
     _require_v0_7(resolved)
     assert resolved.residual_closure and resolved.residual_training and resolved.koopman
+    checkpoint_schema = (
+        V0_7_CHECKPOINT_SCHEMA_VERSION
+        if resolved.project_version == V0_7_PROJECT_VERSION
+        else CHECKPOINT_SCHEMA_VERSION
+    )
+    checkpoint_project = resolved.project_version
     if variant not in resolved.residual_closure.variants:
         raise ValueError(f"closure variant {variant!r} is not enabled")
     selected = torch.device(
@@ -298,7 +310,7 @@ def train_v0_7(
     (destination / "metadata" / "provenance.json").write_text(
         json.dumps(
             {
-                "project_version": PROJECT_VERSION,
+                "project_version": checkpoint_project,
                 "architecture_revision": ARCHITECTURE_REVISION,
                 "train_stage": TrainStage.RESIDUAL.value,
                 "variant": variant,
@@ -418,9 +430,9 @@ def train_v0_7(
             else:
                 stale += 1
             payload = {
-                "schema_version": CHECKPOINT_SCHEMA_VERSION,
+                "schema_version": checkpoint_schema,
                 "architecture_revision": ARCHITECTURE_REVISION,
-                "project_version": PROJECT_VERSION,
+                "project_version": checkpoint_project,
                 "train_stage": TrainStage.RESIDUAL.value,
                 "epoch": completed,
                 "global_step": global_step,
@@ -464,9 +476,9 @@ def train_v0_7(
     if variant == "zero":
         best_mse = initial_mse
         payload = {
-            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "schema_version": checkpoint_schema,
             "architecture_revision": ARCHITECTURE_REVISION,
-            "project_version": PROJECT_VERSION,
+            "project_version": checkpoint_project,
             "train_stage": TrainStage.RESIDUAL.value,
             "epoch": 0,
             "global_step": 0,

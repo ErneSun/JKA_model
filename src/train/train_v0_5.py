@@ -94,6 +94,7 @@ def initialize_v0_5_model(
     if spec.grid.shape is None or len(spec.grid.shape) != 2:
         raise ValueError("V0.5 field autoencoder requires a two-dimensional grid")
     nx, ny = spec.grid.shape
+    padding_mode = "circular" if spec.boundary.kind == "periodic" else "zeros"
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(config.training.seed)
         encoder = KoopmanEncoder2D(
@@ -102,6 +103,7 @@ def initialize_v0_5_model(
             architecture.width,
             nx,
             ny,
+            padding_mode,
         )
         decoder = TrainingDecoder2D(
             architecture.latent_dim,
@@ -110,6 +112,7 @@ def initialize_v0_5_model(
             ny,
             architecture.width,
             architecture.decoder_hidden_dim,
+            padding_mode,
         )
         for module in (encoder, decoder):
             for layer in module.modules():

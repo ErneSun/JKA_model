@@ -15,7 +15,10 @@ from jka_model.config import ProjectConfig, load_config
 from jka_model.data import (
     ChannelStandardizer,
     SplitManifest,
+    cylinder_force_coefficients,
     select_split,
+    shedding_frequency,
+    velocity_vorticity_divergence,
 )
 from jka_model.physics import weighted_integral_2d
 from jka_model.problems import create_problem_adapter
@@ -61,6 +64,7 @@ def evaluate_v0_5(
     records = adapter.build_dataset(seed=resolved.training.seed)
     spec = adapter.build_problem_spec()
     reference = adapter.compute_reference_metrics()
+    is_cylinder = resolved.data.problem_name == "cylinder_wake_2d"
     if not isinstance(saved.split_manifest, dict):
         raise ValueError("evaluation checkpoint lacks split manifest")
     manifest = SplitManifest.from_dict(saved.split_manifest)
@@ -117,17 +121,31 @@ def evaluate_v0_5(
                 )
                 weights_raw = record.cell_weights.to(selected, torch.float32)
                 weights = weights_raw.unsqueeze(0)
-                initial_mass = weighted_integral_2d(initial_raw, weights)
-                masses = weighted_integral_2d(predicted_raw, weights_raw)
-                mass_scale = initial_raw.abs().mul(weights).sum(dim=(-2, -1)).clamp_min(1e-12)
-                aggregates[name]["mass_drift"].append(
-                    float(((masses - initial_mass).abs() / mass_scale).max())
-                )
+                if is_cylinder:
+                    assert resolved.cylinder_wake_2d is not None
+                    _, divergence = velocity_vorticity_divergence(
+                        predicted_raw, resolved.cylinder_wake_2d
+                    )
+                    assert record.valid_mask is not None
+                    fluid = record.valid_mask.to(selected)
+                    aggregates[name]["mass_drift"].append(
+                        float(divergence[..., fluid].square().mean().sqrt())
+                    )
+                else:
+                    initial_mass = weighted_integral_2d(initial_raw, weights)
+                    masses = weighted_integral_2d(predicted_raw, weights_raw)
+                    mass_scale = initial_raw.abs().mul(weights).sum(dim=(-2, -1)).clamp_min(1e-12)
+                    aggregates[name]["mass_drift"].append(
+                        float(((masses - initial_mass).abs() / mass_scale).max())
+                    )
                 previous = initial_raw
                 terms: list[torch.Tensor] = []
                 metadata = {
                     "mu_static": record.mu_static.to(selected, torch.float32).unsqueeze(0),
                     "cell_weights": weights,
+                    "valid_mask": None
+                    if record.valid_mask is None
+                    else record.valid_mask.to(selected).unsqueeze(0),
                 }
                 for index in range(horizon):
                     current = predicted_raw[index : index + 1]
@@ -149,15 +167,27 @@ def evaluate_v0_5(
     }
     eigenvalues = torch.linalg.eigvals(model.core.A.detach().cpu())
     spectral_abscissa = float(eigenvalues.real.max())
-    true_frequency = abs(reference["angular_frequency"])
+    if is_cylinder:
+        assert resolved.cylinder_wake_2d is not None
+        shedding_values = []
+        for record in test_records:
+            _, lift = cylinder_force_coefficients(
+                record.states_raw.to(selected), resolved.cylinder_wake_2d
+            )
+            shedding_values.append(shedding_frequency(lift, resolved.cylinder_wake_2d.snapshot_dt))
+        true_frequency = 2.0 * math.pi * sum(shedding_values) / len(shedding_values)
+    else:
+        true_frequency = abs(reference["angular_frequency"])
     candidates = eigenvalues.imag.abs()
     selected_index = int((candidates - true_frequency).abs().argmin())
     selected_eigenvalue = eigenvalues[selected_index]
     learned_frequency = float(candidates[selected_index])
     learned_decay = float(-selected_eigenvalue.real)
-    true_decay = float(reference["decay_rate"])
+    true_decay = 0.0 if is_cylinder else float(reference["decay_rate"])
     frequency_error = abs(learned_frequency - true_frequency) / max(true_frequency, 1e-12)
-    decay_error = abs(learned_decay - true_decay) / max(true_decay, 1e-12)
+    decay_error = (
+        abs(learned_decay) if is_cylinder else abs(learned_decay - true_decay) / true_decay
+    )
     latent = torch.cat(latent_samples, dim=0)
     latent_std = latent.std(dim=0, unbiased=False)
     result: dict[str, Any] = {
@@ -194,6 +224,21 @@ def evaluate_v0_5(
         if selected.type != "cuda"
         else "MEASURED_NOT_AUTOMATICALLY_ACCEPTED",
         "finite": all(torch.isfinite(parameter).all().item() for parameter in model.parameters()),
+        "physics_metric_semantics": (
+            {
+                "mass_drift": "velocity_divergence_rms",
+                "operator": "fixed_boundary_and_cylinder_no_slip_mse",
+                "frequency": "lift_coefficient_shedding_angular_frequency",
+                "decay": "not_applicable_reported_as_generator_damping_magnitude",
+            }
+            if is_cylinder
+            else {
+                "mass_drift": "relative_scalar_mass_drift",
+                "operator": "advection_diffusion_operator_mse",
+                "frequency": "analytical_angular_frequency",
+                "decay": "analytical_decay_rate",
+            }
+        ),
     }
     if run_dir is not None:
         run_path = Path(run_dir)

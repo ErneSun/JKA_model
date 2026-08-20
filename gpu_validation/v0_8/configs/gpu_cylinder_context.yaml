@@ -1,0 +1,22 @@
+architecture: {package: jka_model, revision: "2.2"}
+training: {seed: 47, stage: context, deterministic: true, run_root: runs/v0_8}
+data: {problem_name: cylinder_wake_2d, action_dim: 0, parameter_dim: 3, dt_mode: constant, constant_dt: 0.15, history: 4, horizon: 8, split: {train: 0.67, validation: 0.17, test: 0.16, seed: 47}, normalization: {kind: standard, eps: 1.0e-6}, toy_advection_diffusion: null}
+koopman: {state_dim: 32, trainable: true, dtype: float32}
+cylinder_wake_2d: {num_trajectories: 12, num_steps: 160, nx: 256, ny: 128, x_min: -8.0, x_max: 16.0, y_min: -6.0, y_max: 6.0, cylinder_x: 0.0, cylinder_y: 0.0, cylinder_diameter: 1.0, reynolds_number: 100.0, u_infinity: 1.0, lattice_inflow_velocity: 0.08, solver_steps_per_snapshot: 20, perturbation_amplitude: 0.015, time_varying_boundary: false}
+field_autoencoder: {input_channels: 3, latent_dim: 32, width: 8, decoder_hidden_dim: 64}
+field_loss: {lambda_k: 1.0, lambda_generator: 1.0, lambda_multi: 2.0, lambda_rec: 2.0, lambda_forecast: 2.0, lambda_var: 0.1, lambda_stability: 0.1, lambda_physics: 0.05, lambda_mass: 0.5, lambda_operator: 0.5, min_std: 0.1}
+v0_5_training: {epochs: 100, batch_size: 4, learning_rate: 0.0005, generator_lr_multiplier: 3.0, weight_decay: 0.000001, init_scale: 0.02, physics_warmup_epochs: 15, scheduler_step_size: 60, scheduler_gamma: 0.5, diagnostic_interval: 1, precision: amp_bf16}
+v0_5_evaluation: {short_horizon: 1, medium_horizon: 16, long_horizon: 80, max_frequency_relative_error: 0.10, max_decay_relative_error: 0.5, max_spectral_abscissa: 0.001, max_relative_mass_drift: 0.05, max_operator_mse: 0.05, max_ablation_skill_degradation: 0.05, max_ablation_constraint_degradation: 0.10}
+jepa_loss: {lambda_one_step: 1.0, lambda_multi_step: 1.0}
+ema: {start_tau: 0.996, end_tau: 1.0, schedule: linear}
+v0_6_evaluation: {max_long_rollout_degradation: 0.10, max_physics_degradation: 0.10, min_latent_std: 0.02, seeds: [47, 53, 59]}
+residual_closure: {history: 8, hidden_dim: 64, depth: 2, include_parameters: true, cache_dtype: float32, max_acf_lag: 24, variants: [zero, linear, instantaneous, history, shuffled_history]}
+residual_training: {epochs: 60, batch_size: 256, learning_rate: 0.001, weight_decay: 0.00001, gradient_clip_norm: 1.0, patience: 12, precision: amp_bf16, initialization_seed: 101}
+memory_sweep: {history_lengths: [1, 2, 4, 8, 16], effective_gain_fraction: 0.95, material_relative_gain: 0.02, plateau_relative_gain: 0.01, parameter_match_tolerance: 0.05, seed_consistency_fraction: 0.6666666666666666, initialization_seeds: [101, 211, 307], strong_r2: 0.75, moderate_r2: 0.40, weak_r2: 0.05}
+v0_7_evaluation: {rollout_horizons: [8, 16, 32, 80], min_residual_rms: 0.000001, min_residual_significance: 0.01, min_history_r2_gain: 0.02, max_closure_burden: 0.25, max_physics_degradation: 0.10, formal_record_count: 144, seeds: [47, 53, 59]}
+v0_8_routing: {mode: auto, v0_7_result: ""}
+v0_8_context: {family: auto, context_dim: 8, history_length: 8, width: 64, layers: 2, heads: 4, ffn_multiplier: 2, dropout: 0.0, include_parameters: true}
+v0_8_training: {epochs: 80, batch_size: 256, learning_rate: 0.001, weight_decay: 0.00001, lambda_adequacy: 0.2, gradient_clip_norm: 1.0, patience: 16, precision: amp_bf16, context_initialization_seed: 401}
+v0_8_evaluation: {rollout_horizons: [8, 16, 32, 80], material_relative_gain: 0.02, min_context_effective_rank: 2.0, max_closure_burden: 0.25, max_physics_degradation: 0.10, max_divergence_mse: 0.02, max_boundary_mse: 0.05, seed_consistency_fraction: 0.6666666666666666, context_initialization_seeds: [401, 503, 607]}
+project_version: 0.8.0
+tags: [v0.8, gpu-full, cylinder-wake, rtx-5080, dynamic-context]

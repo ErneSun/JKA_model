@@ -117,6 +117,7 @@ def _v0_5_contract(config: ProjectConfig | Mapping[str, Any]) -> dict[str, Any]:
         "data",
         "koopman",
         "advection_diffusion_2d",
+        "cylinder_wake_2d",
         "field_autoencoder",
         "field_loss",
         "v0_5_evaluation",

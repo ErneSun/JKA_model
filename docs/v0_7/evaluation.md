@@ -14,10 +14,10 @@ Primary comparisons use the same V0.6 checkpoint, data, split, normalizer, and e
 
 The primary assessment reports:
 
-- residual significance: `NEGLIGIBLE / NON_NEGLIGIBLE / INCONCLUSIVE`;
+- residual magnitude diagnostic: `LOW_MAGNITUDE / MATERIAL_MAGNITUDE / INCONCLUSIVE`;
 - residual learnability: `STRONG / MODERATE / WEAK / NONE`;
 - conditional history gain: `PRESENT / ABSENT / INCONCLUSIVE`;
-- residual route: `R0 / R1 / R2 / R3 / INCONCLUSIVE`.
+- residual route: `R1 / R2 / R3 / INCONCLUSIVE`.
 
 Independent secondary conclusions remain:
 
@@ -29,4 +29,11 @@ Ordered history counts as memory evidence only when teacher-forced and closed-lo
 
 Closed-loop utility must improve the selected test rollout while satisfying both absolute V0.5 physical limits and baseline-relative non-inferiority. Mean closure burden must remain at or below `0.25`. Error bars aggregate backbone/data and closure-initialization variability.
 
-The significance threshold is config-owned: `S_R < 0.01` is the current R0 candidate rule, corresponding to less than 1% residual energy relative to the true latent increment. It is recorded in every resolved config and result rather than hidden in classifier code.
+The magnitude reference threshold is config-owned: `S_R < 0.01` is labeled `LOW_MAGNITUDE`, corresponding to less than 1% residual energy relative to the true latent increment. It is recorded in every resolved config and result rather than hidden in classifier code. This label is diagnostic only: it cannot terminate routing or remove the residual, because one-step errors may accumulate over time.
+
+Routing uses learnability and conditional history gain:
+
+- `R1`: the residual is not stably predictable from the tested resolved information;
+- `R2`: it is predictably learnable from the current resolved state without stable added history gain;
+- `R3`: it is predictably learnable and ordered causal history gives stable additional gain;
+- `INCONCLUSIVE`: validation structure, locked test confirmation, or physics acceptance is insufficient.

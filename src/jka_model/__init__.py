@@ -1,10 +1,11 @@
-"""Public API through V0.7 Koopman residual identification and minimal closure."""
+"""Public API through V0.8 residual-supervised dynamic context learning."""
 
 from jka_model.constants import (
     ARCHITECTURE_REVISION,
     CHECKPOINT_SCHEMA_VERSION,
     PROJECT_VERSION,
 )
+from jka_model.context import DynamicContextModel, build_dynamic_context_model
 from jka_model.contracts import (
     BoundarySpec,
     ChannelSpec,
@@ -35,6 +36,7 @@ __all__ = [
     "BoundarySpec",
     "ChannelSpec",
     "ContinuousKoopmanCore",
+    "DynamicContextModel",
     "DtMode",
     "GeometrySpec",
     "GridSpec",
@@ -51,6 +53,7 @@ __all__ = [
     "TrainingDecoder",
     "TransitionOutput",
     "build_closure",
+    "build_dynamic_context_model",
     "configure_train_stage",
     "validate_trajectory_alignment",
 ]

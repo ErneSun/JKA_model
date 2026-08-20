@@ -132,7 +132,9 @@ def evaluate_v0_7(
     test_records = select_split(records, manifest, "test")
     cached_lookup = {item.trajectory_id: item for item in cache.select("test")}
     spec = adapter.build_problem_spec()
-    operator = adapter.build_physics_constraints()["operator"]
+    constraints = adapter.build_physics_constraints()
+    mass_constraint = constraints["mass"]
+    operator = constraints["operator"]
     rollout: dict[str, dict[str, Any]] = {}
     for horizon in resolved.v0_7_evaluation.rollout_horizons:
         latent_rmse: list[float] = []
@@ -178,15 +180,40 @@ def evaluate_v0_7(
             relative_l2.append(float(error.norm() / truth_raw.norm().clamp_min(1e-12)))
             weights = record.cell_weights.to(selected, torch.float32)
             initial_raw = record.states_raw[start : start + 1].to(selected, torch.float32)
-            initial_mass = weighted_integral_2d(initial_raw, weights.unsqueeze(0))
-            masses = weighted_integral_2d(predicted_raw, weights)
-            scale = initial_raw.abs().mul(weights).sum(dim=(-2, -1)).clamp_min(1e-12)
-            mass_drift.append(float(((masses - initial_mass).abs() / scale).max()))
+            cylinder_problem = spec.name == "cylinder_wake_2d"
+            if cylinder_problem:
+                divergence_terms: list[torch.Tensor] = []
+                cylinder_metadata = {
+                    "mu_static": record.mu_static.to(selected, torch.float32).unsqueeze(0),
+                    "cell_weights": weights.unsqueeze(0),
+                    "valid_mask": record.valid_mask.to(selected).unsqueeze(0),
+                }
+                for step in range(horizon):
+                    divergence_terms.append(
+                        next(
+                            iter(
+                                mass_constraint.loss(
+                                    predicted_raw[step : step + 1],
+                                    spec=spec,
+                                    metadata=cylinder_metadata,
+                                ).values()
+                            )
+                        )
+                    )
+                mass_drift.append(float(torch.stack(divergence_terms).mean()))
+            else:
+                initial_mass = weighted_integral_2d(initial_raw, weights.unsqueeze(0))
+                masses = weighted_integral_2d(predicted_raw, weights)
+                scale = initial_raw.abs().mul(weights).sum(dim=(-2, -1)).clamp_min(1e-12)
+                mass_drift.append(float(((masses - initial_mass).abs() / scale).max()))
             terms: list[torch.Tensor] = []
             previous = initial_raw
             metadata = {
                 "mu_static": record.mu_static.to(selected, torch.float32).unsqueeze(0),
                 "cell_weights": weights.unsqueeze(0),
+                "valid_mask": None
+                if record.valid_mask is None
+                else record.valid_mask.to(selected).unsqueeze(0),
             }
             for step in range(horizon):
                 current = predicted_raw[step : step + 1]
@@ -282,10 +309,17 @@ def evaluate_v0_7(
         "scientific_acceptance": "PENDING_MULTI_SEED_GPU_REVIEW",
         "memory_sweep_config": resolved.memory_sweep.to_dict(),
         "v0_7_evaluation_config": resolved.v0_7_evaluation.to_dict(),
-        "physics_limits": {
-            "max_relative_mass_drift": resolved.v0_5_evaluation.max_relative_mass_drift,
-            "max_operator_mse": resolved.v0_5_evaluation.max_operator_mse,
-        },
+        "physics_limits": (
+            {
+                "max_relative_mass_drift": resolved.v0_8_evaluation.max_divergence_mse,
+                "max_operator_mse": resolved.v0_8_evaluation.max_boundary_mse,
+            }
+            if resolved.cylinder_wake_2d is not None and resolved.v0_8_evaluation is not None
+            else {
+                "max_relative_mass_drift": resolved.v0_5_evaluation.max_relative_mass_drift,
+                "max_operator_mse": resolved.v0_5_evaluation.max_operator_mse,
+            }
+        ),
     }
     if output_path is not None:
         destination = Path(output_path)

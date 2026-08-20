@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0 — Residual-supervised dynamic context on transient cylinder wake
+
+- Added a fixed-condition transient 2-D cylinder-wake Problem Adapter and reusable offline
+  D2Q9-BGK datasets with physical/numerical acceptance and grid-adequacy gates.
+- Reused the V0.6 JEPA–Koopman architecture with problem-owned nonperiodic CNN padding and
+  trained new cylinder-specific backbones rather than transferring periodic-flow weights.
+- Reused the updated V0.7 R1/R2/R3 assessment on the new problem; low residual magnitude remains
+  diagnostic and cannot discard residuals, and R0 is not a legal route.
+- Added a unified compact context interface: instantaneous MLP for R2 and validation-selected
+  history MLP or causal Attention for R3, with standardized residual and adequacy teacher heads.
+- Kept the encoder, decoder, EMA target and nominal generator A0 frozen; no eta, adaptive A,
+  persistent residual state, or V0.9 functionality is implemented.
+- Added exact-resume schema-8 context checkpoints, leakage-free histories, teacher-free rollout,
+  physical non-inferiority checks, nested 3x3 aggregation, ten auditable figures, and one-command
+  RTX-5080 validation. Formal GPU scientific acceptance remains pending execution.
+
 ## 0.6.0 — JEPA online/EMA-target over the validated V0.5 Koopman model
 
 - Added a frozen EMA target encoder while retaining the complete V0.5 online model,

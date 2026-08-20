@@ -1,11 +1,11 @@
 # V0.7 status
 
-As of 2026-08-18 after Revised Addendum v2 implementation:
+As of 2026-08-20 after removing the magnitude-based residual-discard route:
 
 ```text
-LOCAL: PASS — focused residual-router/workflow tests plus CPU train/evaluate integration
-GPU: PENDING — a fresh 144-record Residual Structure Assessment is required
-SCIENTIFIC: PENDING — older V0.7 artifacts predate S_R/P_R/G_H to R0-R3 routing
+LOCAL: NOT RERUN — route contract was edited without tests by explicit request
+GPU: EXISTING ARTIFACTS RETAINED — no new training or validation was run
+SCIENTIFIC: NEEDS RECLASSIFICATION — generated reports predate diagnostic-S_R plus R1-R3 routing
 ```
 
-The new GPU report will populate significance, predictability, conditional history gain, two-level seed consistency, three physics gates, secondary memory class, and final residual route. No V0.6 checkpoint is stored in Git.
+The current classifier records residual magnitude but never uses it to discard a residual. Predictability and conditional history gain select R1/R2/R3, followed by locked test confirmation and the existing physics gates. Existing evaluation records can be reclassified later without retraining; no V0.6 checkpoint is stored in Git.

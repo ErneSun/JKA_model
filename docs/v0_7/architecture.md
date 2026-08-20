@@ -26,7 +26,7 @@ P_R=1-\frac{E_{best}^{M}}{E_0+\epsilon},\qquad
 G_H=\frac{E_M-E_H}{E_M+\epsilon},
 \]
 
-and maps `(S_R,P_R,G_H)` to `R0/R1/R2/R3/INCONCLUSIVE`. Dynamic context `c_t`, Attention, operator coordinate `eta_t`, and adaptive `A_t` are explicitly deferred to later versions.
+Here `S_R` is a magnitude diagnostic, while `(P_R,G_H)` selects `R1/R2/R3/INCONCLUSIVE`. There is no magnitude-based discard route: a low-energy one-step residual is retained because its closed-loop effect may accumulate. Dynamic context `c_t`, Attention, operator coordinate `eta_t`, and adaptive `A_t` are explicitly deferred to later versions.
 
 For `H=1`, the past-interval sequence is empty and the closure sees exactly `(z_t, Δt_t, μ)`. The formal GPU experiment sweeps `H=[1,2,4,8,16]`; the target definition and frozen backbone never change with H.
 

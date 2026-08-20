@@ -12,12 +12,12 @@
 - [ ] H=1 history and instantaneous controls are training-identical under paired initialization.
 - [ ] All comparisons share checkpoint/cache/data/split/normalizer/evaluation trajectories.
 - [ ] Model/H selection uses validation residual NRMSE only; test is not used as an oracle.
-- [ ] Residual significance and Markovian predictability use validation before route locking.
-- [ ] Final output includes R0/R1/R2/R3/INCONCLUSIVE and test confirmation status.
+- [ ] Residual magnitude is recorded but cannot discard a residual; Markovian predictability uses validation before route locking.
+- [ ] Final output includes R1/R2/R3/INCONCLUSIVE and test confirmation status.
 - [ ] Formal rollout uses predicted history.
 - [ ] Physics is evaluation-only.
 - [ ] Closure burden curves, physical H, parameter counts, gains, and marginal gains are recorded.
 - [ ] Absolute physics, zero-baseline non-inferiority, and burden gates all pass independently.
 - [ ] `completion.json`, `residual_structure_assessment.json`, sweep/classification CSV/JSON, seven plots, and both reports exist.
-- [ ] Final report begins with significance, learnability, history gain, utility, physics, memory class, and residual route.
+- [ ] Final report begins with magnitude diagnostic, learnability, history gain, utility, physics, memory class, and residual route.
 - [ ] Scientific status is kept separate from implementation status.

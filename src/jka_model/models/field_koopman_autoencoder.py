@@ -8,7 +8,7 @@ from jka_model.models.koopman_core import ContinuousKoopmanCore
 
 
 class KoopmanEncoder2D(nn.Module):
-    """Encode ``[...,C,Nx,Ny]`` fields with circular spatial padding."""
+    """Encode fields with problem-owned circular or fixed-boundary padding."""
 
     def __init__(
         self,
@@ -17,6 +17,7 @@ class KoopmanEncoder2D(nn.Module):
         width: int,
         nx: int,
         ny: int,
+        padding_mode: str = "circular",
     ) -> None:
         super().__init__()
         if min(input_channels, latent_dim, width, nx, ny) < 1:
@@ -24,12 +25,15 @@ class KoopmanEncoder2D(nn.Module):
         self.input_channels = input_channels
         self.latent_dim = latent_dim
         self.nx, self.ny = nx, ny
+        if padding_mode not in {"circular", "zeros"}:
+            raise ValueError("padding_mode must be circular or zeros")
+        self.padding_mode = padding_mode
         self.network = nn.Sequential(
-            nn.Conv2d(input_channels, width, 3, padding=1, padding_mode="circular"),
+            nn.Conv2d(input_channels, width, 3, padding=1, padding_mode=padding_mode),
             nn.SiLU(),
-            nn.Conv2d(width, 2 * width, 3, stride=2, padding=1, padding_mode="circular"),
+            nn.Conv2d(width, 2 * width, 3, stride=2, padding=1, padding_mode=padding_mode),
             nn.SiLU(),
-            nn.Conv2d(2 * width, 2 * width, 3, stride=2, padding=1, padding_mode="circular"),
+            nn.Conv2d(2 * width, 2 * width, 3, stride=2, padding=1, padding_mode=padding_mode),
             nn.SiLU(),
         )
         # Keep the coarse spatial feature map. Global average pooling would make the
@@ -59,6 +63,7 @@ class TrainingDecoder2D(nn.Module):
         ny: int,
         width: int,
         hidden_dim: int,
+        padding_mode: str = "circular",
     ) -> None:
         super().__init__()
         if min(latent_dim, output_channels, nx, ny, width, hidden_dim) < 1:
@@ -66,13 +71,16 @@ class TrainingDecoder2D(nn.Module):
         self.latent_dim = latent_dim
         self.output_channels = output_channels
         self.nx, self.ny, self.width = nx, ny, width
+        if padding_mode not in {"circular", "zeros"}:
+            raise ValueError("padding_mode must be circular or zeros")
+        self.padding_mode = padding_mode
         self.lift = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim), nn.SiLU(), nn.Linear(hidden_dim, width * nx * ny)
         )
         self.refine = nn.Sequential(
-            nn.Conv2d(width, width, 3, padding=1, padding_mode="circular"),
+            nn.Conv2d(width, width, 3, padding=1, padding_mode=padding_mode),
             nn.SiLU(),
-            nn.Conv2d(width, output_channels, 3, padding=1, padding_mode="circular"),
+            nn.Conv2d(width, output_channels, 3, padding=1, padding_mode=padding_mode),
         )
 
     def forward(self, latent: Tensor) -> Tensor:

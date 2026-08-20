@@ -1,6 +1,6 @@
 # Koopman-Structured Physical JEPA World Model
 
-本仓库当前完成 **V0.7 本地实现 — residual learnability, closed-loop utility, and memory characterization over a frozen Koopman backbone**。项目版本为 `0.7.0`，
+本仓库当前完成 **V0.8 本地实现 — residual-supervised dynamic context learning on a transient 2-D cylinder wake**。项目版本为 `0.8.0`，
 唯一有效架构修订为 `2.2`。
 
 V0.5 在不改变连续时间 core 的前提下，将学习扩展到二维周期 PDE 场：
@@ -24,6 +24,7 @@ V0.4  learned Koopman coordinates + training decoder
 V0.5  2-D PDE field encoder + raw-unit physics training（GPU 已验证）
 V0.6  online/EMA-target JEPA shell（多种子 GPU 验证通过）
 V0.7  residual identification → learnability → closed-loop utility → multi-H memory characterization（本地通过，GPU 待验证）
+V0.8  fixed cylinder wake → V0.7 route → R2 instantaneous / R3 temporal context（GPU 待验证）
 ```
 
 V0.5 保留全部 V0.1–V0.4 回归能力，并新增：
@@ -69,6 +70,8 @@ python scripts/smoke_v0_6.py --device cpu
 python scripts/explain_v0_6.py
 python -m pytest -q tests/test_v0_7_residual.py tests/test_v0_7_gpu_workflow.py tests/test_v0_7_integration.py
 python scripts/explain_v0_7.py
+python scripts/explain_v0_8.py
+python -m pytest -q tests/test_v0_8_physical_problem.py tests/test_v0_8_context.py tests/test_v0_8_workflow.py
 python scripts/train_v0_5.py --config configs/v0_5/advection_diffusion_2d_cpu_tiny_train.yaml --device cpu
 ruff check .
 MYPYPATH=src mypy
@@ -89,11 +92,12 @@ core.spectrum()
 `rollout()` 包含初始状态，不使用 ground truth teacher forcing。负 `dt` 被拒绝，`dt=0` 用于
 identity test。
 
-## V0.7 范围边界
+## V0.8 范围边界
 
-V0.7 冻结最新 V0.6 online encoder、Koopman generator 和 decoder，只识别并预测其 latent residual。
-它没有 `z_r`、gate、GRU/LSTM/Mamba/Attention、joint fine-tuning、action-conditioned dynamics、
-MPC 或 RL。V0.7 本地 CPU 实现已通过；多种子 GPU scientific acceptance 为 `PENDING_GPU`。
+V0.8 在新的固定边界圆柱绕流上训练 V0.6-compatible backbone，再由更新后的 V0.7
+R1/R2/R3 路由决定是否以及如何训练 context。Context 只预测冻结 nominal Koopman residual
+和 adequacy；`A0` 不变，也没有 `eta_t`、`A_t`、persistent `z_R`、联合微调或 V0.9 功能。
+本地实现验证与正式多种子 GPU scientific acceptance 分离，当前 GPU 状态为 `PENDING_GPU`。
 
 文档入口：
 
@@ -104,6 +108,8 @@ MPC 或 RL。V0.7 本地 CPU 实现已通过；多种子 GPU scientific acceptan
 - [V0.6 状态](./docs/v0_6/status.md)
 - [V0.7 文档入口](./docs/v0_7/README.md)
 - [V0.7 状态](./docs/v0_7/status.md)
+- [V0.8 文档入口](./docs/v0_8/README.md)
+- [V0.8 状态](./docs/v0_8/status.md)
 - [V0.4 Code Walkthrough](./docs/v0_4_code_walkthrough.md)
 - [V0.4 Implementation Checklist](./docs/v0_4_implementation_checklist.md)
 - [V0.3 Code Walkthrough](./docs/v0_3_code_walkthrough.md)
