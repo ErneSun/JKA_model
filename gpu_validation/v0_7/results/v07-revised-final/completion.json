@@ -1,0 +1,24 @@
+{
+  "actual_evaluation_records": 144,
+  "all_expected_runs_completed": true,
+  "backbone_seeds": [
+    47,
+    53,
+    59
+  ],
+  "closure_initialization_seeds": [
+    101,
+    211,
+    307
+  ],
+  "cuda_device": "NVIDIA GeForce RTX 5080",
+  "expected_evaluation_records": 144,
+  "git_commit": "fa85b2fe48e2b555beaa56e5a8b26c5d3698fe6b",
+  "provenance_checks_passed": true,
+  "requested_validation_id": "v07-revised-final",
+  "required_reports_produced": true,
+  "resolved_validation_id": "v07-revised-final",
+  "software_tests_passed": true,
+  "software_tests_skipped": false,
+  "status": "PASS"
+}
