@@ -8,15 +8,20 @@ import torch
 
 from jka_model.config import load_config
 from jka_model.data import (
+    ChannelStandardizer,
     D2Q9CylinderWakeSolver,
+    TrajectoryWindowDataset,
+    collate_problem_batches,
     cylinder_solid_mask,
     generate_cylinder_wake_2d_trajectories,
     load_cylinder_wake_dataset,
     make_split_manifest,
     save_cylinder_wake_dataset,
+    select_split,
     validate_cylinder_wake_dataset,
     validate_trajectories_against_spec,
 )
+from jka_model.losses import compute_field_jepa_loss
 from jka_model.problems import create_problem_adapter
 from train.train_v0_6 import initialize_v0_6_model
 
@@ -93,3 +98,35 @@ def test_cylinder_backbone_reuses_v06_contract_with_nonperiodic_padding() -> Non
     assert type(cylinder_model.online_encoder) is type(periodic_model.online_encoder)
     assert cylinder_model.online_encoder.padding_mode == "zeros"
     assert periodic_model.online_encoder.padding_mode == "circular"
+
+
+def test_cylinder_jepa_loss_routes_grid_spec_to_divergence_constraint(cylinder_case) -> None:
+    config, dataset = cylinder_case
+    assert config.field_loss is not None and config.jepa_loss is not None
+    manifest = make_split_manifest(dataset.records, config.data.split)
+    normalizer = ChannelStandardizer(eps=config.data.normalization.eps).fit(
+        dataset.records, manifest, dataset.problem_spec
+    )
+    windows = TrajectoryWindowDataset(
+        select_split(dataset.records, manifest, "validation"),
+        history=config.data.history,
+        horizon=config.data.horizon,
+        normalizer=normalizer,
+    )
+    batch = collate_problem_batches([windows[0]]).to(dtype=torch.float32)
+    model = initialize_v0_6_model(config, device="cpu")
+    constraints = create_problem_adapter(config).build_physics_constraints()
+
+    losses = compute_field_jepa_loss(
+        model,
+        batch,
+        normalizer,
+        dataset.problem_spec,
+        config.field_loss,
+        config.jepa_loss,
+        constraints,
+        physics_scale=1.0,
+    )
+
+    assert torch.isfinite(losses.total)
+    assert torch.isfinite(losses.v0_5.mass)

@@ -103,7 +103,10 @@ def compute_field_koopman_loss(
             # The PDE conserves the initial integral. Comparing only consecutive
             # predictions permits small step errors to accumulate over the rollout.
             mass_result = mass_constraint.loss(
-                prediction, prev_state_raw=initial, metadata=metadata
+                prediction,
+                prev_state_raw=initial,
+                spec=spec,
+                metadata=metadata,
             )
             operator_result = operator_constraint.loss(
                 prediction,
