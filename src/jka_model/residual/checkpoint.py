@@ -71,9 +71,9 @@ def validate_residual_checkpoint(payload: Mapping[str, Any]) -> None:
     config = payload["config"]
     if not isinstance(config, Mapping):
         raise ValueError("V0.7 checkpoint lacks resolved config")
-    resolved = ProjectConfig.from_dict(config)
-    if payload["config_hash"] != stable_config_hash(resolved):
+    if payload["config_hash"] != stable_config_hash(config):
         raise ValueError("V0.7 checkpoint config hash mismatch")
+    resolved = ProjectConfig.from_dict(config)
     if resolved.project_version != str(payload["project_version"]):
         raise ValueError("V0.7 checkpoint resolved project version mismatch")
     if resolved.residual_training is None or resolved.residual_closure is None:
@@ -115,4 +115,9 @@ def load_residual_checkpoint(path: str | Path) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("V0.7 checkpoint payload must be a mapping")
     validate_residual_checkpoint(payload)
-    return dict(payload)
+    resolved = ProjectConfig.from_dict(payload["config"])
+    return {
+        **payload,
+        "config": resolved.to_dict(),
+        "config_hash": resolved.stable_hash,
+    }

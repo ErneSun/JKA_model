@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from jka_model.config import load_config
+from jka_model.config import load_config, stable_config_hash
 from jka_model.context import (
     CausalAttentionContextEncoder,
     ContextWindowDataset,
@@ -16,6 +16,7 @@ from jka_model.context import (
     residual_training_scales,
     select_context_family,
 )
+from jka_model.context.checkpoint import load_context_checkpoint
 from jka_model.residual import ResidualCache, ResidualTrajectory
 from jka_model.residual.cache import file_sha256, save_residual_cache
 from train.train_v0_8 import train_v0_8
@@ -222,3 +223,28 @@ def test_context_training_checkpoint_resume_restores_exact_state(tmp_path: Path)
     resumed_payload = torch.load(resumed.best_checkpoint, weights_only=False)
     for name, value in first_payload["best_context_state"].items():
         torch.testing.assert_close(value, resumed_payload["best_context_state"][name])
+
+    legacy_payload = dict(first_payload)
+    legacy_config = dict(legacy_payload["config"])
+    for name in (
+        "v0_9_condition",
+        "v0_9_adaptive",
+        "v0_9_training",
+        "v0_9_evaluation",
+    ):
+        legacy_config.pop(name)
+    legacy_payload["config"] = legacy_config
+    legacy_payload["config_hash"] = stable_config_hash(legacy_config)
+    legacy_path = tmp_path / "legacy_v0_8_context.pt"
+    torch.save(legacy_payload, legacy_path)
+    migrated = load_context_checkpoint(legacy_path)
+    assert migrated["config_hash"] == config.stable_hash
+
+    tampered_payload = dict(legacy_payload)
+    tampered_config = dict(legacy_config)
+    tampered_config["training"] = {**tampered_config["training"], "seed": 999}
+    tampered_payload["config"] = tampered_config
+    tampered_path = tmp_path / "tampered_v0_8_context.pt"
+    torch.save(tampered_payload, tampered_path)
+    with pytest.raises(ValueError, match="config hash mismatch"):
+        load_context_checkpoint(tampered_path)

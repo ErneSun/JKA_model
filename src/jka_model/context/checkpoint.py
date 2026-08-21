@@ -73,9 +73,9 @@ def validate_context_checkpoint(payload: Mapping[str, Any]) -> None:
     config_payload = payload["config"]
     if not isinstance(config_payload, Mapping):
         raise ValueError("V0.8 checkpoint lacks resolved config")
-    config = ProjectConfig.from_dict(config_payload)
-    if payload["config_hash"] != stable_config_hash(config):
+    if payload["config_hash"] != stable_config_hash(config_payload):
         raise ValueError("V0.8 checkpoint config hash mismatch")
+    config = ProjectConfig.from_dict(config_payload)
     if config.v0_8_context is None or config.v0_8_training is None:
         raise ValueError("V0.8 checkpoint config lacks context sections")
     if int(payload["context_dim"]) != config.v0_8_context.context_dim:
@@ -122,4 +122,12 @@ def load_context_checkpoint(path: str | Path) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("V0.8 checkpoint payload must be a mapping")
     validate_context_checkpoint(payload)
-    return dict(payload)
+    # Legacy schema-8 configs predate the optional V0.9 keys. Their serialized
+    # hash is validated above; return a canonical runtime view for comparisons
+    # against freshly loaded YAML without mutating the checkpoint on disk.
+    resolved = ProjectConfig.from_dict(payload["config"])
+    return {
+        **payload,
+        "config": resolved.to_dict(),
+        "config_hash": resolved.stable_hash,
+    }

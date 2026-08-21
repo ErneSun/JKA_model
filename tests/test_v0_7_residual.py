@@ -8,6 +8,7 @@ import torch
 from torch.optim import Adam
 
 from jka_model.config import ProjectConfig, load_config, stable_config_hash
+from jka_model.constants import CHECKPOINT_SCHEMA_VERSION, PROJECT_VERSION
 from jka_model.data import ChannelStandardizer, make_split_manifest
 from jka_model.problems import create_problem_adapter
 from jka_model.residual import (
@@ -429,8 +430,8 @@ def test_historical_schema_six_checkpoint_migrates_to_v0_7_runtime(tmp_path: Pat
     path = tmp_path / "historical-v06.pt"
     torch.save(payload, path)
     restored = load_checkpoint(path)
-    assert restored.schema_version == 7
-    assert restored.project_version == "0.7.0"
+    assert restored.schema_version == CHECKPOINT_SCHEMA_VERSION
+    assert restored.project_version == PROJECT_VERSION
     assert restored.config == config
 
 
