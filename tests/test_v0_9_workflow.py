@@ -122,6 +122,9 @@ def test_legacy_v08_ready_report_is_detected_for_strict_reassessment() -> None:
 
 
 def test_clean_gate_ignores_generated_results_but_not_source_changes() -> None:
+    assert dirty_source_paths(
+        " M gpu_validation/v0_8/results/v08/completion.json\n"
+    ) == []
     porcelain = "\n".join(
         (
             " M gpu_validation/v0_8/results/v08/report.md",

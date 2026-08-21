@@ -225,7 +225,7 @@ def main() -> None:
         raise SystemExit("CUDA is unavailable")
     porcelain = subprocess.run(
         ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    ).stdout
     source_changes = dirty_source_paths(porcelain)
     if source_changes and not args.allow_dirty:
         raise SystemExit(
