@@ -9,6 +9,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+V0_9_REQUIRED_BACKBONE_FRACTION = 1.0
+
 
 def _mean_std(values: list[float]) -> tuple[float, float]:
     return statistics.mean(values), statistics.stdev(values) if len(values) > 1 else 0.0
@@ -21,6 +23,92 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _compact_audit_artifacts(
+    session: Path, evaluation: Path, selected_family: str
+) -> dict[str, Any]:
+    """Retain compact evidence needed to audit training without checkpoints or raw tensors."""
+
+    def read_json(path: Path) -> dict[str, Any] | None:
+        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+    physical = {
+        path.stem.removeprefix("physical_acceptance_seed_"): read_json(path)
+        for path in sorted((session / "data").glob("physical_acceptance_seed_*.json"))
+    }
+    backbones = {
+        path.parent.name.removeprefix("seed_"): read_json(path)
+        for path in sorted(session.glob("seeds/seed_*/backbone_acceptance.json"))
+    }
+    grid = read_json(session / "data" / "grid_adequacy.json")
+    route = read_json(session / "v0_7_assessment" / "evaluation" / "memory_classification.json")
+    family_selection = read_json(session / "v0_8_family_selection.json")
+
+    candidate_rows: list[dict[str, Any]] = []
+    selected_curve_rows: list[dict[str, Any]] = []
+    for path in sorted(
+        session.glob("seeds/seed_*/candidates/*/init_*/evaluation/training_summary.json")
+    ):
+        parts = path.parts
+        candidate_index = parts.index("candidates")
+        family = parts[candidate_index + 1]
+        seed = int(parts[candidate_index - 1].removeprefix("seed_"))
+        initialization = int(parts[candidate_index + 2].removeprefix("init_"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        validation = payload.get("validation", {})
+        candidate_rows.append(
+            {
+                "backbone_seed": seed,
+                "context_init_seed": initialization,
+                "family": family,
+                "completed_epochs": payload.get("completed_epochs"),
+                "validation_residual_nrmse": validation.get("residual_nrmse"),
+                "validation_residual_standardized_mse": validation.get("residual_standardized_mse"),
+                "validation_adequacy_r2": validation.get("adequacy_r2"),
+                "test_status": payload.get("test_locked_confirmation"),
+            }
+        )
+        curve = path.parent.parent / "logs" / "epoch_metrics.csv"
+        if family == selected_family.lower() and curve.is_file():
+            with curve.open(newline="", encoding="utf-8") as stream:
+                selected_curve_rows.extend(
+                    {
+                        "backbone_seed": seed,
+                        "context_init_seed": initialization,
+                        "family": family,
+                        **row,
+                    }
+                    for row in csv.DictReader(stream)
+                )
+    _write_csv(evaluation / "candidate_training_summary.csv", candidate_rows)
+    _write_csv(evaluation / "selected_training_curves.csv", selected_curve_rows)
+    route_name = None if route is None else route.get("residual_route")
+    expected_candidates = 9 if route_name == "R2" else 36
+    family_selection_complete = family_selection is not None or route_name == "R2"
+    complete = bool(
+        len(physical) == 3
+        and len(backbones) == 3
+        and grid is not None
+        and route is not None
+        and family_selection_complete
+        and len(candidate_rows) == expected_candidates
+        and selected_curve_rows
+    )
+    audit = {
+        "complete": complete,
+        "physical_acceptance": physical,
+        "grid_adequacy": grid,
+        "backbone_acceptance": backbones,
+        "v0_7_route_assessment": route,
+        "v0_8_family_selection": family_selection,
+        "candidate_training_summary_count": len(candidate_rows),
+        "selected_training_curve_row_count": len(selected_curve_rows),
+    }
+    (evaluation / "compact_audit.json").write_text(
+        json.dumps(audit, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return audit
 
 
 def aggregate_v0_8_results(session_dir: str | Path, output_dir: str | Path) -> dict[str, Any]:
@@ -61,7 +149,10 @@ def aggregate_v0_8_results(session_dir: str | Path, output_dir: str | Path) -> d
                 "history_over_shuffled_gain": record["history_over_shuffled_gain"],
                 "context_effective_rank": record["context_diagnostics"]["effective_rank"],
                 "context_collapsed": record["context_diagnostics"]["collapsed"],
+                "context_rank_status": record["context_rank_status"],
+                "koopman_adequacy": record["koopman_adequacy"],
                 "closed_loop_utility": record["closed_loop_utility"],
+                "longest_horizon_utility": record["longest_horizon_utility"],
                 "physics_status": record["physics_status"],
                 "dynamic_context": record["dynamic_context"],
                 "source_file": record["source_file"],
@@ -75,17 +166,46 @@ def aggregate_v0_8_results(session_dir: str | Path, output_dir: str | Path) -> d
         for items in by_backbone.values()
     ):
         raise ValueError("V0.8 nested context-seed matrix is incomplete")
-    consistency = 2.0 / 3.0
+    consistency_values = {
+        float(record["evaluation_thresholds"]["seed_consistency_fraction"]) for record in records
+    }
+    if len(consistency_values) != 1:
+        raise ValueError("V0.8 formal records disagree on seed-consistency threshold")
+    consistency = next(iter(consistency_values))
+    material_gain_values = {
+        float(record["evaluation_thresholds"]["material_relative_gain"]) for record in records
+    }
+    if len(material_gain_values) != 1:
+        raise ValueError("V0.8 formal records disagree on material-gain threshold")
+    material_gain = next(iter(material_gain_values))
     backbone_support: dict[str, dict[str, Any]] = {}
     for seed, items in sorted(by_backbone.items()):
         supported = sum(item["dynamic_context"] == "SUPPORTED" for item in items) / len(items)
+        rank = sum(item["context_rank_status"] == "PASS" for item in items) / len(items)
+        adequacy = sum(item["koopman_adequacy"] == "CALIBRATED" for item in items) / len(items)
+        history = sum(item["history_value"] in {"SUPPORTED", "N/A"} for item in items) / len(items)
         physics = sum(item["physics_status"] == "PASS" for item in items) / len(items)
         rollout = sum(item["closed_loop_utility"] == "POSITIVE" for item in items) / len(items)
+        longest = sum(item["longest_horizon_utility"] == "POSITIVE" for item in items) / len(items)
+        context_supported = supported >= consistency and rank >= consistency
+        v0_9_supported = bool(
+            context_supported
+            and adequacy >= consistency
+            and history >= consistency
+            and physics >= consistency
+            and rollout >= consistency
+            and longest >= consistency
+        )
         backbone_support[str(seed)] = {
             "context_init_support_fraction": supported,
+            "context_rank_pass_fraction": rank,
+            "adequacy_pass_fraction": adequacy,
+            "history_pass_fraction": history,
             "physics_pass_fraction": physics,
             "positive_rollout_fraction": rollout,
-            "supported": supported >= consistency and physics >= consistency,
+            "longest_horizon_pass_fraction": longest,
+            "supported": context_supported and physics >= consistency,
+            "v0_9_supported": v0_9_supported,
         }
     across = sum(item["supported"] for item in backbone_support.values()) / len(backbone_support)
     dynamic = "SUPPORTED" if across >= consistency else "NOT_SUPPORTED"
@@ -95,6 +215,12 @@ def aggregate_v0_8_results(session_dir: str | Path, output_dir: str | Path) -> d
     physics = sum(
         item["physics_pass_fraction"] >= consistency for item in backbone_support.values()
     ) / len(backbone_support)
+    adequacy = sum(
+        item["adequacy_pass_fraction"] >= consistency for item in backbone_support.values()
+    ) / len(backbone_support)
+    longest = sum(
+        item["longest_horizon_pass_fraction"] >= consistency for item in backbone_support.values()
+    ) / len(backbone_support)
     route = next(iter(routes))
     family = next(iter(families))
     selection_path = session / "v0_8_family_selection.json"
@@ -103,7 +229,7 @@ def aggregate_v0_8_results(session_dir: str | Path, output_dir: str | Path) -> d
     )
     history_supported = sum(
         row["history_over_shuffled_gain"] is not None
-        and float(row["history_over_shuffled_gain"]) >= 0.02
+        and float(row["history_over_shuffled_gain"]) >= material_gain
         for row in rows
     ) / len(rows)
     attention_controls_pass = False
@@ -121,11 +247,10 @@ def aggregate_v0_8_results(session_dir: str | Path, output_dir: str | Path) -> d
         and dynamic == "SUPPORTED"
         else ("N/A" if family != "ATTENTION" else "NOT_SUPPORTED")
     )
-    readiness = (
-        "READY"
-        if dynamic == "SUPPORTED" and positive >= consistency and physics >= consistency
-        else "NOT_READY"
+    joint_readiness = sum(item["v0_9_supported"] for item in backbone_support.values()) / len(
+        backbone_support
     )
+    readiness = "READY" if joint_readiness >= V0_9_REQUIRED_BACKBONE_FRACTION else "NOT_READY"
     decision = {
         "schema_version": 1,
         "physical_problem": "cylinder_wake_2d",
@@ -138,13 +263,18 @@ def aggregate_v0_8_results(session_dir: str | Path, output_dir: str | Path) -> d
             if history_supported >= consistency
             else ("N/A" if route == "R2" else "NOT_SUPPORTED")
         ),
+        "koopman_adequacy": "CALIBRATED" if adequacy >= consistency else "UNCALIBRATED",
         "temporal_attention_context": attention,
         "dynamic_context": dynamic,
         "closed_loop_utility": "POSITIVE" if positive >= consistency else "NEUTRAL",
+        "longest_horizon_utility": "POSITIVE" if longest >= consistency else "NEUTRAL",
         "physics_status": "PASS" if physics >= consistency else "FAIL",
         "v0_9_operator_adaptation_readiness": readiness,
         "v0_9_ready": readiness == "READY",
         "run_count": len(records),
+        "seed_consistency_threshold": consistency,
+        "joint_v0_9_support_fraction": joint_readiness,
+        "v0_9_required_backbone_fraction": V0_9_REQUIRED_BACKBONE_FRACTION,
         "nested_seed_support": backbone_support,
         "validation_family_selection": family_selection,
         "attention_parameter_matched_control_pass": attention_controls_pass,
@@ -188,6 +318,54 @@ def aggregate_v0_8_results(session_dir: str | Path, output_dir: str | Path) -> d
                 target.extend(
                     dict(row, source_file=str(root / name)) for row in csv.DictReader(stream)
                 )
+    metric_fields = (
+        "residual_nrmse",
+        "residual_r2",
+        "adequacy_r2",
+        "adequacy_correlation",
+        "context_ablation_gain",
+        "history_over_shuffled_gain",
+        "context_effective_rank",
+    )
+    aggregate_metrics: dict[str, dict[str, float | int]] = {}
+    for field in metric_fields:
+        values = [float(row[field]) for row in rows if row.get(field) not in {None, "", "None"}]
+        if values:
+            mean, std = _mean_std(values)
+            aggregate_metrics[field] = {
+                "mean": mean,
+                "std": std,
+                "min": min(values),
+                "max": max(values),
+                "n": len(values),
+            }
+        else:
+            aggregate_metrics[field] = {"mean": None, "std": None, "n": 0}
+    rollout_horizon_summary: dict[str, dict[str, float | int]] = {}
+    for horizon in sorted({int(row["horizon"]) for row in closed_rows}):
+        horizon_rows = [row for row in closed_rows if int(row["horizon"]) == horizon]
+        gains = [
+            float(record["closed_loop_by_horizon"][str(horizon)]["relative_gain"])
+            for record in records
+        ]
+        selected = [float(row["latent_rmse"]) for row in horizon_rows]
+        baseline = [float(row["koopman_only_latent_rmse"]) for row in horizon_rows]
+        gain_mean, gain_std = _mean_std(gains)
+        rollout_horizon_summary[str(horizon)] = {
+            "relative_gain_mean": gain_mean,
+            "relative_gain_std": gain_std,
+            "ratio_of_mean_rmse": statistics.mean(selected) / statistics.mean(baseline),
+            "material_gain_fraction": sum(value >= material_gain for value in gains) / len(gains),
+            "n": len(gains),
+        }
+    audit = _compact_audit_artifacts(session, evaluation, family)
+    decision["aggregate_metrics"] = aggregate_metrics
+    decision["rollout_horizon_summary"] = rollout_horizon_summary
+    decision["compact_audit"] = {
+        "complete": audit["complete"],
+        "candidate_training_summary_count": audit["candidate_training_summary_count"],
+        "selected_training_curve_row_count": audit["selected_training_curve_row_count"],
+    }
     _write_csv(evaluation / "closed_loop_metrics.csv", closed_rows)
     _write_csv(evaluation / "physical_metrics.csv", physical_rows)
     (evaluation / "v0_8_scientific_decision.json").write_text(
@@ -397,24 +575,78 @@ def _write_figures(
 
 
 def _scientific_report(decision: dict[str, Any]) -> str:
-    return "\n".join(
+    metrics = decision["aggregate_metrics"]
+    horizons = decision["rollout_horizon_summary"]
+
+    def metric_line(label: str, field: str, *, include_n: bool = False) -> str:
+        item = metrics[field]
+        if not item["n"]:
+            return f"- {label}: N/A"
+        suffix = f" (n={item['n']})" if include_n else ""
+        return f"- {label}: {item['mean']:.6g} ± {item['std']:.6g}{suffix}"
+
+    lines = [
+        "# V0.8 scientific report",
+        "",
+        f"PHYSICAL PROBLEM: {decision['physical_problem']}  ",
+        f"BACKBONE STATUS: {decision['backbone_status']}  ",
+        f"V0.7 ROUTE ON NEW PROBLEM: {decision['v0_7_route_on_new_problem']}  ",
+        f"CONTEXT FAMILY: {decision['context_family']}  ",
+        f"RESIDUAL PREDICTION: {decision['residual_prediction']}  ",
+        f"HISTORY VALUE: {decision['history_value']}  ",
+        f"KOOPMAN ADEQUACY: {decision['koopman_adequacy']}  ",
+        f"DYNAMIC CONTEXT: {decision['dynamic_context']}  ",
+        f"CLOSED LOOP UTILITY: {decision['closed_loop_utility']}  ",
+        f"LONGEST HORIZON UTILITY: {decision['longest_horizon_utility']}  ",
+        f"PHYSICS STATUS: {decision['physics_status']}  ",
+        f"V0.9 OPERATOR-ADAPTATION READINESS: {decision['v0_9_operator_adaptation_readiness']}",
+        "",
+        "## Aggregate evidence",
+        "",
+        metric_line("Residual NRMSE", "residual_nrmse", include_n=True),
+        metric_line("Residual R2", "residual_r2"),
+        metric_line("History-over-shuffled gain", "history_over_shuffled_gain"),
+        metric_line("Context effective rank", "context_effective_rank"),
+        metric_line("Adequacy R2", "adequacy_r2"),
+        "",
+        "## Teacher-free rollout by horizon",
+        "",
+        "| Horizon | Mean relative gain | Ratio of mean RMSE | Material-gain fraction | n |",
+        "|---:|---:|---:|---:|---:|",
+    ]
+    for horizon, item in sorted(horizons.items(), key=lambda value: int(value[0])):
+        lines.append(
+            f"| {horizon} | {item['relative_gain_mean']:.6g} | "
+            f"{item['ratio_of_mean_rmse']:.6g} | {item['material_gain_fraction']:.6g} | "
+            f"{item['n']} |"
+        )
+    lines.extend(
         [
-            "# V0.8 scientific report",
             "",
-            f"PHYSICAL PROBLEM: {decision['physical_problem']}  ",
-            f"BACKBONE STATUS: {decision['backbone_status']}  ",
-            f"V0.7 ROUTE ON NEW PROBLEM: {decision['v0_7_route_on_new_problem']}  ",
-            f"CONTEXT FAMILY: {decision['context_family']}  ",
-            f"RESIDUAL PREDICTION: {decision['residual_prediction']}  ",
-            f"HISTORY VALUE: {decision['history_value']}  ",
-            f"DYNAMIC CONTEXT: {decision['dynamic_context']}  ",
-            f"CLOSED LOOP UTILITY: {decision['closed_loop_utility']}  ",
-            f"PHYSICS STATUS: {decision['physics_status']}  ",
-            f"V0.9 OPERATOR-ADAPTATION READINESS: {decision['v0_9_operator_adaptation_readiness']}",
+            "## Nested backbone support",
             "",
-            f"Formal nested run count: {decision['run_count']}. Evidence is aggregated first "
-            "across context initializations within a backbone/data seed and then across "
-            "backbone/data seeds.",
+            "| Seed | Context | Rank | Adequacy | History | Rollout | Longest | Physics | "
+            "V0.9 joint |",
+            "|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
+        ]
+    )
+    for seed, item in decision["nested_seed_support"].items():
+        lines.append(
+            f"| {seed} | {item['context_init_support_fraction']:.3f} | "
+            f"{item['context_rank_pass_fraction']:.3f} | "
+            f"{item['adequacy_pass_fraction']:.3f} | {item['history_pass_fraction']:.3f} | "
+            f"{item['positive_rollout_fraction']:.3f} | "
+            f"{item['longest_horizon_pass_fraction']:.3f} | "
+            f"{item['physics_pass_fraction']:.3f} | {item['v0_9_supported']} |"
+        )
+    lines.extend(
+        [
+            "",
+            f"Formal nested run count: {decision['run_count']}. Joint V0.9 support fraction: "
+            f"{decision['joint_v0_9_support_fraction']:.6g}; V0.9 required: "
+            f"{decision['v0_9_required_backbone_fraction']:.6g}. Context-init consistency "
+            f"within each backbone: {decision['seed_consistency_threshold']:.6g}.",
+            f"Compact audit complete: {decision['compact_audit']['complete']}.",
             "",
             "The additive residual is a utility probe. A0 remains frozen; eta_t, adaptive A_t, "
             "and persistent z_R are absent. Attention weights, when available, are diagnostics "
@@ -422,3 +654,4 @@ def _scientific_report(decision: dict[str, Any]) -> str:
             "",
         ]
     )
+    return "\n".join(lines)

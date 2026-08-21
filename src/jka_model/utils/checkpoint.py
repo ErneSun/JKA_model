@@ -19,6 +19,8 @@ from jka_model.constants import (
     V0_5_PROJECT_VERSION,
     V0_6_CHECKPOINT_SCHEMA_VERSION,
     V0_6_PROJECT_VERSION,
+    V0_8_CHECKPOINT_SCHEMA_VERSION,
+    V0_8_PROJECT_VERSION,
 )
 from jka_model.contracts import ProblemSpec
 from jka_model.training import TrainStage
@@ -219,6 +221,7 @@ def load_checkpoint(
     if legacy_pair in {
         (V0_5_CHECKPOINT_SCHEMA_VERSION, V0_5_PROJECT_VERSION),
         (V0_6_CHECKPOINT_SCHEMA_VERSION, V0_6_PROJECT_VERSION),
+        (V0_8_CHECKPOINT_SCHEMA_VERSION, V0_8_PROJECT_VERSION),
     }:
         # Validate the historical hash before canonicalizing newly optional keys.
         # Model/training state remains untouched.

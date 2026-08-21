@@ -12,3 +12,12 @@ epoch CSV 和 workflow log 保留在 raw run。相同 validation ID 自动使用
 Raw artifacts: `runs/v0_8/<resolved-id>/`  
 Compact review: `gpu_validation/v0_8/results/<resolved-id>/`
 
+Compact review 必须自包含审阅所需的小型证据：physical/grid/backbone/route audit、36 个候选训练摘要、
+最终 family 的 epoch curves、locked-test metrics、逐 horizon 决策、十张图和 nested scientific report；
+checkpoint、dataset 与 diagnostic tensors 仍只保留在 raw artifacts。
+
+已有完整 raw run 只需按新门槛重新审阅时，不重复训练：
+
+```bash
+python gpu_validation/v0_8/scripts/gpu_reassess_existing.py --validation-id <existing-resolved-id>
+```

@@ -17,6 +17,8 @@ from jka_model.constants import (
     PROJECT_VERSION,
     V0_7_CHECKPOINT_SCHEMA_VERSION,
     V0_7_PROJECT_VERSION,
+    V0_8_CHECKPOINT_SCHEMA_VERSION,
+    V0_8_PROJECT_VERSION,
 )
 from jka_model.training import TrainStage
 
@@ -58,6 +60,7 @@ def validate_residual_checkpoint(payload: Mapping[str, Any]) -> None:
     version_pair = (int(payload["schema_version"]), str(payload["project_version"]))
     if version_pair not in {
         (V0_7_CHECKPOINT_SCHEMA_VERSION, V0_7_PROJECT_VERSION),
+        (V0_8_CHECKPOINT_SCHEMA_VERSION, V0_8_PROJECT_VERSION),
         (CHECKPOINT_SCHEMA_VERSION, PROJECT_VERSION),
     }:
         raise ValueError("V0.7 checkpoint schema/project version mismatch")

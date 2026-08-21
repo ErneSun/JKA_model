@@ -16,6 +16,7 @@ class TrainStage(str, Enum):
     JEPA = "jepa"
     RESIDUAL = "residual"
     CONTEXT = "context"
+    ADAPTIVE = "adaptive"
     JOINT = "joint"
 
 
@@ -28,6 +29,7 @@ _STAGE_TRAINABLE_GROUPS: dict[TrainStage, frozenset[str]] = {
     ),
     TrainStage.RESIDUAL: frozenset({"residual_memory", "residual_head", "gate"}),
     TrainStage.CONTEXT: frozenset({"context_encoder", "residual_head", "adequacy_head"}),
+    TrainStage.ADAPTIVE: frozenset({"operator_adapter"}),
     TrainStage.JOINT: frozenset(
         {
             "koopman_encoder",

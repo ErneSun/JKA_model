@@ -15,7 +15,11 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
 from jka_model.config import ProjectConfig, load_config, save_config
-from jka_model.constants import ARCHITECTURE_REVISION, CHECKPOINT_SCHEMA_VERSION, PROJECT_VERSION
+from jka_model.constants import (
+    ARCHITECTURE_REVISION,
+    V0_8_CHECKPOINT_SCHEMA_VERSION,
+    V0_8_PROJECT_VERSION,
+)
 from jka_model.context import (
     ContextWindowDataset,
     build_dynamic_context_model,
@@ -254,9 +258,9 @@ def train_v0_8(
         if best_state is None:
             raise RuntimeError("cannot checkpoint before validation selects a state")
         return {
-            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "schema_version": V0_8_CHECKPOINT_SCHEMA_VERSION,
             "architecture_revision": ARCHITECTURE_REVISION,
-            "project_version": PROJECT_VERSION,
+            "project_version": V0_8_PROJECT_VERSION,
             "train_stage": TrainStage.CONTEXT.value,
             "epoch": epoch,
             "global_step": global_step,

@@ -22,8 +22,15 @@ class ToyStagedModel(nn.Module):
         self.training_decoder = nn.Linear(2, 1)
 
 
-def test_train_stage_members_match_v2_2() -> None:
-    assert {stage.value for stage in TrainStage} == {"koopman", "jepa", "residual", "joint"}
+def test_train_stage_members_match_current_contract() -> None:
+    assert {stage.value for stage in TrainStage} == {
+        "koopman",
+        "jepa",
+        "residual",
+        "joint",
+        "context",
+        "adaptive",
+    }
 
 
 @pytest.mark.parametrize("stage", list(TrainStage))

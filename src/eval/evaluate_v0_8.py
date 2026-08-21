@@ -31,6 +31,9 @@ from jka_model.problems import create_problem_adapter
 from jka_model.residual import load_residual_cache
 from train.train_v0_7 import load_frozen_v0_6_backbone
 
+MIN_ADEQUACY_R2 = 0.0
+MIN_ADEQUACY_CORRELATION = 0.5
+
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
@@ -39,6 +42,69 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def summarize_closed_loop_horizons(
+    rows: list[dict[str, Any]],
+    horizons: tuple[int, ...],
+    *,
+    material_relative_gain: float,
+) -> dict[str, dict[str, float | bool | int]]:
+    """Summarize each rollout horizon without letting short horizons hide long drift."""
+    summary: dict[str, dict[str, float | bool | int]] = {}
+    for horizon in horizons:
+        selected = [float(row["latent_rmse"]) for row in rows if int(row["horizon"]) == horizon]
+        baseline = [
+            float(row["koopman_only_latent_rmse"]) for row in rows if int(row["horizon"]) == horizon
+        ]
+        if not selected or len(selected) != len(baseline):
+            raise ValueError(f"closed-loop evaluation lacks paired horizon {horizon}")
+        selected_mean = sum(selected) / len(selected)
+        baseline_mean = sum(baseline) / len(baseline)
+        relative_gain = 1.0 - selected_mean / max(baseline_mean, 1e-12)
+        summary[str(horizon)] = {
+            "trajectory_count": len(selected),
+            "context_latent_rmse_mean": selected_mean,
+            "koopman_only_latent_rmse_mean": baseline_mean,
+            "relative_gain": relative_gain,
+            "pass": relative_gain >= material_relative_gain,
+        }
+    return summary
+
+
+def assess_context_acceptance(
+    *,
+    residual_route: str,
+    context_gain: float,
+    history_gain: float | None,
+    context_effective_rank: float,
+    context_collapsed: bool,
+    adequacy_r2: float,
+    adequacy_correlation: float,
+    material_relative_gain: float,
+    min_context_effective_rank: float,
+    min_adequacy_r2: float,
+    min_adequacy_correlation: float,
+    burden_pass: bool,
+) -> dict[str, bool]:
+    """Apply the configured rank, R3-history, and adequacy acceptance contracts."""
+    rank_pass = bool(not context_collapsed and context_effective_rank >= min_context_effective_rank)
+    history_pass = bool(
+        residual_route != "R3"
+        or (history_gain is not None and history_gain >= material_relative_gain)
+    )
+    adequacy_pass = bool(
+        adequacy_r2 >= min_adequacy_r2 and adequacy_correlation >= min_adequacy_correlation
+    )
+    context_supported = bool(
+        context_gain >= material_relative_gain and rank_pass and history_pass and burden_pass
+    )
+    return {
+        "rank_pass": rank_pass,
+        "history_pass": history_pass,
+        "adequacy_pass": adequacy_pass,
+        "context_supported": context_supported,
+    }
 
 
 def _move(batch: dict[str, Any], device: torch.device, include_parameters: bool):
@@ -322,6 +388,14 @@ def evaluate_v0_8(
         history_gain = 1.0 - test_metrics["residual_standardized_mse"] / max(
             shuffled_metrics["residual_standardized_mse"], 1e-12
         )
+    horizon_summary = summarize_closed_loop_horizons(
+        closed_rows,
+        resolved.v0_8_evaluation.rollout_horizons,
+        material_relative_gain=resolved.v0_8_evaluation.material_relative_gain,
+    )
+    longest_horizon = max(resolved.v0_8_evaluation.rollout_horizons)
+    all_horizons_pass = all(bool(item["pass"]) for item in horizon_summary.values())
+    longest_horizon_pass = bool(horizon_summary[str(longest_horizon)]["pass"])
     burden_pass = all(
         row["closure_burden_mean"] <= resolved.v0_8_evaluation.max_closure_burden
         for row in closed_rows
@@ -329,6 +403,7 @@ def evaluate_v0_8(
     selected_physics = [row for row in physical_rows if row["model"] == "context_residual"]
     koopman_physics = [row for row in physical_rows if row["model"] == "koopman_only"]
     paired_noninferior: list[bool] = []
+    long_frequency_noninferior: list[bool] = []
     relative_fields = (
         "velocity_relative_l2",
         "vorticity_relative_l2",
@@ -349,27 +424,53 @@ def evaluate_v0_8(
             and float(selected_row["boundary_no_slip_mse"])
             <= resolved.v0_8_evaluation.max_boundary_mse
         )
+        if int(selected_row["horizon"]) == longest_horizon:
+            true_frequency = float(selected_row["shedding_frequency_true"])
+            selected_frequency_error = abs(
+                float(selected_row["shedding_frequency_predicted"]) - true_frequency
+            )
+            baseline_frequency_error = abs(
+                float(baseline_row["shedding_frequency_predicted"]) - true_frequency
+            )
+            long_frequency_noninferior.append(
+                selected_frequency_error
+                <= baseline_frequency_error
+                * (1.0 + resolved.v0_8_evaluation.max_physics_degradation)
+                + 1e-8
+            )
     physics_noninferiority_fraction = sum(paired_noninferior) / max(len(paired_noninferior), 1)
+    long_frequency_noninferiority_fraction = sum(long_frequency_noninferior) / max(
+        len(long_frequency_noninferior), 1
+    )
     physics_pass = bool(
         burden_pass
         and selected_physics
         and physics_noninferiority_fraction >= resolved.v0_8_evaluation.seed_consistency_fraction
+        and long_frequency_noninferior
+        and long_frequency_noninferiority_fraction
+        >= resolved.v0_8_evaluation.seed_consistency_fraction
     )
     positive_rollout_fraction = sum(
         row["latent_relative_gain"] >= resolved.v0_8_evaluation.material_relative_gain
         for row in closed_rows
     ) / max(len(closed_rows), 1)
-    context_supported = (
-        context_gain >= resolved.v0_8_evaluation.material_relative_gain
-        and not bool(context_stats["collapsed"])
-        and burden_pass
+    context_checks = assess_context_acceptance(
+        residual_route=str(payload["residual_route"]),
+        context_gain=context_gain,
+        history_gain=history_gain,
+        context_effective_rank=float(context_stats["effective_rank"]),
+        context_collapsed=bool(context_stats["collapsed"]),
+        adequacy_r2=test_metrics["adequacy_r2"],
+        adequacy_correlation=test_metrics["adequacy_correlation"],
+        material_relative_gain=resolved.v0_8_evaluation.material_relative_gain,
+        min_context_effective_rank=resolved.v0_8_evaluation.min_context_effective_rank,
+        min_adequacy_r2=MIN_ADEQUACY_R2,
+        min_adequacy_correlation=MIN_ADEQUACY_CORRELATION,
+        burden_pass=burden_pass,
     )
-    if family == "attention":
-        context_supported = bool(
-            context_supported
-            and history_gain is not None
-            and history_gain >= resolved.v0_8_evaluation.material_relative_gain
-        )
+    context_rank_pass = context_checks["rank_pass"]
+    adequacy_pass = context_checks["adequacy_pass"]
+    context_supported = context_checks["context_supported"]
     decision = {
         "schema_version": 1,
         "backbone_seed": int(payload["backbone_seed"]),
@@ -385,12 +486,11 @@ def evaluate_v0_8(
             and history_gain >= resolved.v0_8_evaluation.material_relative_gain
             else ("NOT_SUPPORTED" if history_gain is not None else "N/A")
         ),
+        "context_rank_status": "PASS" if context_rank_pass else "FAIL",
+        "koopman_adequacy": "CALIBRATED" if adequacy_pass else "UNCALIBRATED",
         "dynamic_context": "SUPPORTED" if context_supported else "NOT_SUPPORTED",
-        "closed_loop_utility": (
-            "POSITIVE"
-            if positive_rollout_fraction >= resolved.v0_8_evaluation.seed_consistency_fraction
-            else "NEUTRAL"
-        ),
+        "closed_loop_utility": "POSITIVE" if all_horizons_pass else "NEUTRAL",
+        "longest_horizon_utility": "POSITIVE" if longest_horizon_pass else "NEUTRAL",
         "physics_status": "PASS" if physics_pass else "FAIL",
         "v0_9_operator_adaptation_readiness": "INCONCLUSIVE",
         "validation_metrics": validation_metrics,
@@ -400,9 +500,18 @@ def evaluate_v0_8(
         "context_diagnostics": context_stats,
         "context_ablation_gain": context_gain,
         "history_over_shuffled_gain": history_gain,
+        "closed_loop_by_horizon": horizon_summary,
         "closure_burden_pass": burden_pass,
         "positive_rollout_fraction": positive_rollout_fraction,
         "physics_noninferiority_fraction": physics_noninferiority_fraction,
+        "long_frequency_noninferiority_fraction": long_frequency_noninferiority_fraction,
+        "evaluation_thresholds": {
+            "material_relative_gain": resolved.v0_8_evaluation.material_relative_gain,
+            "min_context_effective_rank": resolved.v0_8_evaluation.min_context_effective_rank,
+            "min_adequacy_r2": MIN_ADEQUACY_R2,
+            "min_adequacy_correlation": MIN_ADEQUACY_CORRELATION,
+            "seed_consistency_fraction": resolved.v0_8_evaluation.seed_consistency_fraction,
+        },
     }
     output = Path(output_dir)
     evaluation = output / "evaluation"

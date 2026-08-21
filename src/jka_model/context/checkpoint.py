@@ -10,7 +10,13 @@ from typing import Any
 import torch
 
 from jka_model.config import ProjectConfig, stable_config_hash
-from jka_model.constants import ARCHITECTURE_REVISION, CHECKPOINT_SCHEMA_VERSION, PROJECT_VERSION
+from jka_model.constants import (
+    ARCHITECTURE_REVISION,
+    CHECKPOINT_SCHEMA_VERSION,
+    PROJECT_VERSION,
+    V0_8_CHECKPOINT_SCHEMA_VERSION,
+    V0_8_PROJECT_VERSION,
+)
 from jka_model.training import TrainStage
 
 REQUIRED_FIELDS = {
@@ -54,10 +60,12 @@ def validate_context_checkpoint(payload: Mapping[str, Any]) -> None:
     missing = REQUIRED_FIELDS - set(payload)
     if missing:
         raise ValueError(f"V0.8 checkpoint missing field(s): {sorted(missing)!r}")
-    if int(payload["schema_version"]) != CHECKPOINT_SCHEMA_VERSION:
-        raise ValueError("V0.8 checkpoint schema mismatch")
-    if str(payload["project_version"]) != PROJECT_VERSION:
-        raise ValueError("V0.8 checkpoint project version mismatch")
+    version_pair = (int(payload["schema_version"]), str(payload["project_version"]))
+    if version_pair not in {
+        (V0_8_CHECKPOINT_SCHEMA_VERSION, V0_8_PROJECT_VERSION),
+        (CHECKPOINT_SCHEMA_VERSION, PROJECT_VERSION),
+    }:
+        raise ValueError("V0.8 checkpoint schema/project version mismatch")
     if str(payload["architecture_revision"]) != ARCHITECTURE_REVISION:
         raise ValueError("V0.8 checkpoint architecture revision mismatch")
     if str(payload["train_stage"]) != TrainStage.CONTEXT.value:

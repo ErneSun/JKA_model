@@ -1,4 +1,4 @@
-"""Public API through V0.8 residual-supervised dynamic context learning."""
+"""Public API through V0.9 context-conditioned adaptive Koopman learning."""
 
 from jka_model.constants import (
     ARCHITECTURE_REVISION,
@@ -6,6 +6,7 @@ from jka_model.constants import (
     PROJECT_VERSION,
 )
 from jka_model.context import DynamicContextModel, build_dynamic_context_model
+from jka_model.adaptive import AdaptiveKoopmanModel, LowRankAdaptiveOperator
 from jka_model.contracts import (
     BoundarySpec,
     ChannelSpec,
@@ -34,6 +35,7 @@ __all__ = [
     "CHECKPOINT_SCHEMA_VERSION",
     "PROJECT_VERSION",
     "BoundarySpec",
+    "AdaptiveKoopmanModel",
     "ChannelSpec",
     "ContinuousKoopmanCore",
     "DynamicContextModel",
@@ -41,6 +43,7 @@ __all__ = [
     "GeometrySpec",
     "GridSpec",
     "LatentState",
+    "LowRankAdaptiveOperator",
     "KoopmanAutoencoder",
     "KoopmanEncoder",
     "NormalizationSpec",

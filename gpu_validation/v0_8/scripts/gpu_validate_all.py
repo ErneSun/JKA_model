@@ -577,6 +577,8 @@ def main() -> None:
                 "G7 nested-seed aggregation and report",
                 lambda: aggregate_v0_8_results(root, compact),
             )
+            if not bool(decision.get("compact_audit", {}).get("complete")):
+                raise RuntimeError("V0.8 compact audit artifact set is incomplete")
 
         current_stage = "completion_record"
         completion = {

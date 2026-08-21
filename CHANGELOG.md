@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.0 — Context-conditioned low-rank adaptive Koopman dynamics
+
+- Added smooth and abrupt time-varying cylinder-wake conditions with trajectory-level
+  stratification, physical/numerical dataset gates, and explicit condition visibility.
+- Kept the accepted V0.8 context and backbone frozen while training only
+  `A_t = A_0 + U diag(eta_t) V^T`, initialized to recover the nominal operator exactly.
+- Added known-condition and history-only latent-condition variants, rank selection, operator
+  burden/smoothness/stability regularization, exact-resume schema-9 checkpoints, and teacher-free
+  closed-loop rollout.
+- Added nominal, static-update, and shuffled-history controls; operator residual decomposition;
+  nested 3-backbone by 3-initialization aggregation; and auditable compact reports.
+- Added a one-command RTX-5080 workflow with revision-safe run IDs. Formal GPU scientific
+  acceptance remains pending execution.
+
+## 0.8.0 validation hardening
+
+- Enforced the configured context effective-rank threshold and the R3 shuffled-history control.
+- Added adequacy calibration, per-horizon and longest-horizon rollout decisions, and long-window
+  shedding-frequency non-inferiority.
+- Made V0.9 readiness require joint evidence within the same backbone seed before nested
+  aggregation and all three backbone seeds, preventing unrelated or marginal seed-wise passes
+  from being combined.
+- Expanded compact results with physical/grid/backbone/route audit evidence, candidate summaries,
+  selected-family training curves, numerical summaries, and horizon-resolved reporting.
+
 ## 0.8.0 — Residual-supervised dynamic context on transient cylinder wake
 
 - Added a fixed-condition transient 2-D cylinder-wake Problem Adapter and reusable offline

@@ -1,0 +1,71 @@
+"""Teacher-free V0.9 rollout with causal predicted latent histories."""
+
+from __future__ import annotations
+
+import torch
+from torch import Tensor
+
+from jka_model.adaptive.models import AdaptiveKoopmanModel
+
+
+@torch.no_grad()
+def adaptive_latent_rollout(
+    model: AdaptiveKoopmanModel,
+    initial_history: Tensor,
+    history_dts: Tensor,
+    future_dts: Tensor,
+    context_parameters: Tensor,
+    conditions: Tensor | None,
+) -> dict[str, Tensor]:
+    if initial_history.ndim != 3:
+        raise ValueError("initial_history must have shape [B,H,d_K]")
+    batch, history, latent_dim = initial_history.shape
+    if history_dts.shape != (batch, history - 1):
+        raise ValueError("history dt alignment mismatch")
+    if future_dts.ndim != 2 or future_dts.shape[0] != batch or torch.any(future_dts <= 0):
+        raise ValueError("future_dts must be positive [B,T]")
+    if conditions is not None and conditions.shape != (batch, future_dts.shape[1], 2):
+        raise ValueError("known conditions must have shape [B,T,2]")
+    if model.context_encoder.latent_dim != latent_dim or model.context_encoder.history != history:
+        raise ValueError("initial history disagrees with the frozen context contract")
+    latent_buffer = initial_history.clone()
+    dt_buffer = history_dts.clone()
+    adapted_states = [latent_buffer[:, -1]]
+    nominal_states = [latent_buffer[:, -1]]
+    nominal_current = latent_buffer[:, -1]
+    etas: list[Tensor] = []
+    deltas: list[Tensor] = []
+    generators: list[Tensor] = []
+    nominal = model.operator_adapter.nominal_generator
+    for index in range(future_dts.shape[1]):
+        next_dt = future_dts[:, index : index + 1]
+        current_condition = None if conditions is None else conditions[:, index]
+        prediction, _, eta, delta, adapted = model(
+            latent_buffer,
+            dt_buffer,
+            next_dt,
+            context_parameters,
+            current_condition,
+        )
+        with torch.autocast(device_type=prediction.device.type, enabled=False):
+            transition = torch.linalg.matrix_exp(
+                nominal.float().unsqueeze(0) * next_dt.reshape(-1, 1, 1).float()
+            )
+            nominal_current = torch.einsum("bij,bj->bi", transition, nominal_current.float())
+        adapted_states.append(prediction)
+        nominal_states.append(nominal_current)
+        etas.append(eta)
+        deltas.append(delta)
+        generators.append(adapted)
+        if history > 1:
+            latent_buffer = torch.cat((latent_buffer[:, 1:], prediction.unsqueeze(1)), dim=1)
+            dt_buffer = torch.cat((dt_buffer[:, 1:], next_dt), dim=1) if history > 2 else next_dt
+        else:
+            latent_buffer = prediction.unsqueeze(1)
+    return {
+        "adapted": torch.stack(adapted_states, dim=1),
+        "nominal": torch.stack(nominal_states, dim=1),
+        "eta": torch.stack(etas, dim=1),
+        "delta_a": torch.stack(deltas, dim=1),
+        "a_t": torch.stack(generators, dim=1),
+    }

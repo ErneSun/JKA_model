@@ -17,6 +17,7 @@ from jka_model.constants import (
     SUPPORTED_CONFIG_PROJECT_VERSIONS,
     V0_6_PROJECT_VERSION,
     V0_7_PROJECT_VERSION,
+    V0_8_PROJECT_VERSION,
 )
 from jka_model.contracts import DtMode
 from jka_model.training import TrainStage
@@ -1469,7 +1470,7 @@ class V07EvaluationConfig:
 
 @dataclass(frozen=True, slots=True)
 class CylinderWake2DConfig:
-    """Fixed-condition low-Mach D2Q9 cylinder-wake data-generation contract."""
+    """Low-Mach D2Q9 cylinder-wake data-generation contract shared by V0.8/V0.9."""
 
     num_trajectories: int = 12
     num_steps: int = 160
@@ -1515,8 +1516,6 @@ class CylinderWake2DConfig:
             raise ValueError("D2Q9 low-Mach contract requires lattice inflow velocity < 0.12")
         if self.solver_steps_per_snapshot < 1 or self.perturbation_amplitude < 0:
             raise ValueError("invalid cylinder sampling or perturbation setting")
-        if self.time_varying_boundary:
-            raise ValueError("V0.8 forbids time-varying cylinder-wake boundaries")
         radius = 0.5 * self.cylinder_diameter
         if (
             self.cylinder_x - radius <= self.x_min
@@ -1785,6 +1784,275 @@ class V08EvaluationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class V09ConditionConfig:
+    """Controlled, in-distribution operating-condition schedules for V0.9."""
+
+    schedule_types: tuple[str, ...] = ("smooth", "abrupt")
+    reynolds_low: float = 80.0
+    reynolds_high: float = 120.0
+    transition_start_fraction: float = 0.35
+    smooth_duration_fraction: float = 0.25
+    known_condition_features: tuple[str, ...] = ("reynolds_number", "u_infinity")
+
+    def __post_init__(self) -> None:
+        if tuple(dict.fromkeys(self.schedule_types)) != self.schedule_types:
+            raise ValueError("V0.9 condition schedule types must be unique")
+        if not self.schedule_types or set(self.schedule_types) - {"smooth", "abrupt"}:
+            raise ValueError("V0.9 supports only smooth and abrupt primary schedules")
+        if not 0 < self.reynolds_low < self.reynolds_high:
+            raise ValueError("V0.9 requires 0 < Re_low < Re_high")
+        if not 0 < self.transition_start_fraction < 1:
+            raise ValueError("V0.9 transition start fraction must lie in (0,1)")
+        if not 0 < self.smooth_duration_fraction < 1:
+            raise ValueError("V0.9 smooth duration fraction must lie in (0,1)")
+        if self.transition_start_fraction + self.smooth_duration_fraction >= 0.9:
+            raise ValueError("V0.9 schedules must retain a post-transition rollout tail")
+        if self.known_condition_features != ("reynolds_number", "u_infinity"):
+            raise ValueError("V0.9 canonical known-condition features are Re and U_infinity")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schedule_types": list(self.schedule_types),
+            "reynolds_low": self.reynolds_low,
+            "reynolds_high": self.reynolds_high,
+            "transition_start_fraction": self.transition_start_fraction,
+            "smooth_duration_fraction": self.smooth_duration_fraction,
+            "known_condition_features": list(self.known_condition_features),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V09ConditionConfig:
+        defaults = cls()
+        _reject_unknown(data, set(defaults.to_dict()), "V0.9 condition config")
+        return cls(
+            schedule_types=tuple(
+                str(value) for value in data.get("schedule_types", defaults.schedule_types)
+            ),
+            reynolds_low=float(data.get("reynolds_low", defaults.reynolds_low)),
+            reynolds_high=float(data.get("reynolds_high", defaults.reynolds_high)),
+            transition_start_fraction=float(
+                data.get("transition_start_fraction", defaults.transition_start_fraction)
+            ),
+            smooth_duration_fraction=float(
+                data.get("smooth_duration_fraction", defaults.smooth_duration_fraction)
+            ),
+            known_condition_features=tuple(
+                str(value)
+                for value in data.get(
+                    "known_condition_features", defaults.known_condition_features
+                )
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class V09AdaptiveConfig:
+    """Restricted context-to-generator interface; no additive residual path."""
+
+    condition_mode: str = "latent_inferred"
+    rank: int = 4
+    rank_candidates: tuple[int, ...] = (1, 2, 4, 8)
+    width: int = 64
+    condition_embedding_dim: int = 4
+    normalize_factors: bool = True
+    zero_output_initialization: bool = True
+
+    def __post_init__(self) -> None:
+        if self.condition_mode not in {"known", "latent_inferred"}:
+            raise ValueError("V0.9 condition_mode must be known or latent_inferred")
+        if self.rank < 1 or self.rank not in self.rank_candidates:
+            raise ValueError("V0.9 rank must be a registered rank candidate")
+        if tuple(sorted(set(self.rank_candidates))) != self.rank_candidates:
+            raise ValueError("V0.9 rank candidates must be unique and increasing")
+        if self.rank_candidates[-1] > 16:
+            raise ValueError("V0.9 primary low-rank update is capped at rank 16")
+        if self.width < 4 or self.width > 256 or self.condition_embedding_dim < 1:
+            raise ValueError("invalid V0.9 adaptive-head dimensions")
+        if not self.zero_output_initialization:
+            raise ValueError("V0.9 requires exact zero-update initialization")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "condition_mode": self.condition_mode,
+            "rank": self.rank,
+            "rank_candidates": list(self.rank_candidates),
+            "width": self.width,
+            "condition_embedding_dim": self.condition_embedding_dim,
+            "normalize_factors": self.normalize_factors,
+            "zero_output_initialization": self.zero_output_initialization,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V09AdaptiveConfig:
+        defaults = cls()
+        _reject_unknown(data, set(defaults.to_dict()), "V0.9 adaptive config")
+        return cls(
+            condition_mode=str(data.get("condition_mode", defaults.condition_mode)),
+            rank=int(data.get("rank", defaults.rank)),
+            rank_candidates=tuple(
+                int(value) for value in data.get("rank_candidates", defaults.rank_candidates)
+            ),
+            width=int(data.get("width", defaults.width)),
+            condition_embedding_dim=int(
+                data.get("condition_embedding_dim", defaults.condition_embedding_dim)
+            ),
+            normalize_factors=bool(data.get("normalize_factors", defaults.normalize_factors)),
+            zero_output_initialization=bool(
+                data.get("zero_output_initialization", defaults.zero_output_initialization)
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class V09TrainingConfig:
+    """Operator-only optimization with compact formal-GPU output."""
+
+    epochs: int = 80
+    batch_size: int = 256
+    learning_rate: float = 5.0e-4
+    weight_decay: float = 1.0e-5
+    lambda_operator_burden: float = 1.0e-3
+    lambda_smooth: float = 1.0e-3
+    lambda_stability: float = 1.0e-3
+    gradient_clip_norm: float = 1.0
+    patience: int = 16
+    precision: str = "amp_bf16"
+    operator_initialization_seed: int = 701
+
+    def __post_init__(self) -> None:
+        if min(self.epochs, self.batch_size, self.patience) < 1 or self.learning_rate <= 0:
+            raise ValueError(
+                "V0.9 epochs, batch size, patience, and learning rate must be positive"
+            )
+        if min(
+            self.weight_decay,
+            self.lambda_operator_burden,
+            self.lambda_smooth,
+            self.lambda_stability,
+        ) < 0:
+            raise ValueError("V0.9 regularization weights must be non-negative")
+        if self.gradient_clip_norm <= 0 or self.operator_initialization_seed < 0:
+            raise ValueError("invalid V0.9 clipping or initialization seed")
+        if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
+            raise ValueError("invalid V0.9 precision")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V09TrainingConfig:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.9 training config")
+        values = {name: data.get(name, getattr(defaults, name)) for name in allowed}
+        for name in {"epochs", "batch_size", "patience", "operator_initialization_seed"}:
+            values[name] = int(values[name])
+        for name in allowed - {
+            "epochs",
+            "batch_size",
+            "patience",
+            "operator_initialization_seed",
+            "precision",
+        }:
+            values[name] = float(values[name])
+        values["precision"] = str(values["precision"])
+        return cls(**values)
+
+
+@dataclass(frozen=True, slots=True)
+class V09EvaluationConfig:
+    """Predeclared adaptive-operator and V1.0 readiness gates."""
+
+    rollout_horizons: tuple[int, ...] = (8, 16, 32, 80)
+    material_relative_gain: float = 0.02
+    min_operator_explained_fraction: float = 0.02
+    max_operator_burden: float = 0.50
+    max_physics_degradation: float = 0.10
+    max_divergence_mse: float = 0.02
+    max_boundary_mse: float = 0.05
+    scientific_seed_fraction: float = 2.0 / 3.0
+    v1_0_readiness_fraction: float = 1.0
+    operator_initialization_seeds: tuple[int, ...] = (701, 809, 907)
+
+    def __post_init__(self) -> None:
+        if tuple(sorted(set(self.rollout_horizons))) != self.rollout_horizons:
+            raise ValueError("V0.9 rollout horizons must be unique and increasing")
+        if not self.rollout_horizons or self.rollout_horizons[0] < 1:
+            raise ValueError("V0.9 rollout horizons must be positive")
+        if not 0 <= self.material_relative_gain < 1:
+            raise ValueError("V0.9 material gain must lie in [0,1)")
+        if not 0 <= self.min_operator_explained_fraction < 1:
+            raise ValueError("V0.9 Gamma_op threshold must lie in [0,1)")
+        if self.max_operator_burden <= 0 or self.max_physics_degradation < 0:
+            raise ValueError("invalid V0.9 burden/physics threshold")
+        if self.max_divergence_mse <= 0 or self.max_boundary_mse <= 0:
+            raise ValueError("invalid V0.9 physical absolute threshold")
+        if not 0.5 <= self.scientific_seed_fraction <= 1:
+            raise ValueError("invalid V0.9 scientific seed threshold")
+        if self.v1_0_readiness_fraction != 1.0:
+            raise ValueError("V1.0 readiness requires all backbone/data seeds")
+        if len(self.operator_initialization_seeds) != 3 or len(
+            set(self.operator_initialization_seeds)
+        ) != 3:
+            raise ValueError("V0.9 formal evaluation requires three operator seeds")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rollout_horizons": list(self.rollout_horizons),
+            "material_relative_gain": self.material_relative_gain,
+            "min_operator_explained_fraction": self.min_operator_explained_fraction,
+            "max_operator_burden": self.max_operator_burden,
+            "max_physics_degradation": self.max_physics_degradation,
+            "max_divergence_mse": self.max_divergence_mse,
+            "max_boundary_mse": self.max_boundary_mse,
+            "scientific_seed_fraction": self.scientific_seed_fraction,
+            "v1_0_readiness_fraction": self.v1_0_readiness_fraction,
+            "operator_initialization_seeds": list(self.operator_initialization_seeds),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V09EvaluationConfig:
+        defaults = cls()
+        _reject_unknown(data, set(defaults.to_dict()), "V0.9 evaluation config")
+        return cls(
+            rollout_horizons=tuple(
+                int(value) for value in data.get("rollout_horizons", defaults.rollout_horizons)
+            ),
+            material_relative_gain=float(
+                data.get("material_relative_gain", defaults.material_relative_gain)
+            ),
+            min_operator_explained_fraction=float(
+                data.get(
+                    "min_operator_explained_fraction",
+                    defaults.min_operator_explained_fraction,
+                )
+            ),
+            max_operator_burden=float(
+                data.get("max_operator_burden", defaults.max_operator_burden)
+            ),
+            max_physics_degradation=float(
+                data.get("max_physics_degradation", defaults.max_physics_degradation)
+            ),
+            max_divergence_mse=float(
+                data.get("max_divergence_mse", defaults.max_divergence_mse)
+            ),
+            max_boundary_mse=float(data.get("max_boundary_mse", defaults.max_boundary_mse)),
+            scientific_seed_fraction=float(
+                data.get("scientific_seed_fraction", defaults.scientific_seed_fraction)
+            ),
+            v1_0_readiness_fraction=float(
+                data.get("v1_0_readiness_fraction", defaults.v1_0_readiness_fraction)
+            ),
+            operator_initialization_seeds=tuple(
+                int(value)
+                for value in data.get(
+                    "operator_initialization_seeds", defaults.operator_initialization_seeds
+                )
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DataConfig:
     """Static data expectations shared by V0.2+ pipelines."""
 
@@ -1922,6 +2190,10 @@ class ProjectConfig:
     v0_8_context: V08ContextConfig | None = None
     v0_8_training: V08TrainingConfig | None = None
     v0_8_evaluation: V08EvaluationConfig | None = None
+    v0_9_condition: V09ConditionConfig | None = None
+    v0_9_adaptive: V09AdaptiveConfig | None = None
+    v0_9_training: V09TrainingConfig | None = None
+    v0_9_evaluation: V09EvaluationConfig | None = None
     project_version: str = PROJECT_VERSION
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -1971,6 +2243,7 @@ class ProjectConfig:
         if any(section is not None for section in v0_6_sections) and self.project_version not in {
             V0_6_PROJECT_VERSION,
             V0_7_PROJECT_VERSION,
+            V0_8_PROJECT_VERSION,
             PROJECT_VERSION,
         }:
             raise ValueError(
@@ -1992,9 +2265,10 @@ class ProjectConfig:
             raise ValueError("V0.7 must inherit every V0.6 section")
         if any(section is not None for section in v0_7_sections) and self.project_version not in {
             V0_7_PROJECT_VERSION,
+            V0_8_PROJECT_VERSION,
             PROJECT_VERSION,
         }:
-            raise ValueError("V0.7 sections require project_version 0.7.0 or 0.8.0")
+            raise ValueError("V0.7 sections require project_version 0.7.0 or later")
         if self.memory_sweep is not None and self.advection_diffusion_2d is not None:
             if self.memory_sweep.history_lengths[-1] >= self.advection_diffusion_2d.num_steps:
                 raise ValueError("V0.7 maximum history must be shorter than each trajectory")
@@ -2012,8 +2286,8 @@ class ProjectConfig:
                 "V0.8 config must provide cylinder, routing, context, training, and evaluation"
             )
         if any(section is not None for section in v0_8_sections):
-            if self.project_version != PROJECT_VERSION:
-                raise ValueError("V0.8 sections require project_version 0.8.0")
+            if self.project_version not in {V0_8_PROJECT_VERSION, PROJECT_VERSION}:
+                raise ValueError("V0.8 sections require project_version 0.8.0 or later")
             if not all(section is not None for section in v0_7_sections):
                 raise ValueError("V0.8 must inherit the complete V0.7 residual assessment contract")
             assert self.cylinder_wake_2d and self.v0_8_context
@@ -2046,6 +2320,30 @@ class ProjectConfig:
                 raise ValueError("V0.8 cylinder trajectories are too short for the V0.7 sweep")
             if self.v0_8_context.history_length >= self.cylinder_wake_2d.num_steps:
                 raise ValueError("V0.8 context history must be shorter than each trajectory")
+        v0_9_sections = (
+            self.v0_9_condition,
+            self.v0_9_adaptive,
+            self.v0_9_training,
+            self.v0_9_evaluation,
+        )
+        if any(section is not None for section in v0_9_sections) and not all(
+            section is not None for section in v0_9_sections
+        ):
+            raise ValueError("V0.9 config must provide condition/adaptive/training/evaluation")
+        if any(section is not None for section in v0_9_sections):
+            if self.project_version != PROJECT_VERSION:
+                raise ValueError("V0.9 sections require project_version 0.9.0")
+            if not all(section is not None for section in v0_8_sections):
+                raise ValueError("V0.9 must inherit the complete V0.8 context contract")
+            if self.training.stage is not TrainStage.ADAPTIVE:
+                raise ValueError("V0.9 training.stage must be adaptive")
+            assert self.cylinder_wake_2d and self.koopman and self.v0_9_adaptive
+            if not self.cylinder_wake_2d.time_varying_boundary:
+                raise ValueError("V0.9 requires time_varying_boundary=true")
+            if self.v0_9_adaptive.rank >= self.koopman.state_dim:
+                raise ValueError("V0.9 requires strict low rank r < d_K")
+        elif self.cylinder_wake_2d is not None and self.cylinder_wake_2d.time_varying_boundary:
+            raise ValueError("time-varying cylinder boundaries require the complete V0.9 contract")
         if (
             any(section is not None for section in v0_3_sections)
             or any(section is not None for section in v0_4_sections)
@@ -2193,6 +2491,18 @@ class ProjectConfig:
             "v0_8_evaluation": None
             if self.v0_8_evaluation is None
             else self.v0_8_evaluation.to_dict(),
+            "v0_9_condition": None
+            if self.v0_9_condition is None
+            else self.v0_9_condition.to_dict(),
+            "v0_9_adaptive": None
+            if self.v0_9_adaptive is None
+            else self.v0_9_adaptive.to_dict(),
+            "v0_9_training": None
+            if self.v0_9_training is None
+            else self.v0_9_training.to_dict(),
+            "v0_9_evaluation": None
+            if self.v0_9_evaluation is None
+            else self.v0_9_evaluation.to_dict(),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }
@@ -2232,6 +2542,10 @@ class ProjectConfig:
                 "v0_8_context",
                 "v0_8_training",
                 "v0_8_evaluation",
+                "v0_9_condition",
+                "v0_9_adaptive",
+                "v0_9_training",
+                "v0_9_evaluation",
                 "project_version",
                 "tags",
             },
@@ -2432,6 +2746,34 @@ class ProjectConfig:
                 if data.get("v0_8_evaluation") is None
                 else V08EvaluationConfig.from_dict(
                     _ensure_mapping(data["v0_8_evaluation"], "V0.8 evaluation config")
+                )
+            ),
+            v0_9_condition=(
+                None
+                if data.get("v0_9_condition") is None
+                else V09ConditionConfig.from_dict(
+                    _ensure_mapping(data["v0_9_condition"], "V0.9 condition config")
+                )
+            ),
+            v0_9_adaptive=(
+                None
+                if data.get("v0_9_adaptive") is None
+                else V09AdaptiveConfig.from_dict(
+                    _ensure_mapping(data["v0_9_adaptive"], "V0.9 adaptive config")
+                )
+            ),
+            v0_9_training=(
+                None
+                if data.get("v0_9_training") is None
+                else V09TrainingConfig.from_dict(
+                    _ensure_mapping(data["v0_9_training"], "V0.9 training config")
+                )
+            ),
+            v0_9_evaluation=(
+                None
+                if data.get("v0_9_evaluation") is None
+                else V09EvaluationConfig.from_dict(
+                    _ensure_mapping(data["v0_9_evaluation"], "V0.9 evaluation config")
                 )
             ),
             project_version=str(data.get("project_version", PROJECT_VERSION)),
