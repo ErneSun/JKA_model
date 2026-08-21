@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from gpu_validation.v0_9.scripts.gpu_validate_all import (
+    dirty_source_paths,
     strict_v0_8_handoff_fields_present,
     validate_completion_payload,
 )
@@ -78,9 +79,26 @@ def test_v08_handoff_requires_three_jointly_passing_backbones(tmp_path: Path) ->
     try:
         audit_v0_8_handoff("v08", runs_root=tmp_path / "runs", results_root=tmp_path / "results")
     except ValueError as error:
-        assert "does not jointly pass" in str(error)
+        assert "requires 3/3" in str(error) and "53" in str(error)
     else:
         raise AssertionError("partial readiness was accepted")
+    decision["v0_9_ready"] = False
+    decision["joint_v0_9_support_fraction"] = 2.0 / 3.0
+    decision["dynamic_context"] = "SUPPORTED"
+    for support in decision["nested_seed_support"].values():
+        support["supported"] = True
+    decision["nested_seed_support"]["47"]["supported"] = False
+    (compact / "evaluation" / "v0_8_scientific_decision.json").write_text(
+        json.dumps(decision), encoding="utf-8"
+    )
+    supported = audit_v0_8_handoff(
+        "v08",
+        runs_root=tmp_path / "runs",
+        results_root=tmp_path / "results",
+        handoff_policy="supported",
+    )
+    assert not supported.strict_readiness
+    assert supported.handoff_policy == "supported"
 
 
 def test_legacy_v08_ready_report_is_detected_for_strict_reassessment() -> None:
@@ -101,6 +119,17 @@ def test_legacy_v08_ready_report_is_detected_for_strict_reassessment() -> None:
         },
     }
     assert strict_v0_8_handoff_fields_present(strict)
+
+
+def test_clean_gate_ignores_generated_results_but_not_source_changes() -> None:
+    porcelain = "\n".join(
+        (
+            " M gpu_validation/v0_8/results/v08/report.md",
+            "?? runs/v0_9/v09/failure.json",
+            " M src/jka_model/adaptive/handoff.py",
+        )
+    )
+    assert dirty_source_paths(porcelain) == ["src/jka_model/adaptive/handoff.py"]
 
 
 def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
@@ -175,6 +204,22 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
     assert result["v1_0_ready"]
     assert result["compact_audit"]["complete"]
     assert (output / "report.md").is_file()
+    (session / "v0_8_handoff_audit.json").write_text(
+        json.dumps(
+            {
+                "route": "R3",
+                "context_family": "history_mlp",
+                "handoff_policy": "supported",
+                "strict_readiness": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    conditional = aggregate_v0_9_results(session, tmp_path / "conditional")
+    assert conditional["adaptive_mechanism_result"] == "SUPPORTED"
+    assert conditional["low_rank_operator_adaptation"] == "CONDITIONALLY_SUPPORTED"
+    assert conditional["evidence_tier"] == "EXPLORATORY_CONDITIONAL"
+    assert not conditional["v1_0_ready"]
     validate_completion_payload(
         {
             "requested_validation_id": "v09",

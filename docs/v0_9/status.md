@@ -4,7 +4,7 @@ Implementation status: **SOFTWARE IMPLEMENTED; FORMAL GPU SCIENCE PENDING**.
 
 已实现：
 
-- strict V0.8 handoff；
+- strict confirmatory 与 supported exploratory 两类可审计 V0.8 handoff；
 - smooth/abrupt controlled inlet data；
 - frozen-context low-rank adaptive generator；
 - known/latent condition separation；

@@ -87,7 +87,7 @@ def _run_tests(python: str, log_path: Path) -> None:
         raise RuntimeError(f"targeted V0.9 tests failed with exit code {code}")
 
 
-def _latest_ready_v0_8() -> str:
+def _latest_eligible_v0_8(handoff_policy: str) -> str:
     candidates: list[tuple[float, str]] = []
     root = ROOT / "gpu_validation" / "v0_8" / "results"
     for result in root.iterdir() if root.is_dir() else ():
@@ -98,10 +98,19 @@ def _latest_ready_v0_8() -> str:
             continue
         decision = json.loads(decision_path.read_text(encoding="utf-8"))
         completion = json.loads(completion_path.read_text(encoding="utf-8"))
-        if bool(decision.get("v0_9_ready")) and completion.get("status") == "PASS":
+        strict_ready = bool(decision.get("v0_9_ready"))
+        supported = bool(
+            decision.get("dynamic_context") == "SUPPORTED"
+            and isinstance(decision.get("nested_seed_support"), dict)
+            and len(decision["nested_seed_support"]) == 3
+        )
+        eligible = strict_ready if handoff_policy == "strict" else supported
+        if eligible and completion.get("status") == "PASS":
             candidates.append((completion_path.stat().st_mtime, result.name))
     if not candidates:
-        raise ValueError("no strict-ready V0.8 raw+compact handoff found; pass --v0-8-id")
+        raise ValueError(
+            f"no {handoff_policy} V0.8 raw+compact handoff found; pass --v0-8-id"
+        )
     return max(candidates)[1]
 
 
@@ -118,6 +127,23 @@ def strict_v0_8_handoff_fields_present(decision: dict[str, Any]) -> bool:
             for item in nested.values()
         )
     )
+
+
+def dirty_source_paths(porcelain: str) -> list[str]:
+    """Ignore generated validation artifacts while preserving clean-code provenance."""
+    artifact_prefixes = (
+        "runs/",
+        "gpu_validation/v0_8/results/",
+        "gpu_validation/v0_9/results/",
+    )
+    dirty: list[str] = []
+    for line in porcelain.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:].split(" -> ")[-1]
+        if not path.startswith(artifact_prefixes):
+            dirty.append(path)
+    return dirty
 
 
 def _resolved(
@@ -180,6 +206,15 @@ def main() -> None:
         default=datetime.now(timezone.utc).strftime("v09-%Y%m%dT%H%M%SZ"),
     )
     parser.add_argument("--v0-8-id", default="")
+    parser.add_argument(
+        "--v0-8-handoff-policy",
+        choices=("strict", "supported"),
+        default="strict",
+        help=(
+            "strict requires V0.9_READY on 3/3 V0.8 seeds; supported permits an "
+            "exploratory V0.9 run from a scientifically supported V0.8 result"
+        ),
+    )
     parser.add_argument("--seeds", nargs="+", type=int, default=[47, 53, 59])
     parser.add_argument("--skip-software-tests", action="store_true")
     parser.add_argument("--allow-dirty", action="store_true")
@@ -188,11 +223,15 @@ def main() -> None:
         raise SystemExit("V0.9 formal validation requires exactly three unique seeds")
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is unavailable")
-    dirty = subprocess.run(
+    porcelain = subprocess.run(
         ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout.strip()
-    if dirty and not args.allow_dirty:
-        raise SystemExit("formal V0.9 validation requires a clean git working tree")
+    source_changes = dirty_source_paths(porcelain)
+    if source_changes and not args.allow_dirty:
+        raise SystemExit(
+            "formal V0.9 validation requires clean source/config files; "
+            f"dirty paths: {source_changes}"
+        )
     results_root = ROOT / "gpu_validation" / "v0_9" / "results"
     session = create_versioned_session(
         ROOT / "runs" / "v0_9", args.validation_id, reserved_roots=(results_root,)
@@ -228,8 +267,8 @@ def main() -> None:
                 lambda: _run_tests(python, raw / "software" / "pytest.log"),
             )
 
-        current_stage = "v0_8_strict_handoff"
-        v08_id = args.v0_8_id or _latest_ready_v0_8()
+        current_stage = "v0_8_handoff"
+        v08_id = args.v0_8_id or _latest_eligible_v0_8(args.v0_8_handoff_policy)
         v08_decision_path = (
             ROOT
             / "gpu_validation"
@@ -249,23 +288,28 @@ def main() -> None:
             updated_decision = json.loads(v08_decision_path.read_text(encoding="utf-8"))
             if not strict_v0_8_handoff_fields_present(updated_decision):
                 raise RuntimeError("V0.8 reassessment did not produce strict handoff fields")
-        current_stage = "v0_8_strict_handoff"
+        current_stage = "v0_8_handoff"
         handoff = _stage(
-            f"G1 strict V0.8 handoff id={v08_id}",
+            f"G1 {args.v0_8_handoff_policy} V0.8 handoff id={v08_id}",
             lambda: audit_v0_8_handoff(
                 v08_id,
                 runs_root=ROOT / "runs" / "v0_8",
                 results_root=ROOT / "gpu_validation" / "v0_8" / "results",
+                handoff_policy=args.v0_8_handoff_policy,
             ),
         )
         if {item.backbone_seed for item in handoff.seeds} != set(args.seeds):
-            raise ValueError("requested V0.9 seeds do not match the strict V0.8 handoff")
+            raise ValueError("requested V0.9 seeds do not match the V0.8 handoff")
         handoff_payload = {
             "validation_id": handoff.validation_id,
             "raw_run": str(handoff.raw_run),
             "compact_result": str(handoff.compact_result),
             "route": handoff.route,
             "context_family": handoff.context_family,
+            "handoff_policy": handoff.handoff_policy,
+            "strict_readiness": handoff.strict_readiness,
+            "joint_v0_9_support_fraction": handoff.joint_v0_9_support_fraction,
+            "source_nested_seed_support": handoff.decision.get("nested_seed_support"),
             "seeds": [
                 {
                     **asdict(item),
@@ -455,6 +499,7 @@ def main() -> None:
             "requested_validation_id": session.requested_id,
             "resolved_validation_id": session.resolved_id,
             "v0_8_validation_id": v08_id,
+            "v0_8_handoff_policy": handoff.handoff_policy,
             "status": "PASS",
             "git_commit": get_git_commit(ROOT),
             "all_required_stages_completed": True,

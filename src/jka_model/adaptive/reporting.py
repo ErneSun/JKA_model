@@ -154,20 +154,30 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
     ) / len(per_backbone)
     known_decision = "SUPPORTED" if known_fraction >= 2.0 / 3.0 else "NOT_SUPPORTED"
     latent_decision = "SUPPORTED" if latent_fraction >= 2.0 / 3.0 else "NOT_SUPPORTED"
-    adaptive_decision = "SUPPORTED" if backbone_fraction >= 2.0 / 3.0 else "NOT_SUPPORTED"
-    v1_ready = backbone_fraction == 1.0
+    adaptive_mechanism = "SUPPORTED" if backbone_fraction >= 2.0 / 3.0 else "NOT_SUPPORTED"
     rank_selection = _read(session / "rank_selection.json")
     handoff = _read(session / "v0_8_handoff_audit.json")
+    strict_handoff = bool(handoff.get("strict_readiness", True))
+    handoff_policy = str(handoff.get("handoff_policy", "strict"))
+    adaptive_decision = (
+        adaptive_mechanism
+        if strict_handoff or adaptive_mechanism == "NOT_SUPPORTED"
+        else "CONDITIONALLY_SUPPORTED"
+    )
+    v1_ready = strict_handoff and backbone_fraction == 1.0
     decision = {
         "schema_version": 1,
         "physical_problem": "cylinder_wake_2d_controlled_inlet",
-        "v0_8_strict_readiness": "PASS",
+        "v0_8_strict_readiness": "PASS" if strict_handoff else "NOT_READY",
+        "v0_8_handoff_policy": handoff_policy,
+        "evidence_tier": "CONFIRMATORY" if strict_handoff else "EXPLORATORY_CONDITIONAL",
         "v0_8_route": handoff["route"],
         "context_family": handoff["context_family"],
         "variable_condition_data": "PASS",
         "known_condition_adaptation": known_decision,
         "latent_inferred_adaptation": latent_decision,
         "low_rank_operator_adaptation": adaptive_decision,
+        "adaptive_mechanism_result": adaptive_mechanism,
         "operator_explained_residual": adaptive_decision,
         "long_rollout_stability": (
             "PASS" if all(row["long_rollout_stability"] == "PASS" for row in records) else "FAIL"
@@ -239,12 +249,15 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "# V0.9 scientific report\n\n"
         f"PHYSICAL PROBLEM: {decision['physical_problem']}  \n"
         f"V0.8 STRICT READINESS: {decision['v0_8_strict_readiness']}  \n"
+        f"V0.8 HANDOFF POLICY: {decision['v0_8_handoff_policy']}  \n"
+        f"EVIDENCE TIER: {decision['evidence_tier']}  \n"
         f"V0.8 ROUTE: {decision['v0_8_route']}  \n"
         f"CONTEXT FAMILY: {decision['context_family']}  \n"
         f"VARIABLE-CONDITION DATA: {decision['variable_condition_data']}  \n"
         f"KNOWN-CONDITION ADAPTATION: {known_decision}  \n"
         f"LATENT-INFERRED ADAPTATION: {latent_decision}  \n"
         f"LOW-RANK OPERATOR ADAPTATION: {adaptive_decision}  \n"
+        f"ADAPTIVE MECHANISM RESULT: {adaptive_mechanism}  \n"
         f"OPERATOR-EXPLAINED RESIDUAL: {decision['operator_explained_residual']}  \n"
         f"LONG-ROLLOUT STABILITY: {decision['long_rollout_stability']}  \n"
         f"PHYSICS STATUS: {decision['physics_status']}  \n"
