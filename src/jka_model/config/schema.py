@@ -1856,6 +1856,10 @@ class V09AdaptiveConfig:
     condition_embedding_dim: int = 4
     normalize_factors: bool = True
     zero_output_initialization: bool = True
+    bounded_coordinates: bool = False
+    eta_max: float = 1.0
+    trust_gate: bool = False
+    trust_gate_bias: float = -1.3862943611198906
 
     def __post_init__(self) -> None:
         if self.condition_mode not in {"known", "latent_inferred"}:
@@ -1870,6 +1874,10 @@ class V09AdaptiveConfig:
             raise ValueError("invalid V0.9 adaptive-head dimensions")
         if not self.zero_output_initialization:
             raise ValueError("V0.9 requires exact zero-update initialization")
+        if self.eta_max <= 0:
+            raise ValueError("V0.9 eta_max must be positive")
+        if not -10.0 <= self.trust_gate_bias <= 10.0:
+            raise ValueError("V0.9 trust-gate bias is outside the auditable range")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1880,6 +1888,10 @@ class V09AdaptiveConfig:
             "condition_embedding_dim": self.condition_embedding_dim,
             "normalize_factors": self.normalize_factors,
             "zero_output_initialization": self.zero_output_initialization,
+            "bounded_coordinates": self.bounded_coordinates,
+            "eta_max": self.eta_max,
+            "trust_gate": self.trust_gate,
+            "trust_gate_bias": self.trust_gate_bias,
         }
 
     @classmethod
@@ -1900,6 +1912,12 @@ class V09AdaptiveConfig:
             zero_output_initialization=bool(
                 data.get("zero_output_initialization", defaults.zero_output_initialization)
             ),
+            bounded_coordinates=bool(
+                data.get("bounded_coordinates", defaults.bounded_coordinates)
+            ),
+            eta_max=float(data.get("eta_max", defaults.eta_max)),
+            trust_gate=bool(data.get("trust_gate", defaults.trust_gate)),
+            trust_gate_bias=float(data.get("trust_gate_bias", defaults.trust_gate_bias)),
         )
 
 
@@ -1914,13 +1932,40 @@ class V09TrainingConfig:
     lambda_operator_burden: float = 1.0e-3
     lambda_smooth: float = 1.0e-3
     lambda_stability: float = 1.0e-3
+    rollout_horizons: tuple[int, ...] = (1,)
+    rollout_start_fractions: tuple[float, ...] = (0.0,)
+    rollout_weights: tuple[float, ...] = (0.0,)
+    rollout_batch_size: int = 32
+    rollout_stride: int = 1
+    lambda_rollout: float = 0.0
+    lambda_propagator_growth: float = 0.0
+    propagator_growth_margin: float = 0.02
+    operator_burden_target: float = 0.50
+    physics_start_fraction: float = 1.0
+    physics_ramp_duration_fraction: float = 0.0
+    physics_horizon: int = 1
+    physics_batch_size: int = 1
+    lambda_physics: float = 0.0
+    physics_velocity_weight: float = 1.0
+    physics_vorticity_weight: float = 0.2
+    physics_divergence_weight: float = 0.2
+    physics_boundary_weight: float = 0.1
+    rank_sweep_epochs: int = 40
     gradient_clip_norm: float = 1.0
     patience: int = 16
     precision: str = "amp_bf16"
     operator_initialization_seed: int = 701
 
     def __post_init__(self) -> None:
-        if min(self.epochs, self.batch_size, self.patience) < 1 or self.learning_rate <= 0:
+        if min(
+            self.epochs,
+            self.batch_size,
+            self.rollout_batch_size,
+            self.rollout_stride,
+            self.physics_batch_size,
+            self.rank_sweep_epochs,
+            self.patience,
+        ) < 1 or self.learning_rate <= 0:
             raise ValueError(
                 "V0.9 epochs, batch size, patience, and learning rate must be positive"
             )
@@ -1929,15 +1974,55 @@ class V09TrainingConfig:
             self.lambda_operator_burden,
             self.lambda_smooth,
             self.lambda_stability,
+            self.lambda_rollout,
+            self.lambda_propagator_growth,
+            self.lambda_physics,
+            self.physics_velocity_weight,
+            self.physics_vorticity_weight,
+            self.physics_divergence_weight,
+            self.physics_boundary_weight,
         ) < 0:
             raise ValueError("V0.9 regularization weights must be non-negative")
+        if tuple(sorted(set(self.rollout_horizons))) != self.rollout_horizons:
+            raise ValueError("V0.9 training rollout horizons must be unique and increasing")
+        if not self.rollout_horizons or self.rollout_horizons[0] < 1:
+            raise ValueError("V0.9 training rollout horizons must be positive")
+        if not (
+            len(self.rollout_horizons)
+            == len(self.rollout_start_fractions)
+            == len(self.rollout_weights)
+        ):
+            raise ValueError("V0.9 rollout curriculum arrays must have equal length")
+        if any(not 0.0 <= value <= 1.0 for value in self.rollout_start_fractions):
+            raise ValueError("V0.9 rollout start fractions must lie in [0,1]")
+        if tuple(sorted(self.rollout_start_fractions)) != self.rollout_start_fractions:
+            raise ValueError("V0.9 rollout curriculum must be ordered")
+        if self.lambda_rollout > 0 and not any(weight > 0 for weight in self.rollout_weights):
+            raise ValueError("enabled V0.9 rollout loss requires a positive horizon weight")
+        if not 0.0 <= self.physics_start_fraction <= 1.0:
+            raise ValueError("V0.9 physics start fraction must lie in [0,1]")
+        if not 0.0 <= self.physics_ramp_duration_fraction <= 1.0:
+            raise ValueError("V0.9 physics ramp duration must lie in [0,1]")
+        if (
+            self.physics_ramp_duration_fraction > 0
+            and self.physics_start_fraction + self.physics_ramp_duration_fraction > 1
+        ):
+            raise ValueError("V0.9 physics ramp must finish within training")
+        if self.physics_horizon < 1 or self.physics_horizon > self.rollout_horizons[-1]:
+            raise ValueError("V0.9 physics horizon must lie inside the training rollout")
+        if self.propagator_growth_margin < 0 or self.operator_burden_target <= 0:
+            raise ValueError("invalid V0.9 growth margin or burden target")
         if self.gradient_clip_norm <= 0 or self.operator_initialization_seed < 0:
             raise ValueError("invalid V0.9 clipping or initialization seed")
         if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
             raise ValueError("invalid V0.9 precision")
 
     def to_dict(self) -> dict[str, Any]:
-        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+        return {
+            name: list(value) if isinstance(value, tuple) else value
+            for name in self.__dataclass_fields__
+            for value in (getattr(self, name),)
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> V09TrainingConfig:
@@ -1945,13 +2030,29 @@ class V09TrainingConfig:
         allowed = set(defaults.__dataclass_fields__)
         _reject_unknown(data, allowed, "V0.9 training config")
         values = {name: data.get(name, getattr(defaults, name)) for name in allowed}
-        for name in {"epochs", "batch_size", "patience", "operator_initialization_seed"}:
-            values[name] = int(values[name])
-        for name in allowed - {
+        tuple_int_fields = {"rollout_horizons"}
+        tuple_float_fields = {"rollout_start_fractions", "rollout_weights"}
+        integer_fields = {
             "epochs",
             "batch_size",
+            "rollout_batch_size",
+            "rollout_stride",
+            "physics_horizon",
+            "physics_batch_size",
+            "rank_sweep_epochs",
             "patience",
             "operator_initialization_seed",
+        }
+        for name in integer_fields:
+            values[name] = int(values[name])
+        for name in tuple_int_fields:
+            values[name] = tuple(int(value) for value in values[name])
+        for name in tuple_float_fields:
+            values[name] = tuple(float(value) for value in values[name])
+        for name in allowed - {
+            *integer_fields,
+            *tuple_int_fields,
+            *tuple_float_fields,
             "precision",
         }:
             values[name] = float(values[name])

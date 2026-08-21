@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import traceback
@@ -146,6 +147,68 @@ def dirty_source_paths(porcelain: str) -> list[str]:
     return dirty
 
 
+def select_validation_rank(
+    sweep_metrics: dict[int, list[dict[str, float]]],
+    *,
+    longest_horizon: int,
+    burden_limit: float,
+    near_optimal_tolerance: float = 0.02,
+) -> dict[str, Any]:
+    """Apply the predeclared long-horizon, burden and parsimony rank rule."""
+    if not sweep_metrics or burden_limit <= 0 or near_optimal_tolerance < 0:
+        raise ValueError("invalid V0.9 rank-selection inputs")
+    gain_key = f"rollout_gain_h{longest_horizon}"
+    for rank, values in sweep_metrics.items():
+        if rank < 1 or not values:
+            raise ValueError("each V0.9 rank requires validation records")
+        for value in values:
+            required = (value.get("total"), value.get(gain_key), value.get("burden_max"))
+            if any(item is None or not math.isfinite(float(item)) for item in required):
+                raise ValueError("V0.9 rank selection received incomplete/non-finite metrics")
+    mean_scores = {
+        rank: sum(item["total"] for item in values) / len(values)
+        for rank, values in sweep_metrics.items()
+    }
+    mean_long_gains = {
+        rank: sum(item[gain_key] for item in values) / len(values)
+        for rank, values in sweep_metrics.items()
+    }
+    maximum_burdens = {
+        rank: max(item["burden_max"] for item in values)
+        for rank, values in sweep_metrics.items()
+    }
+    constraint_eligible = [
+        rank
+        for rank in sorted(sweep_metrics)
+        if mean_long_gains[rank] >= 0 and maximum_burdens[rank] <= burden_limit
+    ]
+    selection_pool = constraint_eligible or sorted(sweep_metrics)
+    minimum = min(mean_scores[rank] for rank in selection_pool)
+    near_optimal = [
+        rank
+        for rank in selection_pool
+        if mean_scores[rank] <= minimum * (1.0 + near_optimal_tolerance)
+    ]
+    return {
+        "selection_split": "validation",
+        "test_opened": False,
+        "scores": mean_scores,
+        "longest_curriculum_horizon": longest_horizon,
+        "mean_long_horizon_gains": mean_long_gains,
+        "maximum_operator_burdens": maximum_burdens,
+        "burden_limit": burden_limit,
+        "constraint_eligible_ranks": constraint_eligible,
+        "constraints_satisfied": bool(constraint_eligible),
+        "near_optimal_tolerance": near_optimal_tolerance,
+        "selected_rank": min(near_optimal),
+        "selection_rule": (
+            "smallest rank within tolerance of the minimum validation objective among "
+            "ranks with non-negative longest-horizon gain and bounded operator burden; "
+            "fall back to the same parsimony rule over all ranks if none are eligible"
+        ),
+    }
+
+
 def _resolved(
     template: ProjectConfig,
     *,
@@ -155,6 +218,7 @@ def _resolved(
     condition_mode: str,
     rank: int,
     operator_seed: int,
+    epochs_override: int | None = None,
 ) -> ProjectConfig:
     payload = template.to_dict()
     payload["training"].update(
@@ -164,6 +228,11 @@ def _resolved(
     payload["cylinder_wake_2d"]["dataset_path"] = str(dataset_path.resolve())
     payload["v0_9_adaptive"].update({"condition_mode": condition_mode, "rank": rank})
     payload["v0_9_training"]["operator_initialization_seed"] = operator_seed
+    if epochs_override is not None:
+        payload["v0_9_training"]["epochs"] = epochs_override
+        payload["v0_9_training"]["patience"] = min(
+            int(payload["v0_9_training"]["patience"]), epochs_override
+        )
     payload["tags"] = [
         "v0.9",
         "gpu-formal",
@@ -377,7 +446,8 @@ def main() -> None:
         current_stage = "validation_rank_sweep"
         first = handoff.seeds[0]
         assert template.v0_9_adaptive and template.v0_9_evaluation
-        sweep_scores: dict[int, list[float]] = {
+        assert template.v0_9_training
+        sweep_metrics: dict[int, list[dict[str, float]]] = {
             rank: [] for rank in template.v0_9_adaptive.rank_candidates
         }
         first_operator_seed = template.v0_9_evaluation.operator_initialization_seeds[0]
@@ -392,6 +462,7 @@ def main() -> None:
                     condition_mode=mode,
                     rank=rank,
                     operator_seed=first_operator_seed,
+                    epochs_override=template.v0_9_training.rank_sweep_epochs,
                 )
                 run_dir = raw / "rank_sweep" / f"rank_{rank}" / mode
                 trained = _stage(
@@ -401,27 +472,21 @@ def main() -> None:
                         context_checkpoint=first.context_checkpoint,
                         adaptive_cache=artifacts[first.backbone_seed]["cache"],
                         run_dir=run_dir,
+                        backbone_checkpoint=first.backbone_checkpoint,
+                        physical_dataset=artifacts[first.backbone_seed]["dataset"],
                         device="cuda",
                     ),
                 )
                 save_config(config, raw / "configs" / f"rank_{rank}_{mode}.yaml")
-                sweep_scores[rank].append(trained.validation_metrics["total"])
+                sweep_metrics[rank].append(trained.validation_metrics)
                 last_checkpoint = str(trained.best_checkpoint)
                 completed["rank_sweep"] += 1
-        mean_scores = {rank: sum(values) / len(values) for rank, values in sweep_scores.items()}
-        minimum = min(mean_scores.values())
-        eligible = [rank for rank, score in mean_scores.items() if score <= minimum * 1.02]
-        selected_rank = min(eligible)
-        rank_selection = {
-            "selection_split": "validation",
-            "test_opened": False,
-            "scores": mean_scores,
-            "near_optimal_tolerance": 0.02,
-            "selected_rank": selected_rank,
-            "selection_rule": (
-                "smallest rank within 2% of minimum mean known/latent validation total"
-            ),
-        }
+        rank_selection = select_validation_rank(
+            sweep_metrics,
+            longest_horizon=template.v0_9_training.rollout_horizons[-1],
+            burden_limit=template.v0_9_training.operator_burden_target,
+        )
+        selected_rank = int(rank_selection["selected_rank"])
         (raw / "rank_selection.json").write_text(
             json.dumps(rank_selection, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -461,6 +526,8 @@ def main() -> None:
                             context_checkpoint=item.context_checkpoint,
                             adaptive_cache=artifacts[seed]["cache"],
                             run_dir=run_dir,
+                            backbone_checkpoint=item.backbone_checkpoint,
+                            physical_dataset=artifacts[seed]["dataset"],
                             device="cuda",
                         ),
                     )

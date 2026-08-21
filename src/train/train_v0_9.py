@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,9 +17,13 @@ from torch.utils.data import DataLoader
 
 from jka_model.adaptive import (
     AdaptiveKoopmanModel,
+    AdaptiveRolloutDataset,
     AdaptiveWindowDataset,
+    FrozenCylinderPhysics,
     LowRankAdaptiveOperator,
+    adaptive_stabilization_objective,
     adaptive_training_scales,
+    curriculum_state,
     load_adaptive_cache,
     load_adaptive_checkpoint,
     operator_burden,
@@ -118,6 +123,33 @@ def _move(raw: dict[str, Any], device: torch.device) -> dict[str, Any]:
     return result
 
 
+def _move_rollout(raw: dict[str, Any], device: torch.device) -> dict[str, Any]:
+    result = dict(raw)
+    for name in (
+        "history_z",
+        "history_dts",
+        "future_dts",
+        "future_conditions",
+        "target_latents",
+        "context_parameters",
+    ):
+        result[name] = raw[name].to(device=device, dtype=torch.float32)
+    return result
+
+
+def _uses_stabilized_objective(config: ProjectConfig) -> bool:
+    assert config.v0_9_adaptive and config.v0_9_training
+    training = config.v0_9_training
+    adaptive = config.v0_9_adaptive
+    return bool(
+        training.lambda_rollout > 0
+        or training.lambda_propagator_growth > 0
+        or training.lambda_physics > 0
+        or adaptive.bounded_coordinates
+        or adaptive.trust_gate
+    )
+
+
 def _condition(
     value: torch.Tensor,
     *,
@@ -192,6 +224,64 @@ def _loss_bundle(
     }
 
 
+def _stabilized_loss_bundle(
+    model: AdaptiveKoopmanModel,
+    batch: dict[str, Any],
+    residual_scale: torch.Tensor,
+    condition_mean: torch.Tensor,
+    condition_std: torch.Tensor,
+    config: ProjectConfig,
+    epoch: int,
+    physical: FrozenCylinderPhysics | None,
+    *,
+    validation: bool,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    assert config.v0_9_adaptive and config.v0_9_training
+    training = config.v0_9_training
+    state = curriculum_state(training, epoch, validation=validation)
+    smooth_mask = torch.tensor(
+        [str(value) == "smooth" for value in batch["schedule_type"]],
+        device=batch["history_z"].device,
+        dtype=torch.bool,
+    )
+    objective = adaptive_stabilization_objective(
+        model,
+        batch,
+        residual_scale,
+        condition_mean,
+        condition_std,
+        training,
+        config.v0_9_adaptive.condition_mode,
+        state,
+        smooth_mask,
+    )
+    total = objective.total
+    terms = dict(objective.terms)
+    physics = total.new_zeros(())
+    if state.physics_scale > 0:
+        if physical is None:
+            raise RuntimeError("enabled V0.9 physical objective lacks frozen decoder state")
+        limit = min(training.physics_batch_size, objective.rollout["adapted"].shape[0])
+        target_raw, valid_mask = physical.target_batch(
+            batch["trajectory_id"],
+            batch["target_index"],
+            training.physics_horizon,
+            limit,
+        )
+        physical_result = physical.loss(
+            objective.rollout["adapted"][:limit, training.physics_horizon - 1],
+            target_raw,
+            valid_mask,
+            training,
+        )
+        physics = physical_result.total
+        terms.update(physical_result.terms)
+        total = total + training.lambda_physics * state.physics_scale * physics
+    terms["physics"] = physics
+    terms["physics_scale"] = total.new_tensor(state.physics_scale)
+    return total, terms
+
+
 @torch.no_grad()
 def _evaluate(
     model: AdaptiveKoopmanModel,
@@ -218,12 +308,50 @@ def _evaluate(
     return {name: value / count for name, value in totals.items()}
 
 
+@torch.no_grad()
+def _evaluate_stabilized(
+    model: AdaptiveKoopmanModel,
+    loader: DataLoader,
+    residual_scale: torch.Tensor,
+    condition_mean: torch.Tensor,
+    condition_std: torch.Tensor,
+    config: ProjectConfig,
+    physical: FrozenCylinderPhysics | None,
+    device: torch.device,
+) -> dict[str, float]:
+    assert config.v0_9_training
+    model.eval()
+    totals: dict[str, float] = {}
+    count = 0
+    validation_epoch = config.v0_9_training.epochs - 1
+    for raw in loader:
+        batch = _move_rollout(raw, device)
+        total, terms = _stabilized_loss_bundle(
+            model,
+            batch,
+            residual_scale,
+            condition_mean,
+            condition_std,
+            config,
+            validation_epoch,
+            physical,
+            validation=True,
+        )
+        batch_count = batch["target_latents"].shape[0]
+        for name, value in {"total": total, **terms}.items():
+            totals[name] = totals.get(name, 0.0) + float(value) * batch_count
+        count += batch_count
+    return {name: value / count for name, value in totals.items()}
+
+
 def train_v0_9(
     config: ProjectConfig | str | Path,
     *,
     context_checkpoint: str | Path,
     adaptive_cache: str | Path,
     run_dir: str | Path,
+    backbone_checkpoint: str | Path | None = None,
+    physical_dataset: str | Path | None = None,
     device: str | torch.device | None = None,
     resume_from: str | Path | None = None,
 ) -> V09TrainingResult:
@@ -256,6 +384,20 @@ def train_v0_9(
         raise ValueError("V0.9 cache/context checkpoint fingerprint mismatch")
     context_payload = load_context_checkpoint(context_checkpoint)
     model = _build_model(resolved, cache, context_payload, selected)
+    stabilized = _uses_stabilized_objective(resolved)
+    physical: FrozenCylinderPhysics | None = None
+    if resolved.v0_9_training.lambda_physics > 0:
+        if backbone_checkpoint is None or physical_dataset is None:
+            raise ValueError(
+                "enabled V0.9 physical objective requires backbone_checkpoint and physical_dataset"
+            )
+        physical = FrozenCylinderPhysics.from_artifacts(
+            resolved,
+            backbone_checkpoint=backbone_checkpoint,
+            physical_dataset=physical_dataset,
+            expected_backbone_sha256=cache.backbone_checkpoint_sha256,
+            device=selected,
+        )
     optimizer = AdamW(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
         lr=resolved.v0_9_training.learning_rate,
@@ -271,14 +413,31 @@ def train_v0_9(
     )
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled and amp_dtype is torch.float16)
     history = int(context_payload["history_length_steps"])
-    datasets = {
-        split: AdaptiveWindowDataset(cache, split, history)
-        for split in ("train", "validation")
-    }
+    if stabilized:
+        maximum_horizon = resolved.v0_9_training.rollout_horizons[-1]
+        datasets = {
+            split: AdaptiveRolloutDataset(
+                cache,
+                split,
+                history,
+                maximum_horizon,
+                stride=resolved.v0_9_training.rollout_stride,
+            )
+            for split in ("train", "validation")
+        }
+    else:
+        datasets = {
+            split: AdaptiveWindowDataset(cache, split, history)
+            for split in ("train", "validation")
+        }
     loaders = {
         split: DataLoader(
             dataset,
-            batch_size=resolved.v0_9_training.batch_size,
+            batch_size=(
+                resolved.v0_9_training.rollout_batch_size
+                if stabilized
+                else resolved.v0_9_training.batch_size
+            ),
             shuffle=split == "train",
             num_workers=0,
         )
@@ -355,25 +514,63 @@ def train_v0_9(
         }
 
     completed = start_epoch
+    maturity_fraction = max(resolved.v0_9_training.rollout_start_fractions)
+    if resolved.v0_9_training.lambda_physics > 0:
+        physics_maturity = (
+            resolved.v0_9_training.physics_start_fraction
+            + resolved.v0_9_training.physics_ramp_duration_fraction
+            if resolved.v0_9_training.physics_ramp_duration_fraction > 0
+            else 1.0
+        )
+        maturity_fraction = max(maturity_fraction, physics_maturity)
+    final_curriculum_start_epoch = math.ceil(
+        maturity_fraction * max(resolved.v0_9_training.epochs - 1, 1)
+    )
     log_path = destination / "logs" / "epoch_metrics.csv"
     with log_path.open("w", newline="", encoding="utf-8") as stream:
         fields = [
             "epoch",
+            "active_horizons",
+            "physics_scale",
             "train_total",
             "train_forecast",
+            "train_rollout",
+            "train_physics",
+            "train_propagator_growth",
             "validation_total",
             "validation_forecast",
+            "validation_rollout",
+            "validation_physics",
             "validation_burden",
+            "validation_burden_max",
             "validation_stability",
+            "validation_propagator_growth",
+            "validation_gate_mean",
+            *[
+                f"validation_rollout_gain_h{horizon}"
+                for horizon in resolved.v0_9_training.rollout_horizons
+            ],
         ]
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for epoch in range(start_epoch, resolved.v0_9_training.epochs):
             model.train()
-            sums = {"total": 0.0, "forecast": 0.0}
+            state = curriculum_state(resolved.v0_9_training, epoch)
+            if stabilized and epoch == final_curriculum_start_epoch:
+                # Earlier scores use the same full validation contract, but the
+                # optimizer has not yet seen the final horizon.  Give that stage
+                # its own complete patience budget.
+                stale = 0
+            sums = {
+                "total": 0.0,
+                "forecast": 0.0,
+                "rollout": 0.0,
+                "physics": 0.0,
+                "propagator_growth": 0.0,
+            }
             count = 0
             for raw in loaders["train"]:
-                batch = _move(raw, selected)
+                batch = _move_rollout(raw, selected) if stabilized else _move(raw, selected)
                 optimizer.zero_grad(set_to_none=True)
                 autocast = (
                     torch.autocast(device_type="cuda", dtype=amp_dtype)
@@ -381,14 +578,27 @@ def train_v0_9(
                     else nullcontext()
                 )
                 with autocast:
-                    loss, terms = _loss_bundle(
-                        model,
-                        batch,
-                        residual_scale,
-                        condition_mean,
-                        condition_std,
-                        resolved,
-                    )
+                    if stabilized:
+                        loss, terms = _stabilized_loss_bundle(
+                            model,
+                            batch,
+                            residual_scale,
+                            condition_mean,
+                            condition_std,
+                            resolved,
+                            epoch,
+                            physical,
+                            validation=False,
+                        )
+                    else:
+                        loss, terms = _loss_bundle(
+                            model,
+                            batch,
+                            residual_scale,
+                            condition_mean,
+                            condition_std,
+                            resolved,
+                        )
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
@@ -396,33 +606,68 @@ def train_v0_9(
                 )
                 scaler.step(optimizer)
                 scaler.update()
-                batch_count = batch["target_next"].shape[0]
+                batch_count = (
+                    batch["target_latents"].shape[0]
+                    if stabilized
+                    else batch["target_next"].shape[0]
+                )
                 sums["total"] += float(loss.detach()) * batch_count
                 sums["forecast"] += float(terms["forecast"].detach()) * batch_count
+                for name in ("rollout", "physics", "propagator_growth"):
+                    if name in terms:
+                        sums[name] += float(terms[name].detach()) * batch_count
                 count += batch_count
                 global_step += 1
                 optimizer_update_step += 1
             scheduler.step()
-            validation = _evaluate(
-                model,
-                loaders["validation"],
-                residual_scale,
-                condition_mean,
-                condition_std,
-                resolved,
-                selected,
+            validation = (
+                _evaluate_stabilized(
+                    model,
+                    loaders["validation"],
+                    residual_scale,
+                    condition_mean,
+                    condition_std,
+                    resolved,
+                    physical,
+                    selected,
+                )
+                if stabilized
+                else _evaluate(
+                    model,
+                    loaders["validation"],
+                    residual_scale,
+                    condition_mean,
+                    condition_std,
+                    resolved,
+                    selected,
+                )
             )
-            writer.writerow(
-                {
-                    "epoch": epoch + 1,
-                    "train_total": sums["total"] / count,
-                    "train_forecast": sums["forecast"] / count,
-                    "validation_total": validation["total"],
-                    "validation_forecast": validation["forecast"],
-                    "validation_burden": validation["burden"],
-                    "validation_stability": validation["stability"],
-                }
-            )
+            row: dict[str, Any] = {
+                "epoch": epoch + 1,
+                "active_horizons": ";".join(str(value) for value in state.active_horizons),
+                "physics_scale": state.physics_scale,
+                "train_total": sums["total"] / count,
+                "train_forecast": sums["forecast"] / count,
+                "train_rollout": sums["rollout"] / count,
+                "train_physics": sums["physics"] / count,
+                "train_propagator_growth": sums["propagator_growth"] / count,
+                "validation_total": validation["total"],
+                "validation_forecast": validation["forecast"],
+                "validation_rollout": validation.get("rollout", 0.0),
+                "validation_physics": validation.get("physics", 0.0),
+                "validation_burden": validation["burden"],
+                "validation_burden_max": validation.get("burden_max", 0.0),
+                "validation_stability": validation["stability"],
+                "validation_propagator_growth": validation.get(
+                    "propagator_growth", 0.0
+                ),
+                "validation_gate_mean": validation.get("gate_mean", 1.0),
+            }
+            for horizon in resolved.v0_9_training.rollout_horizons:
+                row[f"validation_rollout_gain_h{horizon}"] = validation.get(
+                    f"rollout_gain_h{horizon}", ""
+                )
+            writer.writerow(row)
             stream.flush()
             score = validation["total"]
             if score < best_score:
@@ -437,19 +682,35 @@ def train_v0_9(
                 stale += 1
             completed = epoch + 1
             save_adaptive_checkpoint(checkpoint_payload(completed), latest)
-            if stale >= resolved.v0_9_training.patience:
+            if (
+                epoch >= final_curriculum_start_epoch
+                and stale >= resolved.v0_9_training.patience
+            ):
                 break
     if best_state is None:
         raise RuntimeError("V0.9 training produced no validation checkpoint")
     model.operator_adapter.load_state_dict(best_state, strict=True)
-    validation = _evaluate(
-        model,
-        loaders["validation"],
-        residual_scale,
-        condition_mean,
-        condition_std,
-        resolved,
-        selected,
+    validation = (
+        _evaluate_stabilized(
+            model,
+            loaders["validation"],
+            residual_scale,
+            condition_mean,
+            condition_std,
+            resolved,
+            physical,
+            selected,
+        )
+        if stabilized
+        else _evaluate(
+            model,
+            loaders["validation"],
+            residual_scale,
+            condition_mean,
+            condition_std,
+            resolved,
+            selected,
+        )
     )
     summary = {
         "status": "PASS",
@@ -464,6 +725,21 @@ def train_v0_9(
             "A0_frozen": True,
             "additive_residual_enabled": False,
             "persistent_z_R_present": False,
+            "closed_loop_curriculum": stabilized,
+            "bounded_coordinates": resolved.v0_9_adaptive.bounded_coordinates,
+            "trust_gate": resolved.v0_9_adaptive.trust_gate,
+            "frozen_decoder_physics": resolved.v0_9_training.lambda_physics > 0,
+        },
+        "curriculum": {
+            "rollout_horizons": list(resolved.v0_9_training.rollout_horizons),
+            "rollout_start_fractions": list(
+                resolved.v0_9_training.rollout_start_fractions
+            ),
+            "rollout_stride": resolved.v0_9_training.rollout_stride,
+            "physics_start_fraction": resolved.v0_9_training.physics_start_fraction,
+            "physics_ramp_duration_fraction": (
+                resolved.v0_9_training.physics_ramp_duration_fraction
+            ),
         },
     }
     (destination / "evaluation" / "training_summary.json").write_text(
@@ -471,7 +747,8 @@ def train_v0_9(
     )
     print(
         f"[V0.9][train:{resolved.v0_9_adaptive.condition_mode}] PASS "
-        f"validation_forecast={validation['forecast']:.6g} test=LOCKED",
+        f"validation_forecast={validation['forecast']:.6g} "
+        f"validation_total={validation['total']:.6g} test=LOCKED",
         flush=True,
     )
     return V09TrainingResult(

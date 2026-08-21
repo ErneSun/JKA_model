@@ -2,6 +2,12 @@
 
 ## 0.9.0 — Context-conditioned low-rank adaptive Koopman dynamics
 
+- Added a post-baseline stabilization revision after the first GPU science result showed
+  short-horizon gains but H32/H80 and decoded-physics degradation.
+- Added bounded adaptive coordinates, a learned trust gate, H4/H8/H16/H32 teacher-free
+  curriculum, relative-nominal propagator growth, and frozen-decoder raw-unit physical anchors.
+- Constrained validation rank selection by longest-curriculum gain and operator burden, retained
+  exact legacy checkpoint verification, and preserved the failed baseline as immutable evidence.
 - Added smooth and abrupt time-varying cylinder-wake conditions with trajectory-level
   stratification, physical/numerical dataset gates, and explicit condition visibility.
 - Kept the accepted V0.8 context and backbone frozen while training only

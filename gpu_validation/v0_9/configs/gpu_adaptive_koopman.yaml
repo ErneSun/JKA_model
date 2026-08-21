@@ -19,8 +19,49 @@ v0_8_context: {family: auto, context_dim: 8, history_length: 8, width: 64, layer
 v0_8_training: {epochs: 80, batch_size: 256, learning_rate: 0.001, weight_decay: 0.00001, lambda_adequacy: 0.2, gradient_clip_norm: 1.0, patience: 16, precision: amp_bf16, context_initialization_seed: 401}
 v0_8_evaluation: {rollout_horizons: [8, 16, 32, 80], material_relative_gain: 0.02, min_context_effective_rank: 2.0, max_closure_burden: 0.25, max_physics_degradation: 0.10, max_divergence_mse: 0.02, max_boundary_mse: 0.05, seed_consistency_fraction: 0.6666666666666666, context_initialization_seeds: [401, 503, 607]}
 v0_9_condition: {schedule_types: [smooth, abrupt], reynolds_low: 80.0, reynolds_high: 120.0, transition_start_fraction: 0.35, smooth_duration_fraction: 0.25, known_condition_features: [reynolds_number, u_infinity]}
-v0_9_adaptive: {condition_mode: latent_inferred, rank: 4, rank_candidates: [1, 2, 4, 8], width: 64, condition_embedding_dim: 4, normalize_factors: true, zero_output_initialization: true}
-v0_9_training: {epochs: 80, batch_size: 256, learning_rate: 0.0005, weight_decay: 0.00001, lambda_operator_burden: 0.001, lambda_smooth: 0.001, lambda_stability: 0.001, gradient_clip_norm: 1.0, patience: 16, precision: amp_bf16, operator_initialization_seed: 701}
+v0_9_adaptive:
+  condition_mode: latent_inferred
+  rank: 8
+  rank_candidates: [2, 4, 8, 12]
+  width: 64
+  condition_embedding_dim: 4
+  normalize_factors: true
+  zero_output_initialization: true
+  bounded_coordinates: true
+  eta_max: 0.35
+  trust_gate: true
+  trust_gate_bias: -1.3862943611198906
+v0_9_training:
+  epochs: 80
+  batch_size: 256
+  rollout_batch_size: 32
+  rollout_stride: 4
+  learning_rate: 0.0005
+  weight_decay: 0.00001
+  lambda_operator_burden: 0.01
+  lambda_smooth: 0.001
+  lambda_stability: 0.02
+  rollout_horizons: [4, 8, 16, 32]
+  rollout_start_fractions: [0.0, 0.2, 0.45, 0.7]
+  rollout_weights: [0.7, 0.6, 0.4, 0.25]
+  lambda_rollout: 1.0
+  lambda_propagator_growth: 0.05
+  propagator_growth_margin: 0.02
+  operator_burden_target: 0.35
+  physics_start_fraction: 0.35
+  physics_ramp_duration_fraction: 0.25
+  physics_horizon: 8
+  physics_batch_size: 4
+  lambda_physics: 0.05
+  physics_velocity_weight: 1.0
+  physics_vorticity_weight: 0.2
+  physics_divergence_weight: 0.5
+  physics_boundary_weight: 0.2
+  rank_sweep_epochs: 40
+  gradient_clip_norm: 1.0
+  patience: 16
+  precision: amp_bf16
+  operator_initialization_seed: 701
 v0_9_evaluation: {rollout_horizons: [8, 16, 32, 80], material_relative_gain: 0.02, min_operator_explained_fraction: 0.02, max_operator_burden: 0.50, max_physics_degradation: 0.10, max_divergence_mse: 0.02, max_boundary_mse: 0.05, scientific_seed_fraction: 0.6666666666666666, v1_0_readiness_fraction: 1.0, operator_initialization_seeds: [701, 809, 907]}
 project_version: 0.9.0
 tags: [v0.9, gpu-full, cylinder-wake, controlled-inlet, adaptive-koopman, rtx-5080]

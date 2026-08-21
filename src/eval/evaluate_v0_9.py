@@ -155,9 +155,10 @@ def evaluate_v0_9(
         parameters = raw["context_parameters"].to(selected).float()
         truth = raw["target_next"].to(selected).float()
         condition = _normalized_condition(raw["condition"], payload, mode, selected)
-        prediction, _, eta, delta, adapted_a = model(
+        prediction, context, eta, delta, adapted_a = model(
             history_z, history_dts, next_dt, parameters, condition
         )
+        gate = model.operator_adapter.adaptation_gate(context, condition)
         nominal_transition = torch.linalg.matrix_exp(
             nominal_a.unsqueeze(0) * next_dt.reshape(-1, 1, 1)
         )
@@ -191,6 +192,7 @@ def evaluate_v0_9(
                     "operator_burden": float(burdens[index]),
                     "symmetric_abscissa_proxy": float(proxy[index]),
                     "eta_norm": float(eta[index].norm()),
+                    "trust_gate": float(gate[index, 0]),
                 }
             )
     gamma = float(
@@ -260,6 +262,8 @@ def evaluate_v0_9(
                     **metrics,
                     "operator_burden_mean": float(burden_curve.mean()),
                     "operator_burden_max": float(burden_curve.max()),
+                    "trust_gate_mean": float(bundle["gate"].mean()),
+                    "trust_gate_max": float(bundle["gate"].max()),
                     "finite": bool(torch.isfinite(bundle["adapted"]).all()),
                 }
             )

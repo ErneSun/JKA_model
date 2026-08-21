@@ -6,6 +6,7 @@ from pathlib import Path
 
 from gpu_validation.v0_9.scripts.gpu_validate_all import (
     dirty_source_paths,
+    select_validation_rank,
     strict_v0_8_handoff_fields_present,
     validate_completion_payload,
 )
@@ -27,11 +28,52 @@ def test_v09_config_and_revision_id_contract(tmp_path: Path) -> None:
     assert config.project_version == "0.9.0"
     assert config.training.stage.value == "adaptive"
     assert config.cylinder_wake_2d is not None and config.cylinder_wake_2d.time_varying_boundary
-    assert config.v0_9_adaptive is not None and config.v0_9_adaptive.rank == 4
+    assert config.v0_9_adaptive is not None
+    assert config.v0_9_adaptive.rank == 8
+    assert config.v0_9_adaptive.rank_candidates == (2, 4, 8, 12)
+    assert config.v0_9_adaptive.bounded_coordinates
+    assert config.v0_9_adaptive.trust_gate
+    assert config.v0_9_training is not None
+    assert config.v0_9_training.rollout_horizons == (4, 8, 16, 32)
     first = create_versioned_session(tmp_path, "v09-test")
     second = create_versioned_session(tmp_path, "v09-test")
     assert first.resolved_id == "v09-test"
     assert second.resolved_id == "v09-test-r1"
+
+
+def test_rank_selection_enforces_long_horizon_and_burden_before_parsimony() -> None:
+    selected = select_validation_rank(
+        {
+            2: [
+                {"total": 1.0, "rollout_gain_h32": 0.03, "burden_max": 0.2},
+                {"total": 1.01, "rollout_gain_h32": 0.02, "burden_max": 0.25},
+            ],
+            4: [
+                {"total": 0.8, "rollout_gain_h32": -0.1, "burden_max": 0.2},
+                {"total": 0.81, "rollout_gain_h32": -0.08, "burden_max": 0.2},
+            ],
+            8: [
+                {"total": 0.7, "rollout_gain_h32": 0.1, "burden_max": 0.6},
+                {"total": 0.71, "rollout_gain_h32": 0.1, "burden_max": 0.55},
+            ],
+        },
+        longest_horizon=32,
+        burden_limit=0.35,
+    )
+    assert selected["constraint_eligible_ranks"] == [2]
+    assert selected["selected_rank"] == 2
+    assert selected["constraints_satisfied"]
+
+    fallback = select_validation_rank(
+        {
+            2: [{"total": 1.0, "rollout_gain_h32": -0.1, "burden_max": 0.2}],
+            4: [{"total": 0.9, "rollout_gain_h32": -0.1, "burden_max": 0.2}],
+        },
+        longest_horizon=32,
+        burden_limit=0.35,
+    )
+    assert fallback["selected_rank"] == 4
+    assert not fallback["constraints_satisfied"]
 
 
 def test_v08_handoff_requires_three_jointly_passing_backbones(tmp_path: Path) -> None:

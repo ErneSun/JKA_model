@@ -1,16 +1,23 @@
-# V0.9 scientific report
+# V0.9 scientific report index
 
-PHYSICAL PROBLEM: cylinder_wake_2d controlled inlet  
-V0.8 STRICT READINESS: PENDING FORMAL HANDOFF  
-V0.8 ROUTE: PENDING  
-CONTEXT FAMILY: PENDING  
-VARIABLE-CONDITION DATA: PENDING GPU VALIDATION  
-KNOWN-CONDITION ADAPTATION: INCONCLUSIVE  
-LATENT-INFERRED ADAPTATION: INCONCLUSIVE  
-LOW-RANK OPERATOR ADAPTATION: INCONCLUSIVE  
-OPERATOR-EXPLAINED RESIDUAL: INCONCLUSIVE  
-LONG-ROLLOUT STABILITY: INCONCLUSIVE  
-PHYSICS STATUS: INCONCLUSIVE  
-V1.0 READINESS: INCONCLUSIVE
+## Preserved baseline evidence
 
-本文件是本地实现状态，不是正式科学结论。GPU workflow 完成后，compact result 中的报告为审阅依据。
+Session: `v09-full-20260821T033247Z`
+
+- Workflow: PASS
+- Evidence tier: EXPLORATORY_CONDITIONAL
+- Low-rank operator adaptation: NOT_SUPPORTED
+- Long-rollout stability: FAIL
+- Physics: FAIL
+- Selected rank: 8 (old maximum candidate)
+V1.0 readiness: NOT_READY
+
+The authoritative immutable report is
+`gpu_validation/v0_9/results/v09-full-20260821T033247Z/report.md`.
+
+## Stabilization revision
+
+Software status: IMPLEMENTED; 20 targeted local tests and targeted Ruff checks PASS.
+
+Formal GPU science: PENDING A NEW VALIDATION ID.
+Scientific support and V1.0 readiness remain unclaimed until that result is returned.

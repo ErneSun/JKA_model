@@ -1,6 +1,11 @@
 # V0.9 status
 
-Implementation status: **SOFTWARE IMPLEMENTED; FORMAL GPU SCIENCE PENDING**.
+Implementation status: **STABILIZATION REVISION IMPLEMENTED; NEW FORMAL GPU SCIENCE PENDING**.
+
+Local targeted status: **PASS (20 tests plus targeted Ruff checks)**.
+
+首次完整 GPU session `v09-full-20260821T033247Z` 的 workflow 为 PASS，但 scientific mechanism 为
+`NOT_SUPPORTED`：短期改善，H32/H80 与 physics 退化，selected rank 达到旧候选上限 8。该证据不会被覆盖。
 
 已实现：
 
@@ -9,7 +14,11 @@ Implementation status: **SOFTWARE IMPLEMENTED; FORMAL GPU SCIENCE PENDING**.
 - frozen-context low-rank adaptive generator；
 - known/latent condition separation；
 - exact resume；
+- bounded coordinates、learned trust gate 和 H4/H8/H16/H32 teacher-free curriculum；
+- relative nominal propagator-growth 与 frozen-decoder raw-unit physical objective；
+- long-horizon/burden constrained rank selection；
 - one-step/rollout/physical/operator evaluation；
 - nested aggregation、compact report 与单命令 GPU workflow。
 
-尚未声明：adaptive Koopman scientifically supported、V1.0 ready。两项只能由正式 RTX 5080 返回结果决定。
+尚未声明：修订后的 adaptive Koopman scientifically supported、V1.0 ready。两项只能由新 ID 的正式 RTX 5080
+结果决定。

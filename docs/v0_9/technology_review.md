@@ -12,11 +12,13 @@
 - **Long-rollout stability evaluation**：稳定约束可能改善长期预测，但本项目不把严格收缩强加给振荡 wake；采用
   burden/proxy diagnostics 加真实 rollout/physics gate。参考 Mamakoukas, Abraham & Murphey, 2020,
   <https://arxiv.org/abs/2005.04291>。
+- **Teacher-free rollout curriculum 与 relative propagator growth**：首次 GPU 失败基线证明 one-step objective
+  不足，因此修订版采用逐步增长的闭环 horizon，并只惩罚相对 `A0` 的额外传播放大。
+- **Bounded coordinates、trust gate 与 frozen-decoder physics**：限制 operator correction 的幅度和使用时机，
+  并在不解冻 decoder 的前提下把 latent correction 锚定到 raw-unit velocity/vorticity/divergence/no-slip。
 
 ## OPTIONAL
 
-- validation-selected rollout training；
-- explicit trust/fallback gate；
 - Mixture-of-Koopman for confirmed discrete regimes；
 - parametric DMD/operator interpolation baseline，参考 <https://arxiv.org/abs/2204.12006>。
 

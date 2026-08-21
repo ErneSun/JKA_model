@@ -4,7 +4,8 @@
 
 \[
 z_t=E_\theta(U_t),\qquad c_t=\Phi_{0.8}(z_{t-H:t}),\qquad
-\eta_t=G_\omega(c_t).
+q_t=G_\omega(c_t),\qquad
+\eta_t=\sigma(h_\omega(c_t))\eta_{max}\tanh(q_t).
 \]
 
 唯一主预测方程为
@@ -14,8 +15,9 @@ A_t=A_0+U\operatorname{diag}(\eta_t)V^\top,\qquad
 \hat z_{t+1}=e^{A_t\Delta t_t}z_t.
 \]
 
-`eta` 输出层为零初始化，因此初始化严格退化为 `A_t=A0`。主链没有 `+ r_hat`，也没有 persistent
-`z_R`。低秩要求 `r < d_K`，默认候选为 `{1,2,4,8}`，只使用 validation 选择。
+`eta` 输出层为零初始化，因此初始化严格退化为 `A_t=A0`。gate 初值约为 0.2，但不会破坏该等价性。
+主链没有 `+ r_hat`，也没有 persistent `z_R`。低秩要求 `r < d_K`，修订候选为 `{2,4,8,12}`，
+只使用 validation 选择。
 
 残差分解固定为
 

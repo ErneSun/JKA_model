@@ -4,8 +4,15 @@ from dataclasses import replace
 
 import torch
 
-from jka_model.config import CylinderWake2DConfig, V09ConditionConfig
+from jka_model.adaptive import FrozenCylinderPhysics
+from jka_model.config import (
+    CylinderWake2DConfig,
+    V09ConditionConfig,
+    V09TrainingConfig,
+    load_config,
+)
 from jka_model.data import (
+    ChannelStandardizer,
     cylinder_condition_schedule,
     generate_v0_9_cylinder_wake_trajectories,
     validate_v0_9_cylinder_wake_dataset,
@@ -67,3 +74,44 @@ def test_v08_configuration_still_forbids_time_varying_boundary() -> None:
     cylinder, _ = _small()
     fixed = replace(cylinder, time_varying_boundary=False)
     assert not fixed.time_varying_boundary
+
+
+def test_frozen_decoder_physics_is_differentiable_only_through_latent_state() -> None:
+    config = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml")
+    assert config.cylinder_wake_2d
+    cylinder = config.cylinder_wake_2d
+
+    class ReshapeDecoder(torch.nn.Module):
+        def decode(self, latent: torch.Tensor) -> torch.Tensor:
+            return latent.reshape(-1, 3, cylinder.nx, cylinder.ny)
+
+    decoder = ReshapeDecoder()
+    normalizer = ChannelStandardizer(eps=1e-6)
+    normalizer.load_state_dict(
+        {
+            "kind": "channel_standardizer",
+            "eps": 1e-6,
+            "mean": torch.zeros(3),
+            "scale": torch.ones(3),
+            "spatial_dim": 2,
+            "layout": "channels_first",
+            "fitted_trajectory_ids": ["synthetic"],
+        }
+    )
+    physics = FrozenCylinderPhysics(decoder, normalizer, {}, config, torch.device("cpu"))  # type: ignore[arg-type]
+    latent = torch.randn(2, 3 * cylinder.nx * cylinder.ny, requires_grad=True)
+    target = torch.randn(2, 3, cylinder.nx, cylinder.ny)
+    valid = torch.ones(2, cylinder.nx, cylinder.ny, dtype=torch.bool)
+    x_center, y_center = cylinder.nx // 2, cylinder.ny // 2
+    valid[:, x_center - 2 : x_center + 2, y_center - 2 : y_center + 2] = False
+    result = physics.loss(latent, target, valid, V09TrainingConfig())
+    assert torch.isfinite(result.total)
+    assert set(result.terms) == {
+        "physics_velocity",
+        "physics_vorticity",
+        "physics_divergence",
+        "physics_boundary",
+    }
+    result.total.backward()
+    assert latent.grad is not None and torch.isfinite(latent.grad).all()
+    assert not tuple(decoder.parameters())

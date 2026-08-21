@@ -39,6 +39,9 @@ class LowRankAdaptiveOperator(nn.Module):
         self.rank = config.rank
         self.condition_mode = config.condition_mode
         self.normalize_factors = config.normalize_factors
+        self.bounded_coordinates = config.bounded_coordinates
+        self.eta_max = config.eta_max
+        self.trust_gate_enabled = config.trust_gate
         self.register_buffer("nominal_generator", nominal_generator.detach().float().clone())
 
         generator = torch.Generator(device="cpu").manual_seed(1729 + config.rank)
@@ -64,13 +67,20 @@ class LowRankAdaptiveOperator(nn.Module):
             nn.SiLU(),
             output,
         )
+        if config.trust_gate:
+            gate = nn.Linear(head_input, 1)
+            nn.init.zeros_(gate.weight)
+            nn.init.constant_(gate.bias, config.trust_gate_bias)
+            self.trust_gate_head: nn.Module | None = gate
+        else:
+            self.trust_gate_head = None
 
     def factors(self) -> tuple[Tensor, Tensor]:
         if not self.normalize_factors:
             return self.left_factor, self.right_factor
         return F.normalize(self.left_factor, dim=0), F.normalize(self.right_factor, dim=0)
 
-    def coordinates(self, context: Tensor, condition: Tensor | None = None) -> Tensor:
+    def _features(self, context: Tensor, condition: Tensor | None = None) -> Tensor:
         if context.ndim != 2 or context.shape[1] != self.context_dim:
             raise ValueError("context must have shape [B,d_c]")
         if self.condition_mode == "known":
@@ -83,15 +93,44 @@ class LowRankAdaptiveOperator(nn.Module):
             inputs = context
         if not torch.isfinite(inputs).all():
             raise ValueError("adaptive-operator inputs must be finite")
-        return self.operator_coordinate_head(inputs)
+        return inputs
+
+    def adaptation_parameters(
+        self, context: Tensor, condition: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]:
+        features = self._features(context, condition)
+        raw = self.operator_coordinate_head(features)
+        coordinates = self.eta_max * torch.tanh(raw) if self.bounded_coordinates else raw
+        gate = (
+            torch.sigmoid(self.trust_gate_head(features))
+            if self.trust_gate_head is not None
+            else torch.ones(
+                (context.shape[0], 1), device=context.device, dtype=context.dtype
+            )
+        )
+        return coordinates * gate, gate
+
+    def coordinates(self, context: Tensor, condition: Tensor | None = None) -> Tensor:
+        coordinates, _ = self.adaptation_parameters(context, condition)
+        return coordinates
+
+    def adaptation_gate(self, context: Tensor, condition: Tensor | None = None) -> Tensor:
+        _, gate = self.adaptation_parameters(context, condition)
+        return gate
+
+    def generator_with_gate(
+        self, context: Tensor, condition: Tensor | None = None
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        eta, gate = self.adaptation_parameters(context, condition)
+        left, right = self.factors()
+        delta = torch.einsum("ir,br,jr->bij", left, eta, right)
+        adapted = self.nominal_generator.unsqueeze(0) + delta
+        return eta, gate, delta, adapted
 
     def generator(
         self, context: Tensor, condition: Tensor | None = None
     ) -> tuple[Tensor, Tensor, Tensor]:
-        eta = self.coordinates(context, condition)
-        left, right = self.factors()
-        delta = torch.einsum("ir,br,jr->bij", left, eta, right)
-        adapted = self.nominal_generator.unsqueeze(0) + delta
+        eta, _, delta, adapted = self.generator_with_gate(context, condition)
         return eta, delta, adapted
 
     def step(
@@ -105,11 +144,27 @@ class LowRankAdaptiveOperator(nn.Module):
             raise ValueError("z must have shape [B,d_K]")
         if dt.shape not in {(z.shape[0],), (z.shape[0], 1)} or torch.any(dt <= 0):
             raise ValueError("dt must be positive with shape [B] or [B,1]")
-        eta, delta, adapted = self.generator(context, condition)
+        prediction, eta, _, delta, adapted = self.step_with_gate(
+            z, context, dt, condition
+        )
+        return prediction, eta, delta, adapted
+
+    def step_with_gate(
+        self,
+        z: Tensor,
+        context: Tensor,
+        dt: Tensor,
+        condition: Tensor | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        if z.ndim != 2 or z.shape[1] != self.latent_dim:
+            raise ValueError("z must have shape [B,d_K]")
+        if dt.shape not in {(z.shape[0],), (z.shape[0], 1)} or torch.any(dt <= 0):
+            raise ValueError("dt must be positive with shape [B] or [B,1]")
+        eta, gate, delta, adapted = self.generator_with_gate(context, condition)
         with torch.autocast(device_type=z.device.type, enabled=False):
             transition = torch.linalg.matrix_exp(adapted.float() * dt.reshape(-1, 1, 1).float())
             prediction = torch.einsum("bij,bj->bi", transition, z.float())
-        return prediction, eta, delta, adapted
+        return prediction, eta, gate, delta, adapted
 
     def orthogonality_loss(self) -> Tensor:
         left, right = self.factors()
@@ -176,7 +231,7 @@ def operator_burden(delta: Tensor, nominal_generator: Tensor) -> Tensor:
 
 def symmetric_abscissa_proxy(generator: Tensor) -> Tensor:
     """Largest eigenvalue of the symmetric part; a growth-bound diagnostic, not causality."""
-    if generator.ndim not in {2, 3} or generator.shape[-1] != generator.shape[-2]:
-        raise ValueError("generator must be square or batched square")
+    if generator.ndim < 2 or generator.shape[-1] != generator.shape[-2]:
+        raise ValueError("generator must have square trailing dimensions")
     symmetric = 0.5 * (generator + generator.transpose(-1, -2))
     return torch.linalg.eigvalsh(symmetric)[..., -1]

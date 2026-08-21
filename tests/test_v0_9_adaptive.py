@@ -11,11 +11,23 @@ from jka_model.adaptive import (
     AdaptiveTrajectory,
     LowRankAdaptiveOperator,
     adaptive_latent_rollout,
+    adaptive_stabilization_objective,
+    curriculum_state,
+    differentiable_adaptive_rollout,
+    load_adaptive_checkpoint,
     operator_explained_fraction,
+    relative_propagator_growth_loss,
     residual_decomposition,
     save_adaptive_cache,
 )
-from jka_model.config import ProjectConfig, V08ContextConfig, V09AdaptiveConfig, load_config
+from jka_model.config import (
+    ProjectConfig,
+    V08ContextConfig,
+    V09AdaptiveConfig,
+    V09TrainingConfig,
+    load_config,
+    stable_config_hash,
+)
 from jka_model.context import build_dynamic_context_model
 from jka_model.residual import ResidualCache, ResidualTrajectory
 from jka_model.residual.cache import file_sha256, save_residual_cache
@@ -89,6 +101,133 @@ def test_known_and_latent_condition_visibility_is_strict() -> None:
         assert "forbids" in str(error)
     else:
         raise AssertionError("latent mode accepted condition leakage")
+
+
+def test_bounded_coordinates_and_trust_gate_preserve_exact_nominal_initialization() -> None:
+    adapter = LowRankAdaptiveOperator(
+        torch.zeros(6, 6),
+        4,
+        V09AdaptiveConfig(
+            rank=2,
+            rank_candidates=(1, 2),
+            width=8,
+            bounded_coordinates=True,
+            eta_max=0.2,
+            trust_gate=True,
+        ),
+    )
+    context = torch.randn(3, 4)
+    eta, gate = adapter.adaptation_parameters(context)
+    assert torch.equal(eta, torch.zeros_like(eta))
+    assert torch.allclose(gate, torch.full_like(gate, 0.2), atol=1e-6)
+    with torch.no_grad():
+        adapter.operator_coordinate_head[-1].bias.fill_(20.0)
+    bounded, _ = adapter.adaptation_parameters(context)
+    assert torch.all(bounded.abs() <= 0.2 + 1e-7)
+
+
+def test_rollout_curriculum_and_relative_growth_contract() -> None:
+    config = V09TrainingConfig(
+        epochs=11,
+        rollout_horizons=(4, 8, 16),
+        rollout_start_fractions=(0.0, 0.5, 0.8),
+        rollout_weights=(1.0, 0.5, 0.25),
+        lambda_rollout=1.0,
+        lambda_physics=0.1,
+        physics_start_fraction=0.5,
+        physics_ramp_duration_fraction=0.25,
+        physics_horizon=8,
+    )
+    assert curriculum_state(config, 0).active_horizons == (4,)
+    middle = curriculum_state(config, 5)
+    assert middle.active_horizons == (4, 8)
+    assert middle.physics_scale == 0.0
+    assert curriculum_state(config, 6).physics_scale > 0.0
+    assert curriculum_state(config, 8).physics_scale == 1.0
+    final = curriculum_state(config, 10, validation=True)
+    assert final.active_horizons == (4, 8, 16)
+    assert final.physics_scale == 1.0
+
+    nominal = torch.zeros(2, 2)
+    dts = torch.full((1, 2), 0.1)
+    assert relative_propagator_growth_loss(
+        nominal.expand(1, 2, 2, 2), nominal, dts, margin=0.0
+    ) == 0
+    amplified = torch.eye(2).reshape(1, 1, 2, 2).expand(1, 2, 2, 2)
+    assert relative_propagator_growth_loss(amplified, nominal, dts, margin=0.0) > 0
+
+
+def test_closed_loop_rollout_retains_adapter_gradients() -> None:
+    model = AdaptiveKoopmanModel(
+        _context(),
+        LowRankAdaptiveOperator(
+            torch.zeros(6, 6),
+            4,
+            V09AdaptiveConfig(rank=2, rank_candidates=(1, 2), width=8),
+        ),
+    )
+    rollout = differentiable_adaptive_rollout(
+        model,
+        torch.randn(2, 3, 6),
+        torch.full((2, 2), 0.1),
+        torch.full((2, 4), 0.1),
+        torch.randn(2, 3),
+        None,
+    )
+    rollout["adapted"][:, -1].square().mean().backward()
+    gradient = model.operator_adapter.operator_coordinate_head[-1].weight.grad
+    assert gradient is not None and torch.isfinite(gradient).all()
+    assert not any(parameter.grad is not None for parameter in model.context_encoder.parameters())
+
+
+def test_complete_stabilization_objective_is_finite_and_differentiable() -> None:
+    model = AdaptiveKoopmanModel(
+        _context(),
+        LowRankAdaptiveOperator(
+            -0.01 * torch.eye(6),
+            4,
+            V09AdaptiveConfig(
+                rank=2,
+                rank_candidates=(1, 2),
+                width=8,
+                bounded_coordinates=True,
+                trust_gate=True,
+            ),
+        ),
+    )
+    training = V09TrainingConfig(
+        epochs=2,
+        rollout_horizons=(2, 4),
+        rollout_start_fractions=(0.0, 0.5),
+        rollout_weights=(1.0, 0.5),
+        lambda_rollout=1.0,
+        lambda_propagator_growth=0.1,
+        physics_horizon=1,
+    )
+    batch = {
+        "history_z": torch.randn(2, 3, 6),
+        "history_dts": torch.full((2, 2), 0.1),
+        "future_dts": torch.full((2, 4), 0.1),
+        "future_conditions": torch.zeros(2, 4, 2),
+        "target_latents": torch.randn(2, 4, 6),
+        "context_parameters": torch.randn(2, 3),
+    }
+    result = adaptive_stabilization_objective(
+        model,
+        batch,
+        torch.ones(6),
+        torch.zeros(2),
+        torch.ones(2),
+        training,
+        "latent_inferred",
+        curriculum_state(training, 1),
+        torch.tensor([True, False]),
+    )
+    assert torch.isfinite(result.total)
+    assert "rollout_gain_h4" in result.terms
+    result.total.backward()
+    gradient = model.operator_adapter.operator_coordinate_head[-1].weight.grad
+    assert gradient is not None and torch.isfinite(gradient).all()
 
 
 def test_residual_decomposition_and_gamma_operator_contract() -> None:
@@ -221,10 +360,29 @@ def test_v0_9_operator_only_training_writes_reloadable_checkpoint(tmp_path: Path
         v0_8.v0_8_context.to_dict() if v0_8.v0_8_context else None
     )
     payload["v0_9_adaptive"].update(
-        {"rank": 2, "rank_candidates": [1, 2, 4], "width": 8}
+        {
+            "rank": 2,
+            "rank_candidates": [1, 2, 4],
+            "width": 8,
+            "bounded_coordinates": False,
+            "trust_gate": False,
+        }
     )
     payload["v0_9_training"].update(
-        {"epochs": 1, "batch_size": 8, "patience": 1, "precision": "fp32"}
+        {
+            "epochs": 1,
+            "batch_size": 8,
+            "rollout_batch_size": 4,
+            "patience": 1,
+            "precision": "fp32",
+            "rollout_horizons": [2, 4],
+            "rollout_start_fractions": [0.0, 0.0],
+            "rollout_weights": [1.0, 0.5],
+            "lambda_rollout": 1.0,
+            "lambda_propagator_growth": 0.1,
+            "physics_horizon": 1,
+            "lambda_physics": 0.0,
+        }
     )
     config = ProjectConfig.from_dict(payload)
     result = train_v0_9(
@@ -240,3 +398,34 @@ def test_v0_9_operator_only_training_writes_reloadable_checkpoint(tmp_path: Path
     saved = torch.load(result.best_checkpoint, map_location="cpu", weights_only=False)
     assert saved["train_stage"] == "adaptive"
     assert saved["adaptive_cache_fingerprint"] == adaptive_cache.fingerprint
+
+    legacy_config = saved["config"]
+    for name in ("bounded_coordinates", "eta_max", "trust_gate", "trust_gate_bias"):
+        legacy_config["v0_9_adaptive"].pop(name)
+    for name in (
+        "rollout_horizons",
+        "rollout_start_fractions",
+        "rollout_weights",
+        "rollout_batch_size",
+        "rollout_stride",
+        "lambda_rollout",
+        "lambda_propagator_growth",
+        "propagator_growth_margin",
+        "operator_burden_target",
+        "physics_start_fraction",
+        "physics_ramp_duration_fraction",
+        "physics_horizon",
+        "physics_batch_size",
+        "lambda_physics",
+        "physics_velocity_weight",
+        "physics_vorticity_weight",
+        "physics_divergence_weight",
+        "physics_boundary_weight",
+        "rank_sweep_epochs",
+    ):
+        legacy_config["v0_9_training"].pop(name)
+    saved["config_hash"] = stable_config_hash(legacy_config)
+    legacy_path = tmp_path / "legacy_v0_9.pt"
+    torch.save(saved, legacy_path)
+    reloaded = load_adaptive_checkpoint(legacy_path)
+    assert reloaded["config"]["v0_9_training"]["rollout_stride"] == 1

@@ -34,18 +34,18 @@ def adaptive_latent_rollout(
     nominal_states = [latent_buffer[:, -1]]
     nominal_current = latent_buffer[:, -1]
     etas: list[Tensor] = []
+    gates: list[Tensor] = []
     deltas: list[Tensor] = []
     generators: list[Tensor] = []
     nominal = model.operator_adapter.nominal_generator
     for index in range(future_dts.shape[1]):
         next_dt = future_dts[:, index : index + 1]
         current_condition = None if conditions is None else conditions[:, index]
-        prediction, _, eta, delta, adapted = model(
-            latent_buffer,
-            dt_buffer,
-            next_dt,
-            context_parameters,
-            current_condition,
+        context = model.context_encoder(
+            latent_buffer, dt_buffer, next_dt, context_parameters
+        )
+        prediction, eta, gate, delta, adapted = model.operator_adapter.step_with_gate(
+            latent_buffer[:, -1], context, next_dt, current_condition
         )
         with torch.autocast(device_type=prediction.device.type, enabled=False):
             transition = torch.linalg.matrix_exp(
@@ -55,6 +55,7 @@ def adaptive_latent_rollout(
         adapted_states.append(prediction)
         nominal_states.append(nominal_current)
         etas.append(eta)
+        gates.append(gate)
         deltas.append(delta)
         generators.append(adapted)
         if history > 1:
@@ -66,6 +67,7 @@ def adaptive_latent_rollout(
         "adapted": torch.stack(adapted_states, dim=1),
         "nominal": torch.stack(nominal_states, dim=1),
         "eta": torch.stack(etas, dim=1),
+        "gate": torch.stack(gates, dim=1),
         "delta_a": torch.stack(deltas, dim=1),
         "a_t": torch.stack(generators, dim=1),
     }

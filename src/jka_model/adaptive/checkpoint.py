@@ -64,9 +64,12 @@ def validate_adaptive_checkpoint(payload: Mapping[str, Any]) -> None:
     config_payload = payload["config"]
     if not isinstance(config_payload, Mapping):
         raise ValueError("V0.9 checkpoint lacks a resolved config")
-    config = ProjectConfig.from_dict(config_payload)
-    if payload["config_hash"] != stable_config_hash(config):
+    # Hash the serialized payload before default-filling it.  This keeps old,
+    # valid checkpoints loadable when a later schema adds optional fields while
+    # still detecting any mutation of the checkpoint's original config.
+    if payload["config_hash"] != stable_config_hash(config_payload):
         raise ValueError("V0.9 checkpoint config hash mismatch")
+    config = ProjectConfig.from_dict(config_payload)
     if config.v0_9_adaptive is None or config.v0_9_training is None:
         raise ValueError("V0.9 checkpoint config lacks adaptive sections")
     if int(payload["rank"]) != config.v0_9_adaptive.rank:
@@ -102,4 +105,8 @@ def load_adaptive_checkpoint(path: str | Path) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("V0.9 checkpoint payload must be a mapping")
     validate_adaptive_checkpoint(payload)
-    return dict(payload)
+    loaded = dict(payload)
+    resolved = ProjectConfig.from_dict(payload["config"])
+    loaded["config"] = resolved.to_dict()
+    loaded["config_hash"] = stable_config_hash(resolved)
+    return loaded
