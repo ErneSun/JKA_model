@@ -1,0 +1,73 @@
+{
+  "adaptive_mechanism_result": "NOT_SUPPORTED",
+  "claims": {
+    "A0_frozen": true,
+    "additive_residual_enabled": false,
+    "backbone_frozen": true,
+    "context_frozen": true,
+    "persistent_z_R_present": false,
+    "unseen_condition_generalization_tested": false
+  },
+  "context_family": "history_mlp",
+  "evidence_tier": "EXPLORATORY_CONDITIONAL",
+  "formal_run_count": 18,
+  "known_condition_adaptation": "NOT_SUPPORTED",
+  "latent_inferred_adaptation": "NOT_SUPPORTED",
+  "long_rollout_stability": "FAIL",
+  "low_rank_operator_adaptation": "NOT_SUPPORTED",
+  "nested_seed_support": {
+    "47": {
+      "joint_supported": false,
+      "modes": {
+        "known": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        },
+        "latent_inferred": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        }
+      }
+    },
+    "53": {
+      "joint_supported": false,
+      "modes": {
+        "known": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        },
+        "latent_inferred": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        }
+      }
+    },
+    "59": {
+      "joint_supported": false,
+      "modes": {
+        "known": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        },
+        "latent_inferred": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        }
+      }
+    }
+  },
+  "operator_explained_residual": "NOT_SUPPORTED",
+  "physical_problem": "cylinder_wake_2d_controlled_inlet",
+  "physics_status": "FAIL",
+  "schema_version": 1,
+  "scientific_backbone_support_fraction": 0.0,
+  "scientific_seed_threshold": 0.6666666666666666,
+  "selected_rank": 8,
+  "v0_8_handoff_policy": "supported",
+  "v0_8_route": "R3",
+  "v0_8_strict_readiness": "NOT_READY",
+  "v1_0_readiness": "NOT_READY",
+  "v1_0_ready": false,
+  "v1_0_seed_threshold": 1.0,
+  "variable_condition_data": "PASS"
+}

@@ -9,11 +9,16 @@
     "raw_run": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_8/v08-final-20260820T111016Z",
     "report": "/home/ai_group/Documents/files/SQ/JKA_model/gpu_validation/v0_8/results/v08-final-20260820T111016Z/report.md"
   },
+  "reassessment_evaluation_count": 9,
+  "reassessment_git_commit": "34c0c9d821281b64d71492d2a08a74a4f445b48c",
+  "reassessment_status": "PASS",
+  "reassessment_time": "2026-08-21T03:18:40.275874+00:00",
   "requested_validation_id": "v08-final-20260820T111016Z",
   "resolved_validation_id": "v08-final-20260820T111016Z",
   "scientific_status": "SUPPORTED",
   "status": "PASS",
   "v0_7_evaluation_run_count": 144,
   "v0_8_candidate_run_count": 36,
-  "v0_8_test_run_count": 9
+  "v0_8_test_run_count": 9,
+  "v0_9_operator_adaptation_readiness": "NOT_READY"
 }
