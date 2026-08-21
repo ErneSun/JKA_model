@@ -1,0 +1,19 @@
+{
+  "all_required_stages_completed": true,
+  "backbone_run_count": 3,
+  "final_context_family": "history_mlp",
+  "final_route": "R3",
+  "git_commit": "89553175cbaa35d048876951b0655d60898a3b79",
+  "output_paths": {
+    "compact_result": "/home/ai_group/Documents/files/SQ/JKA_model/gpu_validation/v0_8/results/v08-final-20260820T111016Z",
+    "raw_run": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_8/v08-final-20260820T111016Z",
+    "report": "/home/ai_group/Documents/files/SQ/JKA_model/gpu_validation/v0_8/results/v08-final-20260820T111016Z/report.md"
+  },
+  "requested_validation_id": "v08-final-20260820T111016Z",
+  "resolved_validation_id": "v08-final-20260820T111016Z",
+  "scientific_status": "SUPPORTED",
+  "status": "PASS",
+  "v0_7_evaluation_run_count": 144,
+  "v0_8_candidate_run_count": 36,
+  "v0_8_test_run_count": 9
+}

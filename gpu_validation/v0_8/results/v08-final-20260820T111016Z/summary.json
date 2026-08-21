@@ -1,0 +1,56 @@
+{
+  "attention_parameter_matched_control_pass": false,
+  "backbone_status": "PASS",
+  "claims": {
+    "A0_frozen": true,
+    "adaptive_A_t_implemented": false,
+    "attention_weights_are_causal_explanations": false,
+    "eta_t_implemented": false,
+    "persistent_z_R_present": false
+  },
+  "closed_loop_utility": "POSITIVE",
+  "context_family": "HISTORY_MLP",
+  "dynamic_context": "SUPPORTED",
+  "history_value": "SUPPORTED",
+  "nested_seed_support": {
+    "47": {
+      "context_init_support_fraction": 1.0,
+      "physics_pass_fraction": 1.0,
+      "positive_rollout_fraction": 1.0,
+      "supported": true
+    },
+    "53": {
+      "context_init_support_fraction": 1.0,
+      "physics_pass_fraction": 0.6666666666666666,
+      "positive_rollout_fraction": 0.6666666666666666,
+      "supported": true
+    },
+    "59": {
+      "context_init_support_fraction": 1.0,
+      "physics_pass_fraction": 1.0,
+      "positive_rollout_fraction": 1.0,
+      "supported": true
+    }
+  },
+  "physical_problem": "cylinder_wake_2d",
+  "physics_status": "PASS",
+  "residual_prediction": "SUPPORTED",
+  "run_count": 9,
+  "schema_version": 1,
+  "temporal_attention_context": "N/A",
+  "v0_7_route_on_new_problem": "R3",
+  "v0_9_operator_adaptation_readiness": "READY",
+  "v0_9_ready": true,
+  "validation_family_selection": {
+    "candidate_mean_validation_standardized_mse": {
+      "attention": 0.001304428681679484,
+      "history_mlp": 0.0011531768832355738,
+      "instantaneous": 0.0016925513627938926,
+      "instantaneous_matched": 0.002890051963428656
+    },
+    "route": "R3",
+    "selected_family": "history_mlp",
+    "selection_split": "validation",
+    "test_opened": false
+  }
+}
