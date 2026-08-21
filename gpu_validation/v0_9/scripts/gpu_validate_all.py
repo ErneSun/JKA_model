@@ -21,6 +21,9 @@ for import_root in (ROOT, ROOT / "src"):
         sys.path.insert(0, str(import_root))
 
 from eval.evaluate_v0_9 import evaluate_v0_9  # noqa: E402
+from gpu_validation.v0_8.scripts.gpu_reassess_existing import (  # noqa: E402
+    reassess_existing as reassess_v0_8_existing,
+)
 from jka_model.adaptive import aggregate_v0_9_results, audit_v0_8_handoff  # noqa: E402
 from jka_model.config import ProjectConfig, load_config, save_config  # noqa: E402
 from jka_model.data import (  # noqa: E402
@@ -100,6 +103,21 @@ def _latest_ready_v0_8() -> str:
     if not candidates:
         raise ValueError("no strict-ready V0.8 raw+compact handoff found; pass --v0-8-id")
     return max(candidates)[1]
+
+
+def strict_v0_8_handoff_fields_present(decision: dict[str, Any]) -> bool:
+    """Distinguish a strict post-hardening decision from a legacy READY report."""
+    nested = decision.get("nested_seed_support")
+    return bool(
+        "joint_v0_9_support_fraction" in decision
+        and "v0_9_required_backbone_fraction" in decision
+        and isinstance(nested, dict)
+        and len(nested) == 3
+        and all(
+            isinstance(item, dict) and "v0_9_supported" in item
+            for item in nested.values()
+        )
+    )
 
 
 def _resolved(
@@ -212,6 +230,26 @@ def main() -> None:
 
         current_stage = "v0_8_strict_handoff"
         v08_id = args.v0_8_id or _latest_ready_v0_8()
+        v08_decision_path = (
+            ROOT
+            / "gpu_validation"
+            / "v0_8"
+            / "results"
+            / v08_id
+            / "evaluation"
+            / "v0_8_scientific_decision.json"
+        )
+        v08_decision = json.loads(v08_decision_path.read_text(encoding="utf-8"))
+        if not strict_v0_8_handoff_fields_present(v08_decision):
+            current_stage = "legacy_v0_8_strict_reassessment"
+            _stage(
+                f"G1a legacy V0.8 strict-readiness reassessment id={v08_id}",
+                lambda: reassess_v0_8_existing(v08_id, device="cuda"),
+            )
+            updated_decision = json.loads(v08_decision_path.read_text(encoding="utf-8"))
+            if not strict_v0_8_handoff_fields_present(updated_decision):
+                raise RuntimeError("V0.8 reassessment did not produce strict handoff fields")
+        current_stage = "v0_8_strict_handoff"
         handoff = _stage(
             f"G1 strict V0.8 handoff id={v08_id}",
             lambda: audit_v0_8_handoff(

@@ -4,7 +4,10 @@ import csv
 import json
 from pathlib import Path
 
-from gpu_validation.v0_9.scripts.gpu_validate_all import validate_completion_payload
+from gpu_validation.v0_9.scripts.gpu_validate_all import (
+    strict_v0_8_handoff_fields_present,
+    validate_completion_payload,
+)
 from jka_model.adaptive import aggregate_v0_9_results, audit_v0_8_handoff
 from jka_model.config import load_config
 from jka_model.utils import create_versioned_session
@@ -78,6 +81,26 @@ def test_v08_handoff_requires_three_jointly_passing_backbones(tmp_path: Path) ->
         assert "does not jointly pass" in str(error)
     else:
         raise AssertionError("partial readiness was accepted")
+
+
+def test_legacy_v08_ready_report_is_detected_for_strict_reassessment() -> None:
+    legacy = {
+        "v0_9_ready": True,
+        "nested_seed_support": {
+            str(seed): {"supported": True} for seed in (47, 53, 59)
+        },
+    }
+    assert not strict_v0_8_handoff_fields_present(legacy)
+    strict = {
+        **legacy,
+        "joint_v0_9_support_fraction": 1.0,
+        "v0_9_required_backbone_fraction": 1.0,
+        "nested_seed_support": {
+            str(seed): {"supported": True, "v0_9_supported": True}
+            for seed in (47, 53, 59)
+        },
+    }
+    assert strict_v0_8_handoff_fields_present(strict)
 
 
 def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:

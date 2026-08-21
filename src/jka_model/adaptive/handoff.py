@@ -50,8 +50,18 @@ def audit_v0_8_handoff(
         raise ValueError("V0.8 handoff is incomplete")
     if not bool(decision.get("v0_9_ready")):
         raise ValueError("V0.9 BLOCKED BY V0.8 READINESS")
-    if float(decision.get("joint_v0_9_support_fraction", 0.0)) != 1.0:
-        raise ValueError("V0.9 requires 3/3 jointly passing V0.8 backbone/data seeds")
+    joint_fraction = float(decision.get("joint_v0_9_support_fraction", 0.0))
+    if joint_fraction != 1.0:
+        nested_support = decision.get("nested_seed_support", {})
+        failing = sorted(
+            str(seed)
+            for seed, support in nested_support.items()
+            if not isinstance(support, dict) or not bool(support.get("v0_9_supported"))
+        )
+        raise ValueError(
+            "V0.9 requires 3/3 jointly passing V0.8 backbone/data seeds; "
+            f"observed_fraction={joint_fraction:.6g}; failing_seeds={failing}"
+        )
     route = str(decision.get("v0_7_route_on_new_problem"))
     family = str(decision.get("context_family", "")).lower()
     if route not in {"R2", "R3"} or family not in {
