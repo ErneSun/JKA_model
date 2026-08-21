@@ -8,7 +8,6 @@ from jka_model.adaptive import FrozenCylinderPhysics
 from jka_model.config import (
     CylinderWake2DConfig,
     V09ConditionConfig,
-    V09TrainingConfig,
     load_config,
 )
 from jka_model.data import (
@@ -98,19 +97,23 @@ def test_frozen_decoder_physics_is_differentiable_only_through_latent_state() ->
             "fitted_trajectory_ids": ["synthetic"],
         }
     )
-    physics = FrozenCylinderPhysics(decoder, normalizer, {}, config, torch.device("cpu"))  # type: ignore[arg-type]
+    physics = FrozenCylinderPhysics(
+        decoder, normalizer, {}, config, torch.device("cpu")
+    )  # type: ignore[arg-type]
     latent = torch.randn(2, 3 * cylinder.nx * cylinder.ny, requires_grad=True)
     target = torch.randn(2, 3, cylinder.nx, cylinder.ny)
     valid = torch.ones(2, cylinder.nx, cylinder.ny, dtype=torch.bool)
     x_center, y_center = cylinder.nx // 2, cylinder.ny // 2
     valid[:, x_center - 2 : x_center + 2, y_center - 2 : y_center + 2] = False
-    result = physics.loss(latent, target, valid, V09TrainingConfig())
+    result = physics.loss(latent, target, {"valid_mask": valid})
     assert torch.isfinite(result.total)
     assert set(result.terms) == {
-        "physics_velocity",
-        "physics_vorticity",
-        "physics_divergence",
-        "physics_boundary",
+        "observable_velocity",
+        "observable_vorticity",
+        "observable_divergence",
+        "observable_boundary",
+        "observable_lift",
+        "observable_drag",
     }
     result.total.backward()
     assert latent.grad is not None and torch.isfinite(latent.grad).all()

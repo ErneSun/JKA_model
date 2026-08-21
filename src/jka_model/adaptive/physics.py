@@ -1,48 +1,43 @@
-"""Frozen-decoder physical anchors for adaptive-operator training."""
+"""Frozen-decoder bridge from adaptive latents to problem-owned observables."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 
-from jka_model.config import ProjectConfig, V09TrainingConfig
-from jka_model.data import (
-    ChannelStandardizer,
-    load_cylinder_wake_dataset,
-    velocity_vorticity_divergence,
-)
+from jka_model.config import ProjectConfig
+from jka_model.data import ChannelStandardizer
 from jka_model.data.datasets import TrajectoryRecord
-from jka_model.models import FieldJEPAKoopmanModel
+from jka_model.observables import ObservableLossResult, ObservableObjective
+from jka_model.problems import create_observable_problem_adapter
+from jka_model.problems.cylinder_observables import CylinderWakeObservableObjective
 from jka_model.residual.cache import file_sha256
 from jka_model.utils import load_checkpoint
 
-
-@dataclass(slots=True)
-class PhysicalLossResult:
-    total: Tensor
-    terms: dict[str, Tensor]
+PhysicalLossResult = ObservableLossResult
 
 
-class FrozenCylinderPhysics:
-    """Own frozen decode/provenance state while retaining gradients to latent inputs."""
+class FrozenDecoderObservables:
+    """Decode with frozen weights while gradients continue to adaptive latent inputs."""
 
     def __init__(
         self,
-        model: FieldJEPAKoopmanModel,
+        model: nn.Module,
         normalizer: ChannelStandardizer,
         records: dict[str, TrajectoryRecord],
-        config: ProjectConfig,
+        objective: ObservableObjective,
         device: torch.device,
     ) -> None:
-        if config.cylinder_wake_2d is None:
-            raise ValueError("V0.9 frozen physics requires the cylinder configuration")
+        if not hasattr(model, "decode"):
+            raise TypeError("observable bridge requires a model.decode method")
         self.model = model
         self.normalizer = normalizer
         self.records = records
-        self.config = config.cylinder_wake_2d
+        self.objective = objective
         self.device = device
 
     @classmethod
@@ -54,23 +49,21 @@ class FrozenCylinderPhysics:
         physical_dataset: str | Path,
         expected_backbone_sha256: str,
         device: torch.device,
-    ) -> FrozenCylinderPhysics:
-        # Local import keeps the reusable physics objective independent of the
-        # train package's public V0.9 imports.
+    ) -> FrozenDecoderObservables:
         from train.train_v0_6 import initialize_v0_6_model
 
         if file_sha256(backbone_checkpoint) != expected_backbone_sha256:
-            raise ValueError("V0.9 physical trainer/backbone fingerprint mismatch")
+            raise ValueError("V0.9 observable trainer/backbone fingerprint mismatch")
         saved = load_checkpoint(backbone_checkpoint, map_location="cpu")
         if saved.online_model_state is None or saved.target_model_state is None:
-            raise ValueError("V0.9 physical trainer requires a JEPA backbone checkpoint")
+            raise ValueError("V0.9 observable trainer requires a JEPA backbone checkpoint")
         if saved.normalizer_state is None or saved.config is None:
-            raise ValueError("V0.9 physical trainer lacks backbone normalization provenance")
+            raise ValueError("V0.9 observable trainer lacks normalization provenance")
         for name in ("koopman", "field_autoencoder", "field_loss", "jepa_loss", "ema"):
             inherited = getattr(saved.config, name)
             current = getattr(config, name)
             if inherited is None or current is None or inherited.to_dict() != current.to_dict():
-                raise ValueError(f"V0.9 physical trainer inheritance mismatch in {name}")
+                raise ValueError(f"V0.9 observable inheritance mismatch in {name}")
         model = initialize_v0_6_model(config, device=device)
         model.load_online_state_dict(saved.online_model_state)
         model.target_encoder.load_state_dict(saved.target_model_state, strict=True)
@@ -78,11 +71,22 @@ class FrozenCylinderPhysics:
         model.eval()
         normalizer = ChannelStandardizer(eps=config.data.normalization.eps)
         normalizer.load_state_dict(saved.normalizer_state)
-        if config.cylinder_wake_2d is None:
-            raise ValueError("V0.9 physical trainer lacks cylinder config")
-        dataset = load_cylinder_wake_dataset(physical_dataset, config.cylinder_wake_2d)
-        records = {record.trajectory_id: record for record in dataset.records}
-        return cls(model, normalizer, records, config, device)
+        adapter = create_observable_problem_adapter(config)
+        configured_source = getattr(getattr(adapter, "config", None), "dataset_path", None)
+        if (
+            configured_source
+            and Path(configured_source).resolve() != Path(physical_dataset).resolve()
+        ):
+            raise ValueError("V0.9 observable dataset/config source mismatch")
+        records = {
+            record.trajectory_id: record
+            for record in adapter.build_dataset(seed=config.training.seed)
+        }
+        objective = adapter.build_observable_objective(
+            training=config.v0_9_training,
+            evaluation=config.v0_9_evaluation,
+        )
+        return cls(model, normalizer, records, objective, device)
 
     def target_batch(
         self,
@@ -90,77 +94,66 @@ class FrozenCylinderPhysics:
         target_indices: Tensor,
         horizon: int,
         limit: int,
-    ) -> tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, dict[str, Any]]:
         states: list[Tensor] = []
         masks: list[Tensor] = []
+        record_metadata: list[Mapping[str, Any]] = []
         for trajectory_id, target_index in zip(
             trajectory_ids[:limit], target_indices[:limit].tolist(), strict=True
         ):
             record = self.records.get(str(trajectory_id))
             if record is None:
-                raise ValueError(f"missing physical record for {trajectory_id}")
+                raise ValueError(f"missing observable record for {trajectory_id}")
             state_index = int(target_index) + horizon
             if state_index >= record.states_raw.shape[0]:
-                raise ValueError("physical target lies beyond its trajectory")
-            if record.valid_mask is None:
-                raise ValueError("physical target lacks a cylinder valid mask")
+                raise ValueError("observable target lies beyond its trajectory")
             states.append(record.states_raw[state_index])
-            masks.append(record.valid_mask)
-        return (
-            torch.stack(states).to(self.device, dtype=torch.float32),
-            torch.stack(masks).to(self.device, dtype=torch.bool),
-        )
+            if record.valid_mask is not None:
+                masks.append(record.valid_mask)
+            record_metadata.append(record.metadata)
+        metadata: dict[str, Any] = {"records": record_metadata}
+        if masks:
+            if len(masks) != len(states):
+                raise ValueError("observable masks must be present for every selected record")
+            metadata["valid_mask"] = torch.stack(masks).to(
+                self.device, dtype=torch.bool
+            )
+        return torch.stack(states).to(self.device, dtype=torch.float32), metadata
+
+    def decode(self, predicted_latent: Tensor) -> Tensor:
+        predicted_model = self.model.decode(predicted_latent)  # type: ignore[attr-defined]
+        with torch.autocast(device_type=predicted_model.device.type, enabled=False):
+            return self.normalizer.inverse_transform(predicted_model.float())
 
     def loss(
         self,
         predicted_latent: Tensor,
         target_raw: Tensor,
-        valid_mask: Tensor,
-        weights: V09TrainingConfig,
-    ) -> PhysicalLossResult:
-        predicted_model = self.model.decode(predicted_latent)
-        # Spatial derivatives and relative-energy denominators are evaluated in
-        # FP32 even when the frozen decoder runs under BF16 autocast.
-        with torch.autocast(device_type=predicted_model.device.type, enabled=False):
-            predicted_raw = self.normalizer.inverse_transform(predicted_model.float())
-            target_raw = target_raw.float()
-        fluid = valid_mask.unsqueeze(1).to(predicted_raw.dtype)
-        solid = (~valid_mask).unsqueeze(1).to(predicted_raw.dtype)
-        velocity_error = (
-            (predicted_raw[:, :2] - target_raw[:, :2]).square() * fluid
-        ).sum() / (target_raw[:, :2].square() * fluid).sum().clamp_min(1e-12)
-        predicted_vorticity, predicted_divergence = velocity_vorticity_divergence(
-            predicted_raw, self.config
+        metadata: Mapping[str, Any],
+    ) -> ObservableLossResult:
+        return self.objective.training_loss(
+            self.decode(predicted_latent),
+            target_raw.float(),
+            metadata,
         )
-        target_vorticity, _ = velocity_vorticity_divergence(target_raw, self.config)
-        fluid_scalar = valid_mask.to(predicted_raw.dtype)
-        vorticity = (
-            (predicted_vorticity - target_vorticity).square() * fluid_scalar
-        ).sum() / (target_vorticity.square() * fluid_scalar).sum().clamp_min(1e-12)
-        reference_gradient = (
-            target_vorticity.square() * fluid_scalar
-        ).sum().div(fluid_scalar.sum().clamp_min(1.0))
-        divergence = (
-            predicted_divergence.square() * fluid_scalar
-        ).sum().div(fluid_scalar.sum().clamp_min(1.0)) / reference_gradient.clamp_min(1e-12)
-        reference_velocity = (
-            target_raw[:, :2].square() * fluid
-        ).sum().div(fluid.sum().clamp_min(1.0))
-        boundary = (
-            predicted_raw[:, :2].square() * solid
-        ).sum().div(solid.sum().clamp_min(1.0)) / reference_velocity.clamp_min(1e-12)
-        total = (
-            weights.physics_velocity_weight * velocity_error
-            + weights.physics_vorticity_weight * vorticity
-            + weights.physics_divergence_weight * divergence
-            + weights.physics_boundary_weight * boundary
+
+
+class FrozenCylinderPhysics(FrozenDecoderObservables):
+    """Backward-compatible constructor; new code uses FrozenDecoderObservables."""
+
+    def __init__(
+        self,
+        model: nn.Module,
+        normalizer: ChannelStandardizer,
+        records: dict[str, TrajectoryRecord],
+        config: ProjectConfig,
+        device: torch.device,
+    ) -> None:
+        if config.cylinder_wake_2d is None:
+            raise ValueError("V0.9 cylinder observables require the cylinder configuration")
+        objective = CylinderWakeObservableObjective(
+            config.cylinder_wake_2d,
+            config.v0_9_training,
+            config.v0_9_evaluation,
         )
-        return PhysicalLossResult(
-            total,
-            {
-                "physics_velocity": velocity_error,
-                "physics_vorticity": vorticity,
-                "physics_divergence": divergence,
-                "physics_boundary": boundary,
-            },
-        )
+        super().__init__(model, normalizer, records, objective, device)

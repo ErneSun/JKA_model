@@ -23,13 +23,16 @@ from jka_model.adaptive import (
 )
 from jka_model.config import ProjectConfig, load_config
 from jka_model.context.checkpoint import load_context_checkpoint
-from jka_model.data import (
-    ChannelStandardizer,
-    cylinder_force_coefficients,
-    load_cylinder_wake_dataset,
-    shedding_frequency,
-    velocity_vorticity_divergence,
+from jka_model.data import ChannelStandardizer
+from jka_model.evaluation import (
+    GateResult,
+    GateStatus,
+    MetricDirection,
+    MetricGateSpec,
+    aggregate_gate_results,
+    evaluate_metric_gate,
 )
+from jka_model.problems import create_observable_problem_adapter
 from jka_model.residual.cache import file_sha256
 from jka_model.utils import load_checkpoint
 from train.train_v0_6 import initialize_v0_6_model
@@ -115,12 +118,11 @@ def evaluate_v0_9(
             resolved.v0_8_context,
             resolved.v0_9_adaptive,
             resolved.v0_9_evaluation,
-            resolved.cylinder_wake_2d,
         )
     ):
         raise ValueError("evaluate_v0_9 requires the complete V0.9 contract")
     assert resolved.v0_8_context and resolved.v0_9_adaptive
-    assert resolved.v0_9_evaluation and resolved.cylinder_wake_2d
+    assert resolved.v0_9_evaluation
     selected = torch.device(
         "cuda" if device is None and torch.cuda.is_available() else (device or "cpu")
     )
@@ -277,8 +279,18 @@ def evaluate_v0_9(
     backbone = _load_backbone(resolved, backbone_checkpoint, selected)
     normalizer = ChannelStandardizer(eps=resolved.data.normalization.eps)
     normalizer.load_state_dict(cache.normalizer_state)
-    physical = load_cylinder_wake_dataset(physical_dataset, resolved.cylinder_wake_2d)
-    physical_lookup = {record.trajectory_id: record for record in physical.records}
+    problem = create_observable_problem_adapter(resolved)
+    configured_source = getattr(getattr(problem, "config", None), "dataset_path", None)
+    if configured_source and Path(configured_source).resolve() != Path(physical_dataset).resolve():
+        raise ValueError("V0.9 evaluation observable dataset/config source mismatch")
+    physical_lookup = {
+        record.trajectory_id: record
+        for record in problem.build_dataset(seed=resolved.training.seed)
+    }
+    observable_objective = problem.build_observable_objective(
+        training=resolved.v0_9_training,
+        evaluation=resolved.v0_9_evaluation,
+    )
     physical_rows: list[dict[str, Any]] = []
     longest = max(resolved.v0_9_evaluation.rollout_horizons)
     for trajectory in cache.select("test"):
@@ -301,39 +313,26 @@ def evaluate_v0_9(
         )
         record = physical_lookup[trajectory.trajectory_id]
         truth_raw = record.states_raw[start + 1 : start + longest + 1].to(selected)
-        true_vorticity, _ = velocity_vorticity_divergence(truth_raw, resolved.cylinder_wake_2d)
-        true_drag, true_lift = cylinder_force_coefficients(truth_raw, resolved.cylinder_wake_2d)
         for name, latent in (
             ("adaptive", bundle["adapted"][:, 1:]),
             ("nominal", bundle["nominal"][:, 1:]),
         ):
             raw = normalizer.inverse_transform(backbone.decode(latent))[0]
-            vorticity, divergence = velocity_vorticity_divergence(raw, resolved.cylinder_wake_2d)
-            drag, lift = cylinder_force_coefficients(raw, resolved.cylinder_wake_2d)
             assert record.valid_mask is not None
-            solid = ~record.valid_mask.to(selected)
             physical_rows.append(
                 {
                     "model": name,
                     "trajectory_id": trajectory.trajectory_id,
                     "schedule_type": trajectory.schedule_type,
                     "horizon": longest,
-                    "velocity_relative_l2": float(
-                        (raw[:, :2] - truth_raw[:, :2]).norm()
-                        / truth_raw[:, :2].norm().clamp_min(1e-12)
+                    **observable_objective.evaluation_metrics(
+                        raw,
+                        truth_raw,
+                        {
+                            "valid_mask": record.valid_mask,
+                            "record_metadata": record.metadata,
+                        },
                     ),
-                    "vorticity_relative_l2": float(
-                        (vorticity - true_vorticity).norm()
-                        / true_vorticity.norm().clamp_min(1e-12)
-                    ),
-                    "divergence_rms": float(divergence.square().mean().sqrt()),
-                    "lift_rmse": float((lift - true_lift).square().mean().sqrt()),
-                    "drag_rmse": float((drag - true_drag).square().mean().sqrt()),
-                    "frequency_error": abs(
-                        shedding_frequency(lift, resolved.cylinder_wake_2d.snapshot_dt)
-                        - shedding_frequency(true_lift, resolved.cylinder_wake_2d.snapshot_dt)
-                    ),
-                    "boundary_no_slip_mse": float(raw[:, :2, solid].square().mean()),
                 }
             )
 
@@ -359,29 +358,44 @@ def evaluate_v0_9(
     longest_pass = bool(horizon_summary[str(longest)]["pass"])
     adaptive_physics = [row for row in physical_rows if row["model"] == "adaptive"]
     nominal_physics = [row for row in physical_rows if row["model"] == "nominal"]
-    relative_fields = (
-        "velocity_relative_l2",
-        "vorticity_relative_l2",
-        "lift_rmse",
-        "drag_rmse",
-        "frequency_error",
+    observable_specs = observable_objective.evaluation_gate_specs(
+        sequence_length=longest,
+        dt=float(next(iter(physical_lookup.values())).dts[0]),
     )
-    physics_pairs = []
+    observable_gate_rows: list[dict[str, Any]] = []
+    observable_pair_results: list[GateResult] = []
     for adapted_row, nominal_row in zip(adaptive_physics, nominal_physics, strict=True):
-        physics_pairs.append(
-            all(
-                float(adapted_row[field])
-                <= float(nominal_row[field])
-                * (1.0 + resolved.v0_9_evaluation.max_physics_degradation)
-                + 1e-8
-                for field in relative_fields
+        metric_results = [
+            evaluate_metric_gate(
+                float(adapted_row[name]),
+                spec,
+                baseline=float(nominal_row[name]),
             )
-            and float(adapted_row["divergence_rms"])
-            <= resolved.v0_9_evaluation.max_divergence_mse**0.5
-            and float(adapted_row["boundary_no_slip_mse"])
-            <= resolved.v0_9_evaluation.max_boundary_mse
+            for name, spec in observable_specs.items()
+        ]
+        pair = aggregate_gate_results(
+            f"observables:{adapted_row['trajectory_id']}",
+            metric_results,
+            required_pass_fraction=1.0,
+            minimum_count=len(observable_specs),
         )
-    physics_pass = bool(physics_pairs and all(physics_pairs))
+        observable_pair_results.append(pair)
+        for result in metric_results:
+            observable_gate_rows.append(
+                {
+                    "trajectory_id": adapted_row["trajectory_id"],
+                    "schedule_type": adapted_row["schedule_type"],
+                    "horizon": longest,
+                    **result.to_dict(),
+                }
+            )
+    observable_gate = aggregate_gate_results(
+        "observable_noninferiority",
+        observable_pair_results,
+        required_pass_fraction=resolved.v0_9_evaluation.observable_pair_pass_fraction,
+        minimum_count=1,
+    )
+    physics_pass = observable_gate.passed
     burden_pass = all(
         float(row["operator_burden_max"]) <= resolved.v0_9_evaluation.max_operator_burden
         for row in rollout_rows
@@ -390,14 +404,68 @@ def evaluate_v0_9(
     dynamic_over_static = sum(float(row["static_relative_gain"]) for row in one_step_rows) / len(
         one_step_rows
     )
-    controls_pass = dynamic_over_static >= 0 and (
-        shuffled_gain is None
-        or shuffled_gain >= resolved.v0_9_evaluation.material_relative_gain
-        or str(context_payload["residual_route"]) != "R3"
+    one_step_gate = evaluate_metric_gate(
+        one_step_gain,
+        MetricGateSpec(
+            "one_step_prediction",
+            MetricDirection.HIGHER_IS_BETTER,
+            threshold=resolved.v0_9_evaluation.material_relative_gain,
+        ),
     )
+    operator_gate = evaluate_metric_gate(
+        gamma,
+        MetricGateSpec(
+            "operator_explained_residual",
+            MetricDirection.HIGHER_IS_BETTER,
+            threshold=resolved.v0_9_evaluation.min_operator_explained_fraction,
+        ),
+    )
+    dynamic_gate = evaluate_metric_gate(
+        dynamic_over_static,
+        MetricGateSpec(
+            "dynamic_over_static",
+            MetricDirection.HIGHER_IS_BETTER,
+            threshold=resolved.v0_9_evaluation.min_dynamic_over_static_gain,
+        ),
+    )
+    if str(context_payload["residual_route"]) == "R3":
+        history_gate = evaluate_metric_gate(
+            float("nan") if shuffled_gain is None else shuffled_gain,
+            MetricGateSpec(
+                "history_over_shuffled",
+                MetricDirection.HIGHER_IS_BETTER,
+                threshold=resolved.v0_9_evaluation.material_relative_gain,
+            ),
+        )
+    else:
+        history_gate = GateResult(
+            "history_over_shuffled",
+            GateStatus.PASS,
+            shuffled_gain,
+            None,
+            "R2 route does not require a history-shuffle control",
+        )
+    controls_gate = aggregate_gate_results(
+        "dynamic_controls",
+        [dynamic_gate, history_gate],
+        required_pass_fraction=1.0,
+        minimum_count=2,
+    )
+    controls_pass = controls_gate.passed
+    scientific_gates = {
+        result.name: result.to_dict()
+        for result in (
+            one_step_gate,
+            operator_gate,
+            dynamic_gate,
+            history_gate,
+            controls_gate,
+            observable_gate,
+        )
+    }
     supported = bool(
-        one_step_gain >= resolved.v0_9_evaluation.material_relative_gain
-        and gamma >= resolved.v0_9_evaluation.min_operator_explained_fraction
+        one_step_gate.passed
+        and operator_gate.passed
         and controls_pass
         and all_horizons_pass
         and longest_pass
@@ -405,16 +473,20 @@ def evaluate_v0_9(
         and burden_pass
     )
     decision = {
-        "schema_version": 1,
+        "schema_version": 2,
         "backbone_seed": int(payload["backbone_seed"]),
         "context_init_seed": int(payload["context_init_seed"]),
         "operator_init_seed": int(payload["operator_init_seed"]),
+        "problem_name": resolved.data.problem_name,
+        "observable_objective": observable_objective.name,
         "condition_mode": mode,
         "rank": int(payload["rank"]),
         "one_step_relative_gain": one_step_gain,
         "operator_explained_fraction": gamma,
         "dynamic_over_static_gain": dynamic_over_static,
         "history_over_shuffled_gain": shuffled_gain,
+        "operator_explained_status": operator_gate.status.value,
+        "dynamic_over_static_status": dynamic_gate.status.value,
         "controls_status": "PASS" if controls_pass else "FAIL",
         "closed_loop_by_horizon": horizon_summary,
         "all_horizons_status": "PASS" if all_horizons_pass else "FAIL",
@@ -422,6 +494,8 @@ def evaluate_v0_9(
         "operator_burden_status": "PASS" if burden_pass else "FAIL",
         "long_rollout_stability": "PASS" if all_horizons_pass and burden_pass else "FAIL",
         "physics_status": "PASS" if physics_pass else "FAIL",
+        "observable_status": observable_gate.status.value,
+        "scientific_gates": scientific_gates,
         "adaptive_koopman": "SUPPORTED" if supported else "NOT_SUPPORTED",
         "scientific_joint_pass": supported,
         "claims": {
@@ -438,6 +512,7 @@ def evaluate_v0_9(
     _write_csv(evaluation / "one_step_operator_metrics.csv", one_step_rows)
     _write_csv(evaluation / "rollout_metrics.csv", rollout_rows)
     _write_csv(evaluation / "physical_metrics.csv", physical_rows)
+    _write_csv(evaluation / "observable_gate_results.csv", observable_gate_rows)
     (evaluation / "v0_9_scientific_decision.json").write_text(
         json.dumps(decision, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

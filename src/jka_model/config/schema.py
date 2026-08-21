@@ -1950,6 +1950,15 @@ class V09TrainingConfig:
     physics_vorticity_weight: float = 0.2
     physics_divergence_weight: float = 0.2
     physics_boundary_weight: float = 0.1
+    physics_lift_weight: float = 0.0
+    physics_drag_weight: float = 0.0
+    observable_names: tuple[str, ...] = ()
+    observable_component_weights: tuple[float, ...] = ()
+    observable_horizons: tuple[int, ...] = ()
+    observable_horizon_weights: tuple[float, ...] = ()
+    lambda_observable_noninferiority: float = 0.0
+    observable_noninferiority_margin: float = 0.10
+    observable_noninferiority_floor: float = 1.0e-3
     rank_sweep_epochs: int = 40
     gradient_clip_norm: float = 1.0
     patience: int = 16
@@ -1981,6 +1990,13 @@ class V09TrainingConfig:
             self.physics_vorticity_weight,
             self.physics_divergence_weight,
             self.physics_boundary_weight,
+            self.physics_lift_weight,
+            self.physics_drag_weight,
+            self.lambda_observable_noninferiority,
+            self.observable_noninferiority_margin,
+            self.observable_noninferiority_floor,
+            *self.observable_component_weights,
+            *self.observable_horizon_weights,
         ) < 0:
             raise ValueError("V0.9 regularization weights must be non-negative")
         if tuple(sorted(set(self.rollout_horizons))) != self.rollout_horizons:
@@ -2010,12 +2026,36 @@ class V09TrainingConfig:
             raise ValueError("V0.9 physics ramp must finish within training")
         if self.physics_horizon < 1 or self.physics_horizon > self.rollout_horizons[-1]:
             raise ValueError("V0.9 physics horizon must lie inside the training rollout")
+        if len(self.observable_names) != len(self.observable_component_weights):
+            raise ValueError("V0.9 observable names and component weights must align")
+        if len(set(self.observable_names)) != len(self.observable_names):
+            raise ValueError("V0.9 observable names must be unique")
+        if len(self.observable_horizons) != len(self.observable_horizon_weights):
+            raise ValueError("V0.9 observable horizons and weights must align")
+        if self.observable_horizons:
+            if tuple(sorted(set(self.observable_horizons))) != self.observable_horizons:
+                raise ValueError("V0.9 observable horizons must be unique and increasing")
+            if (
+                self.observable_horizons[0] < 1
+                or self.observable_horizons[-1] > self.rollout_horizons[-1]
+            ):
+                raise ValueError("V0.9 observable horizons must lie inside the training rollout")
+            if not any(weight > 0 for weight in self.observable_horizon_weights):
+                raise ValueError("V0.9 observable curriculum requires a positive horizon weight")
         if self.propagator_growth_margin < 0 or self.operator_burden_target <= 0:
             raise ValueError("invalid V0.9 growth margin or burden target")
         if self.gradient_clip_norm <= 0 or self.operator_initialization_seed < 0:
             raise ValueError("invalid V0.9 clipping or initialization seed")
         if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
             raise ValueError("invalid V0.9 precision")
+
+    @property
+    def active_observable_horizons(self) -> tuple[int, ...]:
+        return self.observable_horizons or (self.physics_horizon,)
+
+    @property
+    def active_observable_horizon_weights(self) -> tuple[float, ...]:
+        return self.observable_horizon_weights or (1.0,)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -2030,8 +2070,14 @@ class V09TrainingConfig:
         allowed = set(defaults.__dataclass_fields__)
         _reject_unknown(data, allowed, "V0.9 training config")
         values = {name: data.get(name, getattr(defaults, name)) for name in allowed}
-        tuple_int_fields = {"rollout_horizons"}
-        tuple_float_fields = {"rollout_start_fractions", "rollout_weights"}
+        tuple_int_fields = {"rollout_horizons", "observable_horizons"}
+        tuple_float_fields = {
+            "rollout_start_fractions",
+            "rollout_weights",
+            "observable_component_weights",
+            "observable_horizon_weights",
+        }
+        tuple_string_fields = {"observable_names"}
         integer_fields = {
             "epochs",
             "batch_size",
@@ -2049,10 +2095,13 @@ class V09TrainingConfig:
             values[name] = tuple(int(value) for value in values[name])
         for name in tuple_float_fields:
             values[name] = tuple(float(value) for value in values[name])
+        for name in tuple_string_fields:
+            values[name] = tuple(str(value) for value in values[name])
         for name in allowed - {
             *integer_fields,
             *tuple_int_fields,
             *tuple_float_fields,
+            *tuple_string_fields,
             "precision",
         }:
             values[name] = float(values[name])
@@ -2067,10 +2116,13 @@ class V09EvaluationConfig:
     rollout_horizons: tuple[int, ...] = (8, 16, 32, 80)
     material_relative_gain: float = 0.02
     min_operator_explained_fraction: float = 0.02
+    min_dynamic_over_static_gain: float = 0.02
     max_operator_burden: float = 0.50
     max_physics_degradation: float = 0.10
     max_divergence_mse: float = 0.02
     max_boundary_mse: float = 0.05
+    observable_pair_pass_fraction: float = 1.0
+    frequency_resolution_bins: float = 1.0
     scientific_seed_fraction: float = 2.0 / 3.0
     v1_0_readiness_fraction: float = 1.0
     operator_initialization_seeds: tuple[int, ...] = (701, 809, 907)
@@ -2084,10 +2136,16 @@ class V09EvaluationConfig:
             raise ValueError("V0.9 material gain must lie in [0,1)")
         if not 0 <= self.min_operator_explained_fraction < 1:
             raise ValueError("V0.9 Gamma_op threshold must lie in [0,1)")
+        if not 0 <= self.min_dynamic_over_static_gain < 1:
+            raise ValueError("V0.9 dynamic/static threshold must lie in [0,1)")
         if self.max_operator_burden <= 0 or self.max_physics_degradation < 0:
             raise ValueError("invalid V0.9 burden/physics threshold")
         if self.max_divergence_mse <= 0 or self.max_boundary_mse <= 0:
             raise ValueError("invalid V0.9 physical absolute threshold")
+        if not 0 < self.observable_pair_pass_fraction <= 1:
+            raise ValueError("V0.9 observable pair fraction must lie in (0,1]")
+        if self.frequency_resolution_bins < 0:
+            raise ValueError("V0.9 frequency resolution bins must be non-negative")
         if not 0.5 <= self.scientific_seed_fraction <= 1:
             raise ValueError("invalid V0.9 scientific seed threshold")
         if self.v1_0_readiness_fraction != 1.0:
@@ -2102,10 +2160,13 @@ class V09EvaluationConfig:
             "rollout_horizons": list(self.rollout_horizons),
             "material_relative_gain": self.material_relative_gain,
             "min_operator_explained_fraction": self.min_operator_explained_fraction,
+            "min_dynamic_over_static_gain": self.min_dynamic_over_static_gain,
             "max_operator_burden": self.max_operator_burden,
             "max_physics_degradation": self.max_physics_degradation,
             "max_divergence_mse": self.max_divergence_mse,
             "max_boundary_mse": self.max_boundary_mse,
+            "observable_pair_pass_fraction": self.observable_pair_pass_fraction,
+            "frequency_resolution_bins": self.frequency_resolution_bins,
             "scientific_seed_fraction": self.scientific_seed_fraction,
             "v1_0_readiness_fraction": self.v1_0_readiness_fraction,
             "operator_initialization_seeds": list(self.operator_initialization_seeds),
@@ -2128,6 +2189,12 @@ class V09EvaluationConfig:
                     defaults.min_operator_explained_fraction,
                 )
             ),
+            min_dynamic_over_static_gain=float(
+                data.get(
+                    "min_dynamic_over_static_gain",
+                    defaults.min_dynamic_over_static_gain,
+                )
+            ),
             max_operator_burden=float(
                 data.get("max_operator_burden", defaults.max_operator_burden)
             ),
@@ -2138,6 +2205,15 @@ class V09EvaluationConfig:
                 data.get("max_divergence_mse", defaults.max_divergence_mse)
             ),
             max_boundary_mse=float(data.get("max_boundary_mse", defaults.max_boundary_mse)),
+            observable_pair_pass_fraction=float(
+                data.get(
+                    "observable_pair_pass_fraction",
+                    defaults.observable_pair_pass_fraction,
+                )
+            ),
+            frequency_resolution_bins=float(
+                data.get("frequency_resolution_bins", defaults.frequency_resolution_bins)
+            ),
             scientific_seed_fraction=float(
                 data.get("scientific_seed_fraction", defaults.scientific_seed_fraction)
             ),

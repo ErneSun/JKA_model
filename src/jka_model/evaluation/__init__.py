@@ -9,6 +9,14 @@ from jka_model.evaluation.dynamics import (
     evaluate_rollout,
     persistence_rollout,
 )
+from jka_model.evaluation.gates import (
+    GateResult,
+    GateStatus,
+    MetricDirection,
+    MetricGateSpec,
+    aggregate_gate_results,
+    evaluate_metric_gate,
+)
 from jka_model.evaluation.known_latent_experiment import (
     KnownLatentExperimentResult,
     run_known_latent_experiment,
@@ -26,9 +34,15 @@ __all__ = [
     "KnownLatentExperimentResult",
     "DuffingLiftingDiagnostic",
     "RolloutMetrics",
+    "GateResult",
+    "GateStatus",
+    "MetricDirection",
+    "MetricGateSpec",
+    "aggregate_gate_results",
     "encode_records_for_alignment",
     "evaluate_learned_trajectory",
     "evaluate_rollout",
+    "evaluate_metric_gate",
     "persistence_rollout",
     "run_known_latent_experiment",
     "run_duffing_lifting_diagnostic",

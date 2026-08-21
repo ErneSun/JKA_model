@@ -32,3 +32,13 @@ r^0=z_{t+1}^{true}-e^{A_0\Delta t}z_t,
 \[
 \Gamma_{op}=1-\frac{\mathbb E\|r^{rem}\|^2}{\mathbb E\|r^0\|^2+\epsilon}.
 \]
+
+阶段 2 不改变上述主预测方程，只增加问题适配器给出的冻结 decoder 可观测量目标：
+
+\[
+\mathcal L_{obs}=\frac{\sum_{h\in H_{obs}}\alpha_h
+\sum_k w_k\ell_k(D(\hat z_{t+h}),U_{t+h})}{\sum_h\alpha_h}.
+\]
+
+当前 cylinder adapter 的 `k` 为速度、涡量、散度、壁面、升力、阻力；Koopman 核心不包含这些名称或公式。
+decoder、encoder、context 与 `A0` 继续冻结，梯度只经 `D` 对输入的 Jacobian 回到低秩 adaptive operator。

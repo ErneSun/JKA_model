@@ -19,7 +19,7 @@ from jka_model.adaptive import (
     AdaptiveKoopmanModel,
     AdaptiveRolloutDataset,
     AdaptiveWindowDataset,
-    FrozenCylinderPhysics,
+    FrozenDecoderObservables,
     LowRankAdaptiveOperator,
     adaptive_stabilization_objective,
     adaptive_training_scales,
@@ -232,7 +232,7 @@ def _stabilized_loss_bundle(
     condition_std: torch.Tensor,
     config: ProjectConfig,
     epoch: int,
-    physical: FrozenCylinderPhysics | None,
+    physical: FrozenDecoderObservables | None,
     *,
     validation: bool,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -258,26 +258,64 @@ def _stabilized_loss_bundle(
     total = objective.total
     terms = dict(objective.terms)
     physics = total.new_zeros(())
+    observable_noninferiority = total.new_zeros(())
     if state.physics_scale > 0:
         if physical is None:
             raise RuntimeError("enabled V0.9 physical objective lacks frozen decoder state")
         limit = min(training.physics_batch_size, objective.rollout["adapted"].shape[0])
-        target_raw, valid_mask = physical.target_batch(
-            batch["trajectory_id"],
-            batch["target_index"],
-            training.physics_horizon,
-            limit,
+        weight_sum = sum(training.active_observable_horizon_weights)
+        if weight_sum <= 0:
+            raise RuntimeError("enabled V0.9 observables require positive horizon weights")
+        for horizon, weight in zip(
+            training.active_observable_horizons,
+            training.active_observable_horizon_weights,
+            strict=True,
+        ):
+            if weight == 0:
+                continue
+            target_raw, metadata = physical.target_batch(
+                batch["trajectory_id"],
+                batch["target_index"],
+                horizon,
+                limit,
+            )
+            adapted_result = physical.loss(
+                objective.rollout["adapted"][:limit, horizon - 1],
+                target_raw,
+                metadata,
+            )
+            with torch.no_grad():
+                nominal_result = physical.loss(
+                    objective.rollout["nominal"][:limit, horizon - 1],
+                    target_raw,
+                    metadata,
+                )
+            physics = physics + weight * adapted_result.total
+            component_excesses: list[torch.Tensor] = []
+            for name, value in adapted_result.terms.items():
+                baseline = nominal_result.terms[name].detach()
+                terms[f"{name}_h{horizon}"] = value
+                terms[f"{name}_nominal_h{horizon}"] = baseline
+                floor = training.observable_noninferiority_floor
+                allowed = (
+                    baseline * (1.0 + training.observable_noninferiority_margin) + floor
+                )
+                component_excesses.append(
+                    (torch.relu(value - allowed) / (baseline.abs() + floor)).square()
+                )
+            if component_excesses:
+                observable_noninferiority = observable_noninferiority + weight * torch.stack(
+                    component_excesses
+                ).mean()
+        physics = physics / weight_sum
+        observable_noninferiority = observable_noninferiority / weight_sum
+        observable_objective = (
+            physics
+            + training.lambda_observable_noninferiority * observable_noninferiority
         )
-        physical_result = physical.loss(
-            objective.rollout["adapted"][:limit, training.physics_horizon - 1],
-            target_raw,
-            valid_mask,
-            training,
-        )
-        physics = physical_result.total
-        terms.update(physical_result.terms)
-        total = total + training.lambda_physics * state.physics_scale * physics
+        total = total + training.lambda_physics * state.physics_scale * observable_objective
     terms["physics"] = physics
+    terms["observable_noninferiority"] = observable_noninferiority
     terms["physics_scale"] = total.new_tensor(state.physics_scale)
     return total, terms
 
@@ -316,7 +354,7 @@ def _evaluate_stabilized(
     condition_mean: torch.Tensor,
     condition_std: torch.Tensor,
     config: ProjectConfig,
-    physical: FrozenCylinderPhysics | None,
+    physical: FrozenDecoderObservables | None,
     device: torch.device,
 ) -> dict[str, float]:
     assert config.v0_9_training
@@ -385,13 +423,13 @@ def train_v0_9(
     context_payload = load_context_checkpoint(context_checkpoint)
     model = _build_model(resolved, cache, context_payload, selected)
     stabilized = _uses_stabilized_objective(resolved)
-    physical: FrozenCylinderPhysics | None = None
+    physical: FrozenDecoderObservables | None = None
     if resolved.v0_9_training.lambda_physics > 0:
         if backbone_checkpoint is None or physical_dataset is None:
             raise ValueError(
                 "enabled V0.9 physical objective requires backbone_checkpoint and physical_dataset"
             )
-        physical = FrozenCylinderPhysics.from_artifacts(
+        physical = FrozenDecoderObservables.from_artifacts(
             resolved,
             backbone_checkpoint=backbone_checkpoint,
             physical_dataset=physical_dataset,
@@ -536,11 +574,13 @@ def train_v0_9(
             "train_forecast",
             "train_rollout",
             "train_physics",
+            "train_observable_noninferiority",
             "train_propagator_growth",
             "validation_total",
             "validation_forecast",
             "validation_rollout",
             "validation_physics",
+            "validation_observable_noninferiority",
             "validation_burden",
             "validation_burden_max",
             "validation_stability",
@@ -566,6 +606,7 @@ def train_v0_9(
                 "forecast": 0.0,
                 "rollout": 0.0,
                 "physics": 0.0,
+                "observable_noninferiority": 0.0,
                 "propagator_growth": 0.0,
             }
             count = 0
@@ -613,7 +654,12 @@ def train_v0_9(
                 )
                 sums["total"] += float(loss.detach()) * batch_count
                 sums["forecast"] += float(terms["forecast"].detach()) * batch_count
-                for name in ("rollout", "physics", "propagator_growth"):
+                for name in (
+                    "rollout",
+                    "physics",
+                    "observable_noninferiority",
+                    "propagator_growth",
+                ):
                     if name in terms:
                         sums[name] += float(terms[name].detach()) * batch_count
                 count += batch_count
@@ -650,11 +696,17 @@ def train_v0_9(
                 "train_forecast": sums["forecast"] / count,
                 "train_rollout": sums["rollout"] / count,
                 "train_physics": sums["physics"] / count,
+                "train_observable_noninferiority": (
+                    sums["observable_noninferiority"] / count
+                ),
                 "train_propagator_growth": sums["propagator_growth"] / count,
                 "validation_total": validation["total"],
                 "validation_forecast": validation["forecast"],
                 "validation_rollout": validation.get("rollout", 0.0),
                 "validation_physics": validation.get("physics", 0.0),
+                "validation_observable_noninferiority": validation.get(
+                    "observable_noninferiority", 0.0
+                ),
                 "validation_burden": validation["burden"],
                 "validation_burden_max": validation.get("burden_max", 0.0),
                 "validation_stability": validation["stability"],
@@ -728,7 +780,7 @@ def train_v0_9(
             "closed_loop_curriculum": stabilized,
             "bounded_coordinates": resolved.v0_9_adaptive.bounded_coordinates,
             "trust_gate": resolved.v0_9_adaptive.trust_gate,
-            "frozen_decoder_physics": resolved.v0_9_training.lambda_physics > 0,
+            "frozen_decoder_observables": resolved.v0_9_training.lambda_physics > 0,
         },
         "curriculum": {
             "rollout_horizons": list(resolved.v0_9_training.rollout_horizons),
@@ -740,6 +792,10 @@ def train_v0_9(
             "physics_ramp_duration_fraction": (
                 resolved.v0_9_training.physics_ramp_duration_fraction
             ),
+            "observable_horizons": list(
+                resolved.v0_9_training.active_observable_horizons
+            ),
+            "observable_names": list(resolved.v0_9_training.observable_names),
         },
     }
     (destination / "evaluation" / "training_summary.json").write_text(

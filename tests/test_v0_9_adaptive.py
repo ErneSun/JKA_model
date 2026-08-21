@@ -29,11 +29,12 @@ from jka_model.config import (
     stable_config_hash,
 )
 from jka_model.context import build_dynamic_context_model
+from jka_model.observables import ObservableLossResult
 from jka_model.residual import ResidualCache, ResidualTrajectory
 from jka_model.residual.cache import file_sha256, save_residual_cache
 from jka_model.training import TrainStage, configure_train_stage
 from train.train_v0_8 import train_v0_8
-from train.train_v0_9 import train_v0_9
+from train.train_v0_9 import _stabilized_loss_bundle, train_v0_9
 
 
 def _context(latent_dim: int = 6, history: int = 3):
@@ -230,6 +231,77 @@ def test_complete_stabilization_objective_is_finite_and_differentiable() -> None
     assert gradient is not None and torch.isfinite(gradient).all()
 
 
+def test_stabilized_bundle_applies_problem_observables_at_multiple_horizons() -> None:
+    model = AdaptiveKoopmanModel(
+        _context(),
+        LowRankAdaptiveOperator(
+            -0.01 * torch.eye(6),
+            4,
+            V09AdaptiveConfig(rank=2, rank_candidates=(1, 2), width=8),
+        ),
+    )
+    payload = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml").to_dict()
+    payload["v0_9_adaptive"].update(
+        {"rank": 2, "rank_candidates": [1, 2], "width": 8}
+    )
+    payload["v0_9_training"].update(
+        {
+            "epochs": 2,
+            "rollout_horizons": [2, 4],
+            "rollout_start_fractions": [0.0, 0.0],
+            "rollout_weights": [1.0, 0.5],
+            "physics_horizon": 2,
+            "observable_horizons": [2, 4],
+            "observable_horizon_weights": [0.25, 0.75],
+            "lambda_physics": 0.1,
+            "lambda_observable_noninferiority": 0.1,
+        }
+    )
+    config = ProjectConfig.from_dict(payload)
+
+    class FakeObservables:
+        def __init__(self) -> None:
+            self.horizons: list[int] = []
+
+        def target_batch(self, trajectory_ids, target_indices, horizon, limit):
+            self.horizons.append(horizon)
+            return torch.zeros(limit, 6), {"horizon": horizon}
+
+        def loss(self, predicted_latent, target_raw, metadata):
+            value = (predicted_latent - target_raw).square().mean()
+            return ObservableLossResult(value, {"observable_mock": value})
+
+    observables = FakeObservables()
+    batch = {
+        "history_z": torch.randn(2, 3, 6),
+        "history_dts": torch.full((2, 2), 0.1),
+        "future_dts": torch.full((2, 4), 0.1),
+        "future_conditions": torch.zeros(2, 4, 2),
+        "target_latents": torch.randn(2, 4, 6),
+        "context_parameters": torch.randn(2, 3),
+        "schedule_type": ["smooth", "abrupt"],
+        "trajectory_id": ["a", "b"],
+        "target_index": torch.tensor([2, 3]),
+    }
+    total, terms = _stabilized_loss_bundle(
+        model,
+        batch,
+        torch.ones(6),
+        torch.zeros(2),
+        torch.ones(2),
+        config,
+        epoch=1,
+        physical=observables,  # type: ignore[arg-type]
+        validation=True,
+    )
+    assert observables.horizons == [2, 4]
+    assert "observable_mock_h2" in terms and "observable_mock_h4" in terms
+    assert torch.isfinite(total)
+    total.backward()
+    gradient = model.operator_adapter.operator_coordinate_head[-1].weight.grad
+    assert gradient is not None and torch.isfinite(gradient).all()
+
+
 def test_residual_decomposition_and_gamma_operator_contract() -> None:
     truth = torch.tensor([[2.0, 1.0]])
     nominal_prediction = torch.tensor([[0.0, 1.0]])
@@ -380,10 +452,12 @@ def test_v0_9_operator_only_training_writes_reloadable_checkpoint(tmp_path: Path
             "rollout_weights": [1.0, 0.5],
             "lambda_rollout": 1.0,
             "lambda_propagator_growth": 0.1,
-            "physics_horizon": 1,
-            "lambda_physics": 0.0,
-        }
-    )
+                "physics_horizon": 1,
+                "lambda_physics": 0.0,
+                "observable_horizons": [],
+                "observable_horizon_weights": [],
+            }
+        )
     config = ProjectConfig.from_dict(payload)
     result = train_v0_9(
         config,
@@ -421,9 +495,24 @@ def test_v0_9_operator_only_training_writes_reloadable_checkpoint(tmp_path: Path
         "physics_vorticity_weight",
         "physics_divergence_weight",
         "physics_boundary_weight",
+        "physics_lift_weight",
+        "physics_drag_weight",
+        "observable_names",
+        "observable_component_weights",
+        "observable_horizons",
+        "observable_horizon_weights",
+        "lambda_observable_noninferiority",
+        "observable_noninferiority_margin",
+        "observable_noninferiority_floor",
         "rank_sweep_epochs",
     ):
         legacy_config["v0_9_training"].pop(name)
+    for name in (
+        "min_dynamic_over_static_gain",
+        "observable_pair_pass_fraction",
+        "frequency_resolution_bins",
+    ):
+        legacy_config["v0_9_evaluation"].pop(name)
     saved["config_hash"] = stable_config_hash(legacy_config)
     legacy_path = tmp_path / "legacy_v0_9.pt"
     torch.save(saved, legacy_path)

@@ -57,11 +57,20 @@ v0_9_training:
   physics_vorticity_weight: 0.2
   physics_divergence_weight: 0.5
   physics_boundary_weight: 0.2
+  physics_lift_weight: 0.0
+  physics_drag_weight: 0.0
+  observable_names: [velocity, vorticity, divergence, boundary, lift, drag]
+  observable_component_weights: [1.0, 0.2, 0.5, 0.2, 0.1, 0.05]
+  observable_horizons: [4, 8, 16]
+  observable_horizon_weights: [0.2, 0.4, 0.4]
+  lambda_observable_noninferiority: 0.05
+  observable_noninferiority_margin: 0.10
+  observable_noninferiority_floor: 0.001
   rank_sweep_epochs: 40
   gradient_clip_norm: 1.0
   patience: 16
   precision: amp_bf16
   operator_initialization_seed: 701
-v0_9_evaluation: {rollout_horizons: [8, 16, 32, 80], material_relative_gain: 0.02, min_operator_explained_fraction: 0.02, max_operator_burden: 0.50, max_physics_degradation: 0.10, max_divergence_mse: 0.02, max_boundary_mse: 0.05, scientific_seed_fraction: 0.6666666666666666, v1_0_readiness_fraction: 1.0, operator_initialization_seeds: [701, 809, 907]}
+v0_9_evaluation: {rollout_horizons: [8, 16, 32, 80], material_relative_gain: 0.02, min_operator_explained_fraction: 0.02, min_dynamic_over_static_gain: 0.02, max_operator_burden: 0.50, max_physics_degradation: 0.10, max_divergence_mse: 0.02, max_boundary_mse: 0.05, observable_pair_pass_fraction: 1.0, frequency_resolution_bins: 1.0, scientific_seed_fraction: 0.6666666666666666, v1_0_readiness_fraction: 1.0, operator_initialization_seeds: [701, 809, 907]}
 project_version: 0.9.0
 tags: [v0.9, gpu-full, cylinder-wake, controlled-inlet, adaptive-koopman, rtx-5080]

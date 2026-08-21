@@ -17,7 +17,25 @@ The authoritative immutable report is
 
 ## Stabilization revision
 
-Software status: IMPLEMENTED; 20 targeted local tests and targeted Ruff checks PASS.
+Session: `v09-stabilized-20260821T114835Z`
+
+- Workflow: PASS
+- Long-rollout stability: PASS
+- Physics: FAIL
+- Low-rank operator adaptation: NOT_SUPPORTED
+- Selected rank: 12
+- V1.0 readiness: NOT_READY
+
+The stabilization objective corrected the earlier H32/H80 failure, but did not establish decoded
+observable non-inferiority or the full adaptive mechanism.
+
+## Phase-1/phase-2 revision
+
+Software status: IMPLEMENTED; 22 targeted local tests PASS.
+
+Phase 1 can reassess either completed raw session without training and will report operator,
+dynamic and observable evidence separately. Phase 2 adds a generic multi-horizon observable
+objective and therefore requires a new formal training ID.
 
 Formal GPU science: PENDING A NEW VALIDATION ID.
 Scientific support and V1.0 readiness remain unclaimed until that result is returned.

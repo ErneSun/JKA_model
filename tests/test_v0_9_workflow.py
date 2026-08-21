@@ -12,6 +12,13 @@ from gpu_validation.v0_9.scripts.gpu_validate_all import (
 )
 from jka_model.adaptive import aggregate_v0_9_results, audit_v0_8_handoff
 from jka_model.config import load_config
+from jka_model.evaluation import (
+    GateStatus,
+    MetricDirection,
+    MetricGateSpec,
+    aggregate_gate_results,
+    evaluate_metric_gate,
+)
 from jka_model.utils import create_versioned_session
 
 
@@ -35,6 +42,8 @@ def test_v09_config_and_revision_id_contract(tmp_path: Path) -> None:
     assert config.v0_9_adaptive.trust_gate
     assert config.v0_9_training is not None
     assert config.v0_9_training.rollout_horizons == (4, 8, 16, 32)
+    assert config.v0_9_training.observable_horizons == (4, 8, 16)
+    assert config.v0_9_training.observable_names[-2:] == ("lift", "drag")
     first = create_versioned_session(tmp_path, "v09-test")
     second = create_versioned_session(tmp_path, "v09-test")
     assert first.resolved_id == "v09-test"
@@ -74,6 +83,43 @@ def test_rank_selection_enforces_long_horizon_and_burden_before_parsimony() -> N
     )
     assert fallback["selected_rank"] == 4
     assert not fallback["constraints_satisfied"]
+
+
+def test_generic_metric_gates_handle_resolution_zero_baselines_and_inconclusive() -> None:
+    frequency = evaluate_metric_gate(
+        0.05,
+        MetricGateSpec(
+            "frequency_error",
+            MetricDirection.LOWER_IS_BETTER,
+            relative_margin=0.1,
+            resolution_floor=0.0625,
+        ),
+        baseline=0.0,
+    )
+    assert frequency.status is GateStatus.PASS
+    assert frequency.limit == 0.0625
+
+    divergence = evaluate_metric_gate(
+        0.15,
+        MetricGateSpec(
+            "divergence_rms",
+            MetricDirection.LOWER_IS_BETTER,
+            threshold=0.2,
+            relative_margin=0.1,
+        ),
+        baseline=0.1,
+    )
+    assert divergence.status is GateStatus.FAIL
+    assert divergence.limit is not None and abs(divergence.limit - 0.11) < 1e-12
+
+    nonfinite = evaluate_metric_gate(
+        float("nan"),
+        MetricGateSpec("missing", MetricDirection.HIGHER_IS_BETTER, threshold=0.0),
+    )
+    combined = aggregate_gate_results(
+        "combined", [frequency, nonfinite], minimum_count=2
+    )
+    assert combined.status is GateStatus.INCONCLUSIVE
 
 
 def test_v08_handoff_requires_three_jointly_passing_backbones(tmp_path: Path) -> None:
@@ -204,12 +250,16 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
                     "backbone_seed": seed,
                     "context_init_seed": 401,
                     "operator_init_seed": initialization,
+                    "problem_name": "synthetic_problem",
+                    "observable_objective": "synthetic_observables",
                     "condition_mode": mode,
                     "rank": 2,
                     "one_step_relative_gain": 0.2,
                     "operator_explained_fraction": 0.3,
                     "dynamic_over_static_gain": 0.1,
                     "history_over_shuffled_gain": 0.1,
+                    "operator_explained_status": "PASS",
+                    "dynamic_over_static_status": "PASS",
                     "controls_status": "PASS",
                     "closed_loop_by_horizon": {
                         "8": {"relative_gain_mean": 0.2, "gamma_operator_mean": 0.3, "pass": True}
@@ -219,6 +269,21 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
                     "operator_burden_status": "PASS",
                     "long_rollout_stability": "PASS",
                     "physics_status": "PASS",
+                    "observable_status": "PASS",
+                    "scientific_gates": {
+                        "one_step_prediction": {"status": "PASS", "value": 0.2},
+                        "operator_explained_residual": {
+                            "status": "PASS",
+                            "value": 0.3,
+                        },
+                        "dynamic_over_static": {"status": "PASS", "value": 0.1},
+                        "history_over_shuffled": {"status": "PASS", "value": 0.1},
+                        "dynamic_controls": {"status": "PASS", "value": 1.0},
+                        "observable_noninferiority": {
+                            "status": "PASS",
+                            "value": 1.0,
+                        },
+                    },
                     "adaptive_koopman": "SUPPORTED",
                     "scientific_joint_pass": True,
                     "claims": {},
@@ -244,8 +309,21 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
                     evaluation / "physical_metrics.csv",
                     [{"model": "adaptive", "velocity_relative_l2": 0.1}],
                 )
+                _write_csv(
+                    evaluation / "observable_gate_results.csv",
+                    [{"name": "velocity_relative_l2", "status": "PASS"}],
+                )
+                _write_csv(
+                    evaluation.parent / "logs" / "epoch_metrics.csv",
+                    [{"epoch": 0, "validation_total": 0.1}],
+                )
     result = aggregate_v0_9_results(session, output)
     assert result["low_rank_operator_adaptation"] == "SUPPORTED"
+    assert result["physical_problem"] == "synthetic_problem"
+    assert result["observable_objective"] == "synthetic_observables"
+    assert result["operator_explained_residual"] == "SUPPORTED"
+    assert result["dynamic_operator_adaptation"] == "SUPPORTED"
+    assert result["observable_support"] == "SUPPORTED"
     assert result["v1_0_ready"]
     assert result["compact_audit"]["complete"]
     assert (output / "report.md").is_file()
@@ -260,10 +338,19 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    for seed in (47, 53):
+        for decision_path in session.glob(
+            f"seeds/seed_{seed}/formal/*/init_*/evaluation/"
+            "v0_9_scientific_decision.json"
+        ):
+            record = json.loads(decision_path.read_text(encoding="utf-8"))
+            record["operator_explained_status"] = "INCONCLUSIVE"
+            decision_path.write_text(json.dumps(record), encoding="utf-8")
     conditional = aggregate_v0_9_results(session, tmp_path / "conditional")
     assert conditional["adaptive_mechanism_result"] == "SUPPORTED"
     assert conditional["low_rank_operator_adaptation"] == "CONDITIONALLY_SUPPORTED"
     assert conditional["evidence_tier"] == "EXPLORATORY_CONDITIONAL"
+    assert conditional["operator_explained_residual"] == "INCONCLUSIVE"
     assert not conditional["v1_0_ready"]
     validate_completion_payload(
         {
@@ -291,6 +378,7 @@ def test_v09_docs_and_single_command_exist() -> None:
         "operator_adaptation.md",
         "context_handoff.md",
         "stability_and_identifiability.md",
+        "evaluation_and_observable_revision.md",
         "evaluation.md",
         "testing.md",
         "status.md",

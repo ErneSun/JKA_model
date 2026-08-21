@@ -34,7 +34,11 @@ from jka_model.adaptive.objectives import (
     differentiable_adaptive_rollout,
     relative_propagator_growth_loss,
 )
-from jka_model.adaptive.physics import FrozenCylinderPhysics, PhysicalLossResult
+from jka_model.adaptive.physics import (
+    FrozenCylinderPhysics,
+    FrozenDecoderObservables,
+    PhysicalLossResult,
+)
 from jka_model.adaptive.reporting import aggregate_v0_9_results
 from jka_model.adaptive.rollout import adaptive_latent_rollout
 
@@ -50,6 +54,7 @@ __all__ = [
     "AdaptiveObjectiveResult",
     "CurriculumState",
     "FrozenCylinderPhysics",
+    "FrozenDecoderObservables",
     "PhysicalLossResult",
     "latent_prediction_metrics",
     "operator_burden",

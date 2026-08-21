@@ -3,7 +3,7 @@
 从项目根目录运行：
 
 ```bash
-.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_all.py --validation-id v09-stabilized-$(date -u +%Y%m%dT%H%M%SZ) --v0-8-id v08-final-20260820T111016Z --v0-8-handoff-policy supported --seeds 47 53 59
+.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_all.py --validation-id v09-observable-$(date -u +%Y%m%dT%H%M%SZ) --v0-8-id v08-final-20260820T111016Z --v0-8-handoff-policy supported --seeds 47 53 59
 ```
 
 该命令对应当前已知的 V0.8 supported handoff，并运行 G0 targeted tests；不要加
@@ -21,10 +21,19 @@
 `EXPLORATORY_CONDITIONAL`，即使 V0.9 机制通过也只写 `CONDITIONALLY_SUPPORTED`，且不能产生
 `V1.0 READY`。
 
-流程执行 targeted tests、V0.8 audit、controlled data/cache、带 H4/H8/H16/H32 课程与冻结 decoder physics 的
+流程执行 targeted tests、V0.8 audit、controlled data/cache、带 H4/H8/H16/H32 课程与冻结 decoder observables 的
 validation-only rank sweep、known/latent 3×3 训练、locked test、physics rollout 和 compact report。rank 选择先检查
 H32 gain 与 operator burden，再执行 2% 内最小 rank 规则。若 ID 已存在，自动分配 `-r1/-r2/...`。
 
 原始文件位于 `runs/v0_9/<resolved-id>/`；紧凑结果位于
 `gpu_validation/v0_9/results/<resolved-id>/`。正式运行要求源码与配置 clean；已有 `runs/` 和版本化
 `results/` 审计产物不触发 dirty-code 拒绝。
+
+若只想用阶段 1 的新判据复评一个已有完整 raw session，不重复任何训练：
+
+```bash
+.venv/bin/python gpu_validation/v0_9/scripts/gpu_reassess_existing.py --validation-id <resolved-v09-id> --device cuda
+```
+
+该流程重新执行 18 个 locked-test evaluation 并重建 compact report，记录 `training_count=0`。它不能验证阶段 2
+新训练目标的效果；阶段 2 必须使用上面的全新 ID 正式命令。

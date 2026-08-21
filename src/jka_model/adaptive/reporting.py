@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import statistics
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +23,8 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         rows = [{"status": "NO_RECORDS"}]
     with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        fieldnames = sorted({key for row in rows for key in row})
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -90,11 +93,16 @@ def _simple_plots(output: Path, records: list[dict[str, Any]]) -> None:
         "all_horizons_status",
         "longest_horizon_status",
         "operator_burden_status",
-        "physics_status",
+        "observable_status",
     )
     fig, axis = plt.subplots(figsize=(7.2, 4.2))
     fractions = [
-        sum(row[field] == "PASS" for row in records) / len(records) for field in statuses
+        sum(
+            str(row.get(field, row.get("physics_status", "FAIL"))) == "PASS"
+            for row in records
+        )
+        / len(records)
+        for field in statuses
     ]
     axis.bar(range(len(statuses)), fractions)
     axis.set_xticks(range(len(statuses)), [name.removesuffix("_status") for name in statuses])
@@ -125,9 +133,95 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
     seeds = {int(row["backbone_seed"]) for row in records}
     if len(seeds) != 3:
         raise ValueError("V0.9 formal evidence requires three backbone/data seeds")
+    problem_names = {
+        str(row.get("problem_name", "cylinder_wake_2d_controlled_inlet"))
+        for row in records
+    }
+    observable_objectives = {
+        str(row.get("observable_objective", "legacy_cylinder_observables"))
+        for row in records
+    }
+    if len(problem_names) != 1 or len(observable_objectives) != 1:
+        raise ValueError("V0.9 formal evidence cannot mix problems or observable objectives")
     grouped: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
     for row in records:
         grouped[(int(row["backbone_seed"]), str(row["condition_mode"]))].append(row)
+
+    def nested_gate_support(
+        status_field: str,
+        *,
+        fallback: Callable[[dict[str, Any]], str],
+    ) -> dict[str, Any]:
+        per_seed: dict[str, Any] = {}
+        for seed in sorted(seeds):
+            modes_for_seed: dict[str, Any] = {}
+            for mode in sorted(modes):
+                rows = grouped[(seed, mode)]
+                statuses = [
+                    str(row[status_field]) if status_field in row else fallback(row)
+                    for row in rows
+                ]
+                passed = sum(status == "PASS" for status in statuses)
+                inconclusive = sum(status == "INCONCLUSIVE" for status in statuses)
+                required = math.ceil(2.0 * len(statuses) / 3.0)
+                if passed >= required:
+                    status = "PASS"
+                elif passed + inconclusive < required:
+                    status = "FAIL"
+                else:
+                    status = "INCONCLUSIVE"
+                modes_for_seed[mode] = {
+                    "operator_init_pass_fraction": passed / len(statuses),
+                    "inconclusive_count": inconclusive,
+                    "status": status,
+                    "supported": status == "PASS",
+                }
+            mode_statuses = [item["status"] for item in modes_for_seed.values()]
+            joint_status = (
+                "PASS"
+                if all(status == "PASS" for status in mode_statuses)
+                else "FAIL"
+                if any(status == "FAIL" for status in mode_statuses)
+                else "INCONCLUSIVE"
+            )
+            per_seed[str(seed)] = {
+                "modes": modes_for_seed,
+                "joint_status": joint_status,
+                "joint_supported": joint_status == "PASS",
+            }
+        joint_statuses = [item["joint_status"] for item in per_seed.values()]
+        support_count = sum(status == "PASS" for status in joint_statuses)
+        inconclusive_count = sum(status == "INCONCLUSIVE" for status in joint_statuses)
+        required = math.ceil(2.0 * len(joint_statuses) / 3.0)
+        if support_count >= required:
+            aggregate_status = "SUPPORTED"
+        elif support_count + inconclusive_count < required:
+            aggregate_status = "NOT_SUPPORTED"
+        else:
+            aggregate_status = "INCONCLUSIVE"
+        return {
+            "status": aggregate_status,
+            "backbone_support_fraction": support_count / len(per_seed),
+            "inconclusive_backbone_count": inconclusive_count,
+            "nested_seed_support": per_seed,
+        }
+
+    operator_support = nested_gate_support(
+        "operator_explained_status",
+        fallback=lambda row: (
+            "PASS" if float(row["operator_explained_fraction"]) >= 0.02 else "FAIL"
+        ),
+    )
+    dynamic_support = nested_gate_support(
+        "dynamic_over_static_status",
+        fallback=lambda row: (
+            "PASS" if float(row["dynamic_over_static_gain"]) >= 0.02 else "FAIL"
+        ),
+    )
+    observable_support = nested_gate_support(
+        "observable_status",
+        fallback=lambda row: str(row.get("physics_status", "FAIL")),
+    )
     per_backbone: dict[str, Any] = {}
     for seed in sorted(seeds):
         mode_support: dict[str, Any] = {}
@@ -166,8 +260,9 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
     )
     v1_ready = strict_handoff and backbone_fraction == 1.0
     decision = {
-        "schema_version": 1,
-        "physical_problem": "cylinder_wake_2d_controlled_inlet",
+        "schema_version": 2,
+        "physical_problem": next(iter(problem_names)),
+        "observable_objective": next(iter(observable_objectives)),
         "v0_8_strict_readiness": "PASS" if strict_handoff else "NOT_READY",
         "v0_8_handoff_policy": handoff_policy,
         "evidence_tier": "CONFIRMATORY" if strict_handoff else "EXPLORATORY_CONDITIONAL",
@@ -178,7 +273,9 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "latent_inferred_adaptation": latent_decision,
         "low_rank_operator_adaptation": adaptive_decision,
         "adaptive_mechanism_result": adaptive_mechanism,
-        "operator_explained_residual": adaptive_decision,
+        "operator_explained_residual": operator_support["status"],
+        "dynamic_operator_adaptation": dynamic_support["status"],
+        "observable_support": observable_support["status"],
         "long_rollout_stability": (
             "PASS" if all(row["long_rollout_stability"] == "PASS" for row in records) else "FAIL"
         ),
@@ -193,6 +290,11 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "selected_rank": int(rank_selection["selected_rank"]),
         "formal_run_count": len(records),
         "nested_seed_support": per_backbone,
+        "independent_gate_support": {
+            "operator_explained_residual": operator_support,
+            "dynamic_operator_adaptation": dynamic_support,
+            "observables": observable_support,
+        },
         "claims": {
             "backbone_frozen": True,
             "context_frozen": True,
@@ -219,6 +321,9 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
     rollout_rows: list[dict[str, Any]] = []
     physical_rows: list[dict[str, Any]] = []
     training_rows: list[dict[str, Any]] = []
+    epoch_rows: list[dict[str, Any]] = []
+    gate_rows: list[dict[str, Any]] = []
+    observable_gate_rows: list[dict[str, Any]] = []
     for source in sources:
         root = source.parent
         for filename, target in (
@@ -230,20 +335,65 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
                     dict(row, source_file=str(root / filename))
                     for row in csv.DictReader(stream)
                 )
+        observable_gate_path = root / "observable_gate_results.csv"
+        if observable_gate_path.is_file():
+            with observable_gate_path.open(newline="", encoding="utf-8") as stream:
+                observable_gate_rows.extend(
+                    dict(row, source_file=str(observable_gate_path))
+                    for row in csv.DictReader(stream)
+                )
         summary = _read(root.parent / "evaluation" / "training_summary.json")
-        training_rows.append(
+        source_decision = _read(source)
+        training_row = {
+            "backbone_seed": source_decision["backbone_seed"],
+            "condition_mode": source_decision["condition_mode"],
+            "operator_init_seed": source_decision["operator_init_seed"],
+            "completed_epochs": summary["completed_epochs"],
+            "test_status": summary["test_locked_confirmation"],
+        }
+        training_row.update(
             {
-                "backbone_seed": _read(source)["backbone_seed"],
-                "condition_mode": _read(source)["condition_mode"],
-                "operator_init_seed": _read(source)["operator_init_seed"],
-                "completed_epochs": summary["completed_epochs"],
-                "validation_forecast": summary["validation"]["forecast"],
-                "test_status": summary["test_locked_confirmation"],
+                f"validation_{key}": value
+                for key, value in summary["validation"].items()
+                if isinstance(value, int | float | str | bool)
             }
         )
+        training_row["curriculum"] = json.dumps(summary.get("curriculum", {}), sort_keys=True)
+        training_row["claims"] = json.dumps(summary.get("claims", {}), sort_keys=True)
+        training_rows.append(training_row)
+        epoch_path = root.parent / "logs" / "epoch_metrics.csv"
+        if epoch_path.is_file():
+            with epoch_path.open(newline="", encoding="utf-8") as stream:
+                epoch_rows.extend(
+                    {
+                        "backbone_seed": source_decision["backbone_seed"],
+                        "condition_mode": source_decision["condition_mode"],
+                        "operator_init_seed": source_decision["operator_init_seed"],
+                        **row,
+                    }
+                    for row in csv.DictReader(stream)
+                )
+        for name, gate in source_decision.get("scientific_gates", {}).items():
+            gate_rows.append(
+                {
+                    "backbone_seed": source_decision["backbone_seed"],
+                    "condition_mode": source_decision["condition_mode"],
+                    "operator_init_seed": source_decision["operator_init_seed"],
+                    "gate": name,
+                    **{
+                        key: json.dumps(value, sort_keys=True)
+                        if isinstance(value, dict | list)
+                        else value
+                        for key, value in gate.items()
+                    },
+                }
+            )
     _write_csv(evaluation / "rollout_metrics.csv", rollout_rows)
     _write_csv(evaluation / "physical_metrics.csv", physical_rows)
     _write_csv(evaluation / "training_summary.csv", training_rows)
+    _write_csv(evaluation / "training_epoch_metrics.csv", epoch_rows)
+    _write_csv(evaluation / "scientific_gate_results.csv", gate_rows)
+    _write_csv(evaluation / "observable_gate_results.csv", observable_gate_rows)
     _simple_plots(output, records)
     report = (
         "# V0.9 scientific report\n\n"
@@ -259,6 +409,8 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         f"LOW-RANK OPERATOR ADAPTATION: {adaptive_decision}  \n"
         f"ADAPTIVE MECHANISM RESULT: {adaptive_mechanism}  \n"
         f"OPERATOR-EXPLAINED RESIDUAL: {decision['operator_explained_residual']}  \n"
+        f"DYNAMIC OPERATOR ADAPTATION: {decision['dynamic_operator_adaptation']}  \n"
+        f"OBSERVABLE SUPPORT: {decision['observable_support']}  \n"
         f"LONG-ROLLOUT STABILITY: {decision['long_rollout_stability']}  \n"
         f"PHYSICS STATUS: {decision['physics_status']}  \n"
         f"V1.0 READINESS: {decision['v1_0_readiness']}\n\n"
@@ -276,10 +428,16 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
                 bool(rollout_rows),
                 bool(physical_rows),
                 len(training_rows) == 18,
+                bool(epoch_rows),
+                len(gate_rows) >= 6 * len(records),
+                bool(observable_gate_rows),
             )
         ),
         "formal_decision_count": len(records),
         "training_summary_count": len(training_rows),
+        "training_epoch_metric_count": len(epoch_rows),
+        "scientific_gate_result_count": len(gate_rows),
+        "observable_gate_result_count": len(observable_gate_rows),
         "plot_count": len(list((output / "plots").glob("*.png"))),
         "rank_selection": rank_selection,
         "v0_8_handoff": handoff,

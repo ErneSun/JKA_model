@@ -64,20 +64,23 @@ redundant overlapping windows without changing the trajectory split or causal or
 stopping receives a fresh patience budget only after the final rollout/physics curriculum stage is
 active.
 
-## Frozen-decoder physical anchor
+## Frozen-decoder observable anchor
 
-Only a small subset of each batch is decoded at H8.  In raw units,
+A small subset of each batch is decoded at H4/H8/H16. In raw units,
 
 \[
-\mathcal L_{phys}=w_u\mathcal L_u+w_\omega\mathcal L_\omega
-+w_{div}\mathcal L_{div}+w_{wall}\mathcal L_{wall}.
+\mathcal L_{obs}=w_u\mathcal L_u+w_\omega\mathcal L_\omega
++w_{div}\mathcal L_{div}+w_{wall}\mathcal L_{wall}
++w_L\mathcal L_L+w_D\mathcal L_D.
 \]
 
 The terms are normalized relative velocity error, relative vorticity error, divergence energy
 relative to target gradient energy, and cylinder no-slip energy relative to target fluid velocity
 energy.  Decoder weights never receive gradients or optimizer state; the loss changes only the
-adaptive operator through the predicted latent state.  Lift, drag and frequency remain locked-test
-acceptance metrics rather than training targets.
+adaptive operator through the predicted latent state. Lift and drag now provide differentiable
+global anchors; frequency remains a resolution-aware locked-test metric rather than a peak-selection
+training target. A nominal-relative non-inferiority penalty prevents a component from being traded
+away merely because another component improves.
 
 ## Rank selection and reproducibility
 
@@ -92,7 +95,9 @@ Each module has an independent contract:
 - `adaptive/dataset.py`: causal rollout windows and stride;
 - `adaptive/models.py`: bounded coordinates and trust gate;
 - `adaptive/objectives.py`: curriculum, differentiable rollout and stability terms;
-- `adaptive/physics.py`: frozen decoder and raw-unit physical losses;
+- `observables/base.py`: problem-independent objective protocol;
+- `problems/cylinder_observables.py`: cylinder-only observable mathematics and gates;
+- `adaptive/physics.py`: generic frozen-decoder bridge;
 - `train/train_v0_9.py`: stage composition, exact resume and compact logging;
 - `gpu_validate_all.py`: constrained rank selection and nested formal validation.
 

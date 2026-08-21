@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from jka_model.config import CylinderWake2DConfig
+from jka_model.config import CylinderWake2DConfig, V09EvaluationConfig, V09TrainingConfig
 from jka_model.contracts import ProblemSpec
 from jka_model.data import (
     TrajectoryDataset,
@@ -19,6 +19,7 @@ from jka_model.physics import (
     CylinderDivergenceConstraint2D,
     PhysicsConstraint,
 )
+from jka_model.problems.cylinder_observables import CylinderWakeObservableObjective
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,14 @@ class CylinderWake2DProblemAdapter:
             "snapshot_dt": self.config.snapshot_dt,
             "lattice_relaxation_time": self.config.lattice_relaxation_time,
         }
+
+    def build_observable_objective(
+        self,
+        *,
+        training: V09TrainingConfig | None = None,
+        evaluation: V09EvaluationConfig | None = None,
+    ) -> CylinderWakeObservableObjective:
+        return CylinderWakeObservableObjective(self.config, training, evaluation)
 
     def describe(self) -> Mapping[str, Any]:
         return {

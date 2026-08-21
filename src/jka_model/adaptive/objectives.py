@@ -170,7 +170,7 @@ def adaptive_stabilization_objective(
     required_steps = max(
         1,
         *(curriculum.active_horizons or (1,)),
-        config.physics_horizon if curriculum.physics_scale > 0 else 1,
+        max(config.active_observable_horizons) if curriculum.physics_scale > 0 else 1,
     )
     if batch["future_dts"].shape[1] < required_steps:
         raise ValueError("rollout batch is shorter than the active curriculum")
@@ -223,7 +223,7 @@ def adaptive_stabilization_objective(
         {
             *(curriculum.active_horizons or (1,)),
             *(
-                (config.physics_horizon,)
+                config.active_observable_horizons
                 if curriculum.physics_scale > 0
                 else ()
             ),

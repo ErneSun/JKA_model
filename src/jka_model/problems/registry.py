@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from jka_model.config import ProjectConfig
 from jka_model.problems.advection_diffusion_2d import AdvectionDiffusion2DProblemAdapter
-from jka_model.problems.base import ProblemAdapter
+from jka_model.problems.base import ObservableProblemAdapter, ProblemAdapter
 from jka_model.problems.cylinder_wake_2d import CylinderWake2DProblemAdapter
 
 ProblemAdapterFactory = Callable[[ProjectConfig], ProblemAdapter]
@@ -49,3 +49,13 @@ def create_problem_adapter(config: ProjectConfig) -> ProblemAdapter:
             f"no problem adapter registered for {config.data.problem_name!r}; known: {known}"
         ) from error
     return factory(config)
+
+
+def create_observable_problem_adapter(config: ProjectConfig) -> ObservableProblemAdapter:
+    """Resolve a problem and require the optional decoded-observable contract."""
+    adapter = create_problem_adapter(config)
+    if not isinstance(adapter, ObservableProblemAdapter):
+        raise ValueError(
+            f"problem {config.data.problem_name!r} has no observable objective"
+        )
+    return adapter

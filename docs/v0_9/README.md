@@ -13,10 +13,11 @@ A_t=A_0+U\operatorname{diag}(\eta_t)V^\top\rightarrow e^{A_t\Delta t}z_t.
 
 长时稳定性修订将坐标限制为
 `eta = sigmoid(gate) * eta_max * tanh(raw_eta)`，并采用 H4/H8/H16/H32 teacher-free
-课程、相对 nominal propagator-growth 约束和冻结 decoder 的 raw-unit physics anchor。完整数学与模块边界见
-`stabilization_revision.md`。
+课程、相对 nominal propagator-growth 约束和冻结 decoder 的 problem-owned observable anchor。
+阶段 1/2 的独立门控、多尺度 observable 与复评合同见 `evaluation_and_observable_revision.md`。
 
-只有 V0.8 严格达到 3/3 backbone/data seed 联合 readiness 时才允许训练。V0.9 同时比较
+确认性结论只有在 V0.8 严格达到 3/3 backbone/data seed 联合 readiness 时才允许；显式
+`supported` handoff 只能形成探索性条件证据。V0.9 同时比较
 known-condition 与 latent-inferred-condition；后者不得读取 Re、入口速度、change label 或 transition time。
 
 V0.9 不实现 unseen-transition generalization、persistent `z_R`、additive closure 或 joint fine-tuning。
