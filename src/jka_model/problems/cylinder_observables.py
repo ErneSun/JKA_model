@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import torch
 from torch import Tensor
 
 from jka_model.config import CylinderWake2DConfig, V09EvaluationConfig, V09TrainingConfig
@@ -14,7 +15,13 @@ from jka_model.data import (
     velocity_vorticity_divergence,
 )
 from jka_model.evaluation import MetricDirection, MetricGateSpec
-from jka_model.observables import ObservableLossResult
+from jka_model.observables import (
+    ObservableLossResult,
+    RobustObservableScaleState,
+    deterministic_subsample,
+    fit_robust_observable_scales,
+    standardized_huber,
+)
 
 
 class CylinderWakeObservableObjective:
@@ -59,6 +66,62 @@ class CylinderWakeObservableObjective:
                 "lift": self.training.physics_lift_weight,
                 "drag": self.training.physics_drag_weight,
             }
+        self.scale_state: RobustObservableScaleState | None = None
+
+    def set_scale_state(self, state: RobustObservableScaleState) -> None:
+        missing = self._KNOWN_COMPONENTS - set(state.scales)
+        if missing:
+            raise ValueError(f"cylinder observable scales miss {sorted(missing)!r}")
+        self.scale_state = state
+
+    def fit_training_scales(
+        self,
+        records: Mapping[str, Any],
+        trajectory_ids: tuple[str, ...],
+        *,
+        split_fingerprint: str,
+    ) -> RobustObservableScaleState:
+        """Fit physical scales only from records owned by the training split."""
+        if not trajectory_ids or any(identifier not in records for identifier in trajectory_ids):
+            raise ValueError("cylinder scale fit requires complete training trajectory ids")
+        per_record = max(
+            1,
+            self.training.observable_scale_max_samples // len(trajectory_ids),
+        )
+        collected: dict[str, list[Tensor]] = {name: [] for name in self._KNOWN_COMPONENTS}
+        for identifier in trajectory_ids:
+            record = records[identifier]
+            raw = record.states_raw.detach().float().cpu()
+            valid = record.valid_mask
+            if not isinstance(valid, Tensor):
+                raise ValueError("cylinder scale fitting requires a valid fluid mask")
+            valid = valid.bool().cpu()
+            vorticity, divergence = velocity_vorticity_divergence(raw, self.config)
+            drag, lift = cylinder_force_coefficients(raw, self.config)
+            solid = ~valid
+            values = {
+                "velocity": raw[:, :2, valid],
+                "vorticity": vorticity[:, valid],
+                "divergence": divergence[:, valid],
+                "boundary": raw[:, :2, solid],
+                "lift": lift,
+                "drag": drag,
+            }
+            for name, value in values.items():
+                collected[name].append(deterministic_subsample(value, per_record))
+        state = fit_robust_observable_scales(
+            {name: torch.cat(values) for name, values in collected.items()},
+            method=self.training.observable_scale_method,
+            epsilon=self.training.observable_scale_epsilon,
+            split_fingerprint=split_fingerprint,
+            maximum_samples=self.training.observable_scale_max_samples,
+            relative_floors={
+                "divergence": ("vorticity", 1.0e-3),
+                "boundary": ("velocity", 1.0e-3),
+            },
+        )
+        self.set_scale_state(state)
+        return state
 
     @staticmethod
     def _relative_energy(prediction: Tensor, target: Tensor) -> Tensor:
@@ -82,6 +145,60 @@ class CylinderWakeObservableObjective:
             raise ValueError("cylinder observable states must have shape [B,3,Nx,Ny]")
         fluid = valid_mask.unsqueeze(1).to(predicted_raw.dtype)
         solid = (~valid_mask).unsqueeze(1).to(predicted_raw.dtype)
+        if self.training.phase1_enabled:
+            if self.scale_state is None:
+                raise RuntimeError("phase-1 observable loss requires train-only scales")
+            predicted_vorticity, predicted_divergence = velocity_vorticity_divergence(
+                predicted_raw, self.config
+            )
+            target_vorticity, _ = velocity_vorticity_divergence(target_raw, self.config)
+            predicted_drag, predicted_lift = cylinder_force_coefficients(
+                predicted_raw, self.config
+            )
+            target_drag, target_lift = cylinder_force_coefficients(target_raw, self.config)
+            delta = self.training.observable_huber_delta
+            components = {
+                "velocity": standardized_huber(
+                    predicted_raw[:, :2] - target_raw[:, :2],
+                    self.scale_state.scale("velocity", predicted_raw),
+                    delta=delta,
+                    mask=valid_mask,
+                ),
+                "vorticity": standardized_huber(
+                    predicted_vorticity - target_vorticity,
+                    self.scale_state.scale("vorticity", predicted_raw),
+                    delta=delta,
+                    mask=valid_mask,
+                ),
+                "divergence": standardized_huber(
+                    predicted_divergence,
+                    self.scale_state.scale("divergence", predicted_raw),
+                    delta=delta,
+                    mask=valid_mask,
+                ),
+                "boundary": standardized_huber(
+                    predicted_raw[:, :2],
+                    self.scale_state.scale("boundary", predicted_raw),
+                    delta=delta,
+                    mask=~valid_mask,
+                ),
+                "lift": standardized_huber(
+                    predicted_lift - target_lift,
+                    self.scale_state.scale("lift", predicted_raw),
+                    delta=delta,
+                ),
+                "drag": standardized_huber(
+                    predicted_drag - target_drag,
+                    self.scale_state.scale("drag", predicted_raw),
+                    delta=delta,
+                ),
+            }
+            total = predicted_raw.new_zeros(())
+            terms: dict[str, Tensor] = {}
+            for name, weight in self.weights.items():
+                total = total + weight * components[name]
+                terms[f"observable_{name}"] = components[name]
+            return ObservableLossResult(total, terms)
         velocity = ((predicted_raw[:, :2] - target_raw[:, :2]).square() * fluid).sum() / (
             target_raw[:, :2].square() * fluid
         ).sum().clamp_min(1e-12)
@@ -129,6 +246,96 @@ class CylinderWakeObservableObjective:
             total = total + weight * components[name]
             terms[f"observable_{name}"] = components[name]
         return ObservableLossResult(total, terms)
+
+    def force_window_loss(
+        self,
+        predicted_raw: Tensor,
+        target_raw: Tensor,
+        metadata: Mapping[str, Any],
+    ) -> ObservableLossResult:
+        """Causal waveform/correlation/spectrum loss on decoded force windows."""
+        del metadata
+        if self.scale_state is None:
+            raise RuntimeError("force-window loss requires train-only scales")
+        if predicted_raw.shape != target_raw.shape or predicted_raw.ndim != 5:
+            raise ValueError("force windows must have shape [B,T,3,Nx,Ny]")
+        batch, steps = predicted_raw.shape[:2]
+        predicted_drag, predicted_lift = cylinder_force_coefficients(
+            predicted_raw.reshape(-1, *predicted_raw.shape[2:]), self.config
+        )
+        target_drag, target_lift = cylinder_force_coefficients(
+            target_raw.reshape(-1, *target_raw.shape[2:]), self.config
+        )
+        predicted_force = torch.stack((predicted_lift, predicted_drag), dim=-1).reshape(
+            batch, steps, 2
+        )
+        target_force = torch.stack((target_lift, target_drag), dim=-1).reshape(
+            batch, steps, 2
+        )
+        scales = predicted_force.new_tensor(
+            [self.scale_state.scales["lift"], self.scale_state.scales["drag"]]
+        )
+        component_weights = predicted_force.new_tensor(
+            [self.weights.get("lift", 0.0), self.weights.get("drag", 0.0)]
+        )
+        weight_sum = component_weights.sum()
+        if not bool(weight_sum > 0):
+            raise ValueError("force-window objective requires lift or drag weight")
+        waveform_by_component = torch.nn.functional.huber_loss(
+            (predicted_force - target_force) / scales,
+            torch.zeros_like(predicted_force),
+            delta=self.training.observable_huber_delta,
+            reduction="none",
+        )
+        waveform = (
+            waveform_by_component.mean(dim=(0, 1)) * component_weights
+        ).sum() / weight_sum
+        correlation = waveform.new_zeros(())
+        spectrum = waveform.new_zeros(())
+        if steps >= 2:
+            predicted_centered = predicted_force - predicted_force.mean(dim=1, keepdim=True)
+            target_centered = target_force - target_force.mean(dim=1, keepdim=True)
+            numerator = (predicted_centered * target_centered).sum(dim=1)
+            denominator = (
+                predicted_centered.square().sum(dim=1).sqrt()
+                * target_centered.square().sum(dim=1).sqrt()
+            ).clamp_min(self.training.observable_scale_epsilon)
+            target_norm = target_centered.square().sum(dim=1).sqrt()
+            valid_correlation = target_norm > self.training.observable_scale_epsilon
+            if bool(valid_correlation.any()):
+                correlation_by_component = 1.0 - numerator / denominator
+                active_weights = component_weights.unsqueeze(0).expand_as(
+                    correlation_by_component
+                ) * valid_correlation
+                correlation = (correlation_by_component * active_weights).sum() / (
+                    active_weights.sum().clamp_min(self.training.observable_scale_epsilon)
+                )
+        if steps >= 4:
+            predicted_power = torch.fft.rfft(predicted_force.float(), dim=1).abs().square()
+            target_power = torch.fft.rfft(target_force.float(), dim=1).abs().square()
+            predicted_power = predicted_power / predicted_power.sum(dim=1, keepdim=True).clamp_min(
+                self.training.observable_scale_epsilon
+            )
+            target_power = target_power / target_power.sum(dim=1, keepdim=True).clamp_min(
+                self.training.observable_scale_epsilon
+            )
+            spectrum_by_component = (predicted_power - target_power).square().mean(
+                dim=(0, 1)
+            )
+            spectrum = (spectrum_by_component * component_weights).sum() / weight_sum
+        total = (
+            waveform
+            + self.training.force_correlation_weight * correlation
+            + self.training.force_spectrum_weight * spectrum
+        )
+        return ObservableLossResult(
+            total,
+            {
+                "observable_force_waveform": waveform,
+                "observable_force_correlation": correlation,
+                "observable_force_spectrum": spectrum,
+            },
+        )
 
     def evaluation_metrics(
         self,

@@ -82,6 +82,22 @@ def validate_adaptive_checkpoint(payload: Mapping[str, Any]) -> None:
         raise ValueError("V0.9 checkpoint lacks adaptive model state")
     if float(payload["best_validation_score"]) < 0:
         raise ValueError("V0.9 checkpoint has invalid validation score")
+    if config.v0_9_training.phase1_enabled:
+        phase1 = payload.get("phase1_state")
+        if not isinstance(phase1, Mapping):
+            raise ValueError("phase-1 V0.9 checkpoint lacks phase1_state")
+        scale = phase1.get("observable_scale_state")
+        augmented = phase1.get("augmented_lagrangian_state")
+        if not isinstance(scale, Mapping) or not isinstance(augmented, Mapping):
+            raise ValueError("phase-1 V0.9 checkpoint state is incomplete")
+        if scale.get("split_fingerprint") in {None, ""}:
+            raise ValueError("phase-1 V0.9 checkpoint lacks scale provenance")
+        if tuple(augmented.get("names", ())) != (
+            "divergence",
+            "boundary",
+            "burden",
+        ):
+            raise ValueError("phase-1 V0.9 checkpoint constraint state mismatch")
 
 
 def save_adaptive_checkpoint(payload: Mapping[str, Any], path: str | Path) -> None:

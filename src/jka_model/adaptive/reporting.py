@@ -222,6 +222,10 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "observable_status",
         fallback=lambda row: str(row.get("physics_status", "FAIL")),
     )
+    representation_support = nested_gate_support(
+        "representation_physical_floor_status",
+        fallback=lambda row: "INCONCLUSIVE",
+    )
     per_backbone: dict[str, Any] = {}
     for seed in sorted(seeds):
         mode_support: dict[str, Any] = {}
@@ -258,7 +262,36 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         if strict_handoff or adaptive_mechanism == "NOT_SUPPORTED"
         else "CONDITIONALLY_SUPPORTED"
     )
-    v1_ready = strict_handoff and backbone_fraction == 1.0
+    phase1_attribution_complete = all(
+        bool(row.get("claims", {}).get("phase1_error_attribution_complete"))
+        for row in records
+    )
+    phase1_artifacts_complete = all(
+        (
+            (source.parent / "error_attribution.csv").is_file()
+            and (source.parent.parent / "logs" / "gradient_geometry.jsonl").is_file()
+            and bool(
+                _read(source.parent / "training_summary.json")
+                .get("phase1", {})
+                .get("observable_scale_state", {})
+                .get("split_fingerprint")
+            )
+            and int(
+                _read(source.parent / "training_summary.json")
+                .get("phase1", {})
+                .get("gradient_audit_records", 0)
+            )
+            > 0
+        )
+        for source in sources
+    )
+    v1_ready = bool(
+        strict_handoff
+        and backbone_fraction == 1.0
+        and representation_support["status"] == "SUPPORTED"
+        and phase1_attribution_complete
+        and phase1_artifacts_complete
+    )
     decision = {
         "schema_version": 2,
         "physical_problem": next(iter(problem_names)),
@@ -276,6 +309,20 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "operator_explained_residual": operator_support["status"],
         "dynamic_operator_adaptation": dynamic_support["status"],
         "observable_support": observable_support["status"],
+        "representation_physical_floor": representation_support["status"],
+        "phase1_diagnosis": (
+            "REPRESENTATION_BLOCKED"
+            if representation_support["status"] == "NOT_SUPPORTED"
+            else "OPERATOR_OPTIMIZATION_IDENTIFIABLE"
+            if representation_support["status"] == "SUPPORTED"
+            else "INCONCLUSIVE"
+        ),
+        "phase1_error_attribution": (
+            "COMPLETE" if phase1_attribution_complete else "INCOMPLETE"
+        ),
+        "phase1_diagnostic_artifacts": (
+            "COMPLETE" if phase1_artifacts_complete else "INCOMPLETE"
+        ),
         "long_rollout_stability": (
             "PASS" if all(row["long_rollout_stability"] == "PASS" for row in records) else "FAIL"
         ),
@@ -294,6 +341,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
             "operator_explained_residual": operator_support,
             "dynamic_operator_adaptation": dynamic_support,
             "observables": observable_support,
+            "representation_physical_floor": representation_support,
         },
         "claims": {
             "backbone_frozen": True,
@@ -324,6 +372,8 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
     epoch_rows: list[dict[str, Any]] = []
     gate_rows: list[dict[str, Any]] = []
     observable_gate_rows: list[dict[str, Any]] = []
+    attribution_rows: list[dict[str, Any]] = []
+    gradient_audit_rows: list[dict[str, Any]] = []
     for source in sources:
         root = source.parent
         for filename, target in (
@@ -340,6 +390,13 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
             with observable_gate_path.open(newline="", encoding="utf-8") as stream:
                 observable_gate_rows.extend(
                     dict(row, source_file=str(observable_gate_path))
+                    for row in csv.DictReader(stream)
+                )
+        attribution_path = root / "error_attribution.csv"
+        if attribution_path.is_file():
+            with attribution_path.open(newline="", encoding="utf-8") as stream:
+                attribution_rows.extend(
+                    dict(row, source_file=str(attribution_path))
                     for row in csv.DictReader(stream)
                 )
         summary = _read(root.parent / "evaluation" / "training_summary.json")
@@ -360,7 +417,30 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         )
         training_row["curriculum"] = json.dumps(summary.get("curriculum", {}), sort_keys=True)
         training_row["claims"] = json.dumps(summary.get("claims", {}), sort_keys=True)
+        phase1_summary = summary.get("phase1", {})
+        training_row["phase1_gradient_audit_records"] = phase1_summary.get(
+            "gradient_audit_records", 0
+        )
+        training_row["phase1_minimum_gradient_cosine"] = phase1_summary.get(
+            "minimum_gradient_cosine"
+        )
+        scale_state = phase1_summary.get("observable_scale_state") or {}
+        training_row["phase1_scale_split_fingerprint"] = scale_state.get(
+            "split_fingerprint"
+        )
         training_rows.append(training_row)
+        gradient_path = root.parent / "logs" / "gradient_geometry.jsonl"
+        if gradient_path.is_file():
+            for line in gradient_path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    gradient_audit_rows.append(
+                        {
+                            "backbone_seed": source_decision["backbone_seed"],
+                            "condition_mode": source_decision["condition_mode"],
+                            "operator_init_seed": source_decision["operator_init_seed"],
+                            **json.loads(line),
+                        }
+                    )
         epoch_path = root.parent / "logs" / "epoch_metrics.csv"
         if epoch_path.is_file():
             with epoch_path.open(newline="", encoding="utf-8") as stream:
@@ -394,6 +474,8 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
     _write_csv(evaluation / "training_epoch_metrics.csv", epoch_rows)
     _write_csv(evaluation / "scientific_gate_results.csv", gate_rows)
     _write_csv(evaluation / "observable_gate_results.csv", observable_gate_rows)
+    _write_csv(evaluation / "error_attribution.csv", attribution_rows)
+    _write_csv(evaluation / "gradient_geometry.csv", gradient_audit_rows)
     _simple_plots(output, records)
     report = (
         "# V0.9 scientific report\n\n"
@@ -411,6 +493,9 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         f"OPERATOR-EXPLAINED RESIDUAL: {decision['operator_explained_residual']}  \n"
         f"DYNAMIC OPERATOR ADAPTATION: {decision['dynamic_operator_adaptation']}  \n"
         f"OBSERVABLE SUPPORT: {decision['observable_support']}  \n"
+        f"REPRESENTATION PHYSICAL FLOOR: {decision['representation_physical_floor']}  \n"
+        f"PHASE-1 DIAGNOSIS: {decision['phase1_diagnosis']}  \n"
+        f"PHASE-1 DIAGNOSTIC ARTIFACTS: {decision['phase1_diagnostic_artifacts']}  \n"
         f"LONG-ROLLOUT STABILITY: {decision['long_rollout_stability']}  \n"
         f"PHYSICS STATUS: {decision['physics_status']}  \n"
         f"V1.0 READINESS: {decision['v1_0_readiness']}\n\n"
@@ -431,6 +516,23 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
                 bool(epoch_rows),
                 len(gate_rows) >= 6 * len(records),
                 bool(observable_gate_rows),
+                len({row["source_file"] for row in attribution_rows}) == len(records),
+                len(
+                    {
+                        (
+                            row["backbone_seed"],
+                            row["condition_mode"],
+                            row["operator_init_seed"],
+                        )
+                        for row in gradient_audit_rows
+                    }
+                )
+                == len(records),
+                sum(
+                    bool(row.get("phase1_scale_split_fingerprint"))
+                    for row in training_rows
+                )
+                == len(records),
             )
         ),
         "formal_decision_count": len(records),
@@ -438,6 +540,8 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "training_epoch_metric_count": len(epoch_rows),
         "scientific_gate_result_count": len(gate_rows),
         "observable_gate_result_count": len(observable_gate_rows),
+        "error_attribution_row_count": len(attribution_rows),
+        "gradient_audit_record_count": len(gradient_audit_rows),
         "plot_count": len(list((output / "plots").glob("*.png"))),
         "rank_selection": rank_selection,
         "v0_8_handoff": handoff,

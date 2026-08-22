@@ -253,6 +253,8 @@ def test_stabilized_bundle_applies_problem_observables_at_multiple_horizons() ->
             "physics_horizon": 2,
             "observable_horizons": [2, 4],
             "observable_horizon_weights": [0.25, 0.75],
+            "observable_horizon_probabilities": [],
+            "phase1_enabled": False,
             "lambda_physics": 0.1,
             "lambda_observable_noninferiority": 0.1,
         }
@@ -454,9 +456,11 @@ def test_v0_9_operator_only_training_writes_reloadable_checkpoint(tmp_path: Path
             "lambda_propagator_growth": 0.1,
                 "physics_horizon": 1,
                 "lambda_physics": 0.0,
-                "observable_horizons": [],
-                "observable_horizon_weights": [],
-            }
+                    "observable_horizons": [],
+                    "observable_horizon_weights": [],
+                    "observable_horizon_probabilities": [],
+                    "phase1_enabled": False,
+                }
         )
     config = ProjectConfig.from_dict(payload)
     result = train_v0_9(

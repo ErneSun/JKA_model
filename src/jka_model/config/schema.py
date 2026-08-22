@@ -1956,9 +1956,24 @@ class V09TrainingConfig:
     observable_component_weights: tuple[float, ...] = ()
     observable_horizons: tuple[int, ...] = ()
     observable_horizon_weights: tuple[float, ...] = ()
+    observable_horizon_probabilities: tuple[float, ...] = ()
     lambda_observable_noninferiority: float = 0.0
     observable_noninferiority_margin: float = 0.10
     observable_noninferiority_floor: float = 1.0e-3
+    phase1_enabled: bool = False
+    observable_scale_method: str = "mad"
+    observable_scale_epsilon: float = 1.0e-6
+    observable_scale_max_samples: int = 262_144
+    observable_huber_delta: float = 1.0
+    force_correlation_weight: float = 0.1
+    force_spectrum_weight: float = 0.05
+    force_window_stride: int = 4
+    augmented_lagrangian_initial_penalty: float = 1.0
+    augmented_lagrangian_penalty_growth: float = 2.0
+    augmented_lagrangian_max_penalty: float = 100.0
+    augmented_lagrangian_improvement_ratio: float = 0.9
+    augmented_lagrangian_update_interval: int = 1
+    gradient_audit_interval: int = 5
     rank_sweep_epochs: int = 40
     gradient_clip_norm: float = 1.0
     patience: int = 16
@@ -1995,8 +2010,17 @@ class V09TrainingConfig:
             self.lambda_observable_noninferiority,
             self.observable_noninferiority_margin,
             self.observable_noninferiority_floor,
+            self.observable_scale_epsilon,
+            self.observable_huber_delta,
+            self.force_correlation_weight,
+            self.force_spectrum_weight,
+            self.augmented_lagrangian_initial_penalty,
+            self.augmented_lagrangian_penalty_growth,
+            self.augmented_lagrangian_max_penalty,
+            self.augmented_lagrangian_improvement_ratio,
             *self.observable_component_weights,
             *self.observable_horizon_weights,
+            *self.observable_horizon_probabilities,
         ) < 0:
             raise ValueError("V0.9 regularization weights must be non-negative")
         if tuple(sorted(set(self.rollout_horizons))) != self.rollout_horizons:
@@ -2032,22 +2056,66 @@ class V09TrainingConfig:
             raise ValueError("V0.9 observable names must be unique")
         if len(self.observable_horizons) != len(self.observable_horizon_weights):
             raise ValueError("V0.9 observable horizons and weights must align")
+        if self.observable_horizon_probabilities and (
+            len(self.observable_horizons) != len(self.observable_horizon_probabilities)
+        ):
+            raise ValueError("V0.9 observable horizons and probabilities must align")
         if self.observable_horizons:
             if tuple(sorted(set(self.observable_horizons))) != self.observable_horizons:
                 raise ValueError("V0.9 observable horizons must be unique and increasing")
+            if self.observable_horizons[0] < 1:
+                raise ValueError("V0.9 observable horizons must be positive")
             if (
-                self.observable_horizons[0] < 1
-                or self.observable_horizons[-1] > self.rollout_horizons[-1]
+                self.observable_horizons[-1] > self.rollout_horizons[-1]
+                and not self.phase1_enabled
             ):
-                raise ValueError("V0.9 observable horizons must lie inside the training rollout")
+                raise ValueError(
+                    "V0.9 observables beyond latent rollout require phase1_enabled"
+                )
             if not any(weight > 0 for weight in self.observable_horizon_weights):
                 raise ValueError("V0.9 observable curriculum requires a positive horizon weight")
+            if self.observable_horizon_probabilities and not abs(
+                sum(self.observable_horizon_probabilities) - 1.0
+            ) <= 1.0e-6:
+                raise ValueError("V0.9 observable horizon probabilities must sum to one")
         if self.propagator_growth_margin < 0 or self.operator_burden_target <= 0:
             raise ValueError("invalid V0.9 growth margin or burden target")
         if self.gradient_clip_norm <= 0 or self.operator_initialization_seed < 0:
             raise ValueError("invalid V0.9 clipping or initialization seed")
+        if self.observable_scale_method not in {"mad", "rms"}:
+            raise ValueError("invalid V0.9 observable scale method")
+        if min(
+            self.observable_scale_epsilon,
+            self.observable_huber_delta,
+            self.augmented_lagrangian_initial_penalty,
+            self.augmented_lagrangian_improvement_ratio,
+        ) <= 0:
+            raise ValueError("invalid V0.9 phase-1 positive hyperparameter")
+        if self.augmented_lagrangian_penalty_growth < 1:
+            raise ValueError("V0.9 augmented-Lagrangian penalty growth must be >=1")
+        if (
+            self.augmented_lagrangian_max_penalty
+            < self.augmented_lagrangian_initial_penalty
+        ):
+            raise ValueError("V0.9 augmented-Lagrangian maximum penalty is too small")
+        if not 0 < self.augmented_lagrangian_improvement_ratio <= 1:
+            raise ValueError("invalid V0.9 augmented-Lagrangian improvement ratio")
+        if min(
+            self.observable_scale_max_samples,
+            self.force_window_stride,
+            self.augmented_lagrangian_update_interval,
+        ) < 1 or self.gradient_audit_interval < 0:
+            raise ValueError("invalid V0.9 phase-1 interval or sample count")
         if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
             raise ValueError("invalid V0.9 precision")
+        if self.phase1_enabled:
+            if self.lambda_physics <= 0 or not self.observable_horizons:
+                raise ValueError("phase-1 V0.9 requires physical observable training")
+            required_constraints = {"divergence", "boundary"}
+            if not required_constraints <= set(self.observable_names):
+                raise ValueError(
+                    "phase-1 V0.9 requires divergence and boundary observables"
+                )
 
     @property
     def active_observable_horizons(self) -> tuple[int, ...]:
@@ -2076,6 +2144,7 @@ class V09TrainingConfig:
             "rollout_weights",
             "observable_component_weights",
             "observable_horizon_weights",
+            "observable_horizon_probabilities",
         }
         tuple_string_fields = {"observable_names"}
         integer_fields = {
@@ -2088,6 +2157,10 @@ class V09TrainingConfig:
             "rank_sweep_epochs",
             "patience",
             "operator_initialization_seed",
+            "observable_scale_max_samples",
+            "force_window_stride",
+            "augmented_lagrangian_update_interval",
+            "gradient_audit_interval",
         }
         for name in integer_fields:
             values[name] = int(values[name])
@@ -2103,9 +2176,13 @@ class V09TrainingConfig:
             *tuple_float_fields,
             *tuple_string_fields,
             "precision",
+            "observable_scale_method",
+            "phase1_enabled",
         }:
             values[name] = float(values[name])
         values["precision"] = str(values["precision"])
+        values["observable_scale_method"] = str(values["observable_scale_method"])
+        values["phase1_enabled"] = bool(values["phase1_enabled"])
         return cls(**values)
 
 

@@ -14,6 +14,7 @@ from jka_model.adaptive.checkpoint import (
     validate_adaptive_checkpoint,
 )
 from jka_model.adaptive.dataset import AdaptiveRolloutDataset, AdaptiveWindowDataset
+from jka_model.adaptive.error_attribution import observable_error_attribution
 from jka_model.adaptive.handoff import V08Handoff, V08SeedHandoff, audit_v0_8_handoff
 from jka_model.adaptive.metrics import (
     latent_prediction_metrics,
@@ -59,6 +60,7 @@ __all__ = [
     "latent_prediction_metrics",
     "operator_burden",
     "operator_explained_fraction",
+    "observable_error_attribution",
     "residual_decomposition",
     "symmetric_abscissa_proxy",
     "adaptive_training_scales",

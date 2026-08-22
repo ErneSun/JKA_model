@@ -18,6 +18,7 @@ from jka_model.adaptive import (
     load_adaptive_checkpoint,
     operator_burden,
     operator_explained_fraction,
+    observable_error_attribution,
     residual_decomposition,
     symmetric_abscissa_proxy,
 )
@@ -292,6 +293,8 @@ def evaluate_v0_9(
         evaluation=resolved.v0_9_evaluation,
     )
     physical_rows: list[dict[str, Any]] = []
+    attribution_rows: list[dict[str, Any]] = []
+    attribution_levels: list[dict[str, dict[str, float]]] = []
     longest = max(resolved.v0_9_evaluation.rollout_horizons)
     for trajectory in cache.select("test"):
         start = history - 1
@@ -313,28 +316,64 @@ def evaluate_v0_9(
         )
         record = physical_lookup[trajectory.trajectory_id]
         truth_raw = record.states_raw[start + 1 : start + longest + 1].to(selected)
+        attribution_metrics: dict[str, dict[str, float]] = {
+            "data": observable_objective.evaluation_metrics(
+                truth_raw,
+                truth_raw,
+                {
+                    "valid_mask": record.valid_mask,
+                    "record_metadata": record.metadata,
+                },
+            )
+        }
+        reconstructed_raw = normalizer.inverse_transform(
+            backbone.decode(
+                trajectory.latents[start + 1 : start + longest + 1]
+                .to(selected)
+                .unsqueeze(0)
+            )
+        )[0]
+        attribution_metrics["reconstruction"] = observable_objective.evaluation_metrics(
+            reconstructed_raw,
+            truth_raw,
+            {
+                "valid_mask": record.valid_mask,
+                "record_metadata": record.metadata,
+            },
+        )
         for name, latent in (
             ("adaptive", bundle["adapted"][:, 1:]),
             ("nominal", bundle["nominal"][:, 1:]),
         ):
             raw = normalizer.inverse_transform(backbone.decode(latent))[0]
             assert record.valid_mask is not None
+            metrics = observable_objective.evaluation_metrics(
+                raw,
+                truth_raw,
+                {
+                    "valid_mask": record.valid_mask,
+                    "record_metadata": record.metadata,
+                },
+            )
+            attribution_metrics[name] = metrics
             physical_rows.append(
                 {
                     "model": name,
                     "trajectory_id": trajectory.trajectory_id,
                     "schedule_type": trajectory.schedule_type,
                     "horizon": longest,
-                    **observable_objective.evaluation_metrics(
-                        raw,
-                        truth_raw,
-                        {
-                            "valid_mask": record.valid_mask,
-                            "record_metadata": record.metadata,
-                        },
-                    ),
+                    **metrics,
                 }
             )
+        attribution_levels.append(attribution_metrics)
+        attribution_rows.extend(
+            {
+                "trajectory_id": trajectory.trajectory_id,
+                "schedule_type": trajectory.schedule_type,
+                **row,
+            }
+            for row in observable_error_attribution(attribution_metrics)
+        )
 
     horizon_summary: dict[str, dict[str, Any]] = {}
     for horizon in resolved.v0_9_evaluation.rollout_horizons:
@@ -396,6 +435,32 @@ def evaluate_v0_9(
         minimum_count=1,
     )
     physics_pass = observable_gate.passed
+    representation_gate_results: list[GateResult] = []
+    for index, levels in enumerate(attribution_levels):
+        metric_results = [
+            evaluate_metric_gate(
+                float(levels["reconstruction"][name]),
+                spec,
+                baseline=float(levels["data"][name]),
+            )
+            for name, spec in observable_specs.items()
+            if name in {"divergence_rms", "boundary_no_slip_mse"}
+        ]
+        representation_gate_results.append(
+            aggregate_gate_results(
+                f"representation:{index}",
+                metric_results,
+                required_pass_fraction=1.0,
+                minimum_count=2,
+            )
+        )
+    representation_gate = aggregate_gate_results(
+        "representation_physical_floor",
+        representation_gate_results,
+        required_pass_fraction=1.0,
+        minimum_count=1,
+    )
+    representation_blocked = not representation_gate.passed
     burden_pass = all(
         float(row["operator_burden_max"]) <= resolved.v0_9_evaluation.max_operator_burden
         for row in rollout_rows
@@ -461,6 +526,7 @@ def evaluate_v0_9(
             history_gate,
             controls_gate,
             observable_gate,
+            representation_gate,
         )
     }
     supported = bool(
@@ -495,6 +561,10 @@ def evaluate_v0_9(
         "long_rollout_stability": "PASS" if all_horizons_pass and burden_pass else "FAIL",
         "physics_status": "PASS" if physics_pass else "FAIL",
         "observable_status": observable_gate.status.value,
+        "representation_physical_floor_status": representation_gate.status.value,
+        "phase1_diagnosis": "REPRESENTATION_BLOCKED"
+        if representation_blocked
+        else "OPERATOR_OPTIMIZATION_IDENTIFIABLE",
         "scientific_gates": scientific_gates,
         "adaptive_koopman": "SUPPORTED" if supported else "NOT_SUPPORTED",
         "scientific_joint_pass": supported,
@@ -504,6 +574,7 @@ def evaluate_v0_9(
             "A0_frozen": True,
             "additive_residual_enabled": False,
             "persistent_z_R_present": False,
+            "phase1_error_attribution_complete": bool(attribution_rows),
         },
     }
     destination = Path(output_dir)
@@ -513,6 +584,32 @@ def evaluate_v0_9(
     _write_csv(evaluation / "rollout_metrics.csv", rollout_rows)
     _write_csv(evaluation / "physical_metrics.csv", physical_rows)
     _write_csv(evaluation / "observable_gate_results.csv", observable_gate_rows)
+    _write_csv(evaluation / "error_attribution.csv", attribution_rows)
+    attribution_summary = {
+        "status": "COMPLETE" if attribution_rows else "INCOMPLETE",
+        "representation_blocked": representation_blocked,
+        "representation_gate": representation_gate.to_dict(),
+        "metrics": {
+            name: {
+                field: sum(float(row[field]) for row in attribution_rows if row["metric"] == name)
+                / max(sum(row["metric"] == name for row in attribution_rows), 1)
+                for field in (
+                    "data_floor",
+                    "reconstruction",
+                    "nominal",
+                    "adaptive",
+                    "representation_increment",
+                    "nominal_dynamics_increment",
+                    "adaptive_dynamics_increment",
+                )
+            }
+            for name in sorted({str(row["metric"]) for row in attribution_rows})
+        },
+    }
+    (evaluation / "error_attribution.json").write_text(
+        json.dumps(attribution_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     (evaluation / "v0_9_scientific_decision.json").write_text(
         json.dumps(decision, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

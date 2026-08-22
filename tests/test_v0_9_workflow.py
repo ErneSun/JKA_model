@@ -42,7 +42,9 @@ def test_v09_config_and_revision_id_contract(tmp_path: Path) -> None:
     assert config.v0_9_adaptive.trust_gate
     assert config.v0_9_training is not None
     assert config.v0_9_training.rollout_horizons == (4, 8, 16, 32)
-    assert config.v0_9_training.observable_horizons == (4, 8, 16)
+    assert config.v0_9_training.observable_horizons == (4, 8, 16, 32, 80)
+    assert config.v0_9_training.phase1_enabled
+    assert sum(config.v0_9_training.observable_horizon_probabilities) == 1.0
     assert config.v0_9_training.observable_names[-2:] == ("lift", "drag")
     first = create_versioned_session(tmp_path, "v09-test")
     second = create_versioned_session(tmp_path, "v09-test")
@@ -270,6 +272,7 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
                     "long_rollout_stability": "PASS",
                     "physics_status": "PASS",
                     "observable_status": "PASS",
+                    "representation_physical_floor_status": "PASS",
                     "scientific_gates": {
                         "one_step_prediction": {"status": "PASS", "value": 0.2},
                         "operator_explained_residual": {
@@ -283,10 +286,14 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
                             "status": "PASS",
                             "value": 1.0,
                         },
+                        "representation_physical_floor": {
+                            "status": "PASS",
+                            "value": 1.0,
+                        },
                     },
                     "adaptive_koopman": "SUPPORTED",
                     "scientific_joint_pass": True,
-                    "claims": {},
+                    "claims": {"phase1_error_attribution_complete": True},
                 }
                 (evaluation / "v0_9_scientific_decision.json").write_text(
                     json.dumps(decision), encoding="utf-8"
@@ -297,6 +304,13 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
                             "completed_epochs": 4,
                             "validation": {"forecast": 0.1},
                             "test_locked_confirmation": "NOT_OPENED_DURING_TRAINING",
+                            "phase1": {
+                                "gradient_audit_records": 1,
+                                "minimum_gradient_cosine": -0.2,
+                                "observable_scale_state": {
+                                    "split_fingerprint": f"train-{seed}"
+                                },
+                            },
                         }
                     ),
                     encoding="utf-8",
@@ -314,8 +328,33 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
                     [{"name": "velocity_relative_l2", "status": "PASS"}],
                 )
                 _write_csv(
+                    evaluation / "error_attribution.csv",
+                    [
+                        {
+                            "metric": "divergence_rms",
+                            "data_floor": 0.01,
+                            "reconstruction": 0.02,
+                            "nominal": 0.03,
+                            "adaptive": 0.025,
+                        }
+                    ],
+                )
+                _write_csv(
                     evaluation.parent / "logs" / "epoch_metrics.csv",
                     [{"epoch": 0, "validation_total": 0.1}],
+                )
+                (evaluation.parent / "logs" / "gradient_geometry.jsonl").write_text(
+                    json.dumps(
+                        {
+                            "epoch": 1,
+                            "names": ["forecast", "divergence"],
+                            "cosine": [[1.0, -0.2], [-0.2, 1.0]],
+                            "gradient_norms": {"forecast": 1.0, "divergence": 0.5},
+                            "minimum_off_diagonal_cosine": -0.2,
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
                 )
     result = aggregate_v0_9_results(session, output)
     assert result["low_rank_operator_adaptation"] == "SUPPORTED"
@@ -324,6 +363,7 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
     assert result["operator_explained_residual"] == "SUPPORTED"
     assert result["dynamic_operator_adaptation"] == "SUPPORTED"
     assert result["observable_support"] == "SUPPORTED"
+    assert result["representation_physical_floor"] == "SUPPORTED"
     assert result["v1_0_ready"]
     assert result["compact_audit"]["complete"]
     assert (output / "report.md").is_file()

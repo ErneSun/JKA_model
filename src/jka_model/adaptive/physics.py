@@ -12,7 +12,11 @@ from torch import Tensor, nn
 from jka_model.config import ProjectConfig
 from jka_model.data import ChannelStandardizer
 from jka_model.data.datasets import TrajectoryRecord
-from jka_model.observables import ObservableLossResult, ObservableObjective
+from jka_model.observables import (
+    ObservableLossResult,
+    ObservableObjective,
+    RobustObservableScaleState,
+)
 from jka_model.problems import create_observable_problem_adapter
 from jka_model.problems.cylinder_observables import CylinderWakeObservableObjective
 from jka_model.residual.cache import file_sha256
@@ -120,10 +124,63 @@ class FrozenDecoderObservables:
             )
         return torch.stack(states).to(self.device, dtype=torch.float32), metadata
 
+    def target_sequence(
+        self,
+        trajectory_ids: list[str] | tuple[str, ...],
+        target_indices: Tensor,
+        steps: tuple[int, ...],
+        limit: int,
+    ) -> tuple[Tensor, dict[str, Any]]:
+        if not steps or tuple(sorted(set(steps))) != steps or steps[0] < 1:
+            raise ValueError("observable sequence steps must be positive and increasing")
+        sequences: list[Tensor] = []
+        record_metadata: list[Mapping[str, Any]] = []
+        for trajectory_id, target_index in zip(
+            trajectory_ids[:limit], target_indices[:limit].tolist(), strict=True
+        ):
+            record = self.records.get(str(trajectory_id))
+            if record is None:
+                raise ValueError(f"missing observable record for {trajectory_id}")
+            indices = torch.tensor(
+                [int(target_index) + step for step in steps], dtype=torch.long
+            )
+            if int(indices[-1]) >= record.states_raw.shape[0]:
+                raise ValueError("observable sequence lies beyond its trajectory")
+            sequences.append(record.states_raw.index_select(0, indices))
+            record_metadata.append(record.metadata)
+        return (
+            torch.stack(sequences).to(self.device, dtype=torch.float32),
+            {"records": record_metadata, "sequence_steps": list(steps)},
+        )
+
+    def fit_training_scales(
+        self,
+        trajectory_ids: tuple[str, ...],
+        *,
+        split_fingerprint: str,
+    ) -> RobustObservableScaleState:
+        fitter = getattr(self.objective, "fit_training_scales", None)
+        if fitter is None:
+            raise TypeError("observable objective does not implement train-only scale fitting")
+        return fitter(
+            self.records,
+            trajectory_ids,
+            split_fingerprint=split_fingerprint,
+        )
+
+    def set_scale_state(self, state: RobustObservableScaleState) -> None:
+        setter = getattr(self.objective, "set_scale_state", None)
+        if setter is None:
+            raise TypeError("observable objective does not accept robust scale state")
+        setter(state)
+
     def decode(self, predicted_latent: Tensor) -> Tensor:
-        predicted_model = self.model.decode(predicted_latent)  # type: ignore[attr-defined]
+        leading = predicted_latent.shape[:-1]
+        flattened = predicted_latent.reshape(-1, predicted_latent.shape[-1])
+        predicted_model = self.model.decode(flattened)  # type: ignore[attr-defined]
         with torch.autocast(device_type=predicted_model.device.type, enabled=False):
-            return self.normalizer.inverse_transform(predicted_model.float())
+            raw = self.normalizer.inverse_transform(predicted_model.float())
+        return raw.reshape(*leading, *raw.shape[1:])
 
     def loss(
         self,
@@ -136,6 +193,17 @@ class FrozenDecoderObservables:
             target_raw.float(),
             metadata,
         )
+
+    def force_window_loss(
+        self,
+        predicted_latent: Tensor,
+        target_raw: Tensor,
+        metadata: Mapping[str, Any],
+    ) -> ObservableLossResult:
+        objective = getattr(self.objective, "force_window_loss", None)
+        if objective is None:
+            raise TypeError("observable objective does not implement a force-window loss")
+        return objective(self.decode(predicted_latent), target_raw.float(), metadata)
 
 
 class FrozenCylinderPhysics(FrozenDecoderObservables):

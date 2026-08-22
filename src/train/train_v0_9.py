@@ -35,6 +35,11 @@ from jka_model.constants import ARCHITECTURE_REVISION, CHECKPOINT_SCHEMA_VERSION
 from jka_model.context import build_dynamic_context_model
 from jka_model.context.checkpoint import load_context_checkpoint
 from jka_model.residual.cache import file_sha256
+from jka_model.observables import RobustObservableScaleState
+from jka_model.optimization import (
+    InequalityAugmentedLagrangian,
+    gradient_cosine_matrix,
+)
 from jka_model.training import (
     TrainStage,
     assert_optimizer_matches_trainable_params,
@@ -233,6 +238,7 @@ def _stabilized_loss_bundle(
     config: ProjectConfig,
     epoch: int,
     physical: FrozenDecoderObservables | None,
+    augmented_lagrangian: InequalityAugmentedLagrangian | None = None,
     *,
     validation: bool,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -259,16 +265,30 @@ def _stabilized_loss_bundle(
     terms = dict(objective.terms)
     physics = total.new_zeros(())
     observable_noninferiority = total.new_zeros(())
+    force_window = total.new_zeros(())
+    augmented_penalty = total.new_zeros(())
     if state.physics_scale > 0:
         if physical is None:
             raise RuntimeError("enabled V0.9 physical objective lacks frozen decoder state")
         limit = min(training.physics_batch_size, objective.rollout["adapted"].shape[0])
-        weight_sum = sum(training.active_observable_horizon_weights)
+        weight_sum = state.observable_normalizer
         if weight_sum <= 0:
             raise RuntimeError("enabled V0.9 observables require positive horizon weights")
+        primary_observable = total.new_zeros(())
+        constraint_values: dict[str, list[torch.Tensor]] = {
+            "divergence": [],
+            "boundary": [],
+        }
+        component_weights = dict(
+            zip(
+                training.observable_names,
+                training.observable_component_weights,
+                strict=True,
+            )
+        )
         for horizon, weight in zip(
-            training.active_observable_horizons,
-            training.active_observable_horizon_weights,
+            state.observable_horizons,
+            state.observable_weights,
             strict=True,
         ):
             if weight == 0:
@@ -303,19 +323,91 @@ def _stabilized_loss_bundle(
                 component_excesses.append(
                     (torch.relu(value - allowed) / (baseline.abs() + floor)).square()
                 )
+                component = name.removeprefix("observable_")
+                if training.phase1_enabled and component in {"divergence", "boundary"}:
+                    constraint_values[component].append(
+                        weight * (value - allowed) / (baseline.abs() + floor)
+                    )
+                elif training.phase1_enabled and component not in {"lift", "drag"}:
+                    primary_observable = primary_observable + weight * component_weights.get(
+                        component, 0.0
+                    ) * value
             if component_excesses:
                 observable_noninferiority = observable_noninferiority + weight * torch.stack(
                     component_excesses
                 ).mean()
+            if training.phase1_enabled and (
+                component_weights.get("lift", 0.0) > 0
+                or component_weights.get("drag", 0.0) > 0
+            ):
+                steps = tuple(
+                    sorted(
+                        {
+                            *range(
+                                training.force_window_stride,
+                                horizon + 1,
+                                training.force_window_stride,
+                            ),
+                            horizon,
+                        }
+                    )
+                )
+                target_sequence, sequence_metadata = physical.target_sequence(
+                    batch["trajectory_id"],
+                    batch["target_index"],
+                    steps,
+                    limit,
+                )
+                indices = torch.tensor(
+                    [step - 1 for step in steps],
+                    device=objective.rollout["adapted"].device,
+                    dtype=torch.long,
+                )
+                force_result = physical.force_window_loss(
+                    objective.rollout["adapted"][:limit].index_select(1, indices),
+                    target_sequence,
+                    sequence_metadata,
+                )
+                force_weight = component_weights.get("lift", 0.0) + component_weights.get(
+                    "drag", 0.0
+                )
+                force_window = force_window + weight * force_weight * force_result.total
+                for name, value in force_result.terms.items():
+                    terms[f"{name}_h{horizon}"] = value
         physics = physics / weight_sum
         observable_noninferiority = observable_noninferiority / weight_sum
-        observable_objective = (
-            physics
-            + training.lambda_observable_noninferiority * observable_noninferiority
-        )
-        total = total + training.lambda_physics * state.physics_scale * observable_objective
+        if training.phase1_enabled:
+            primary_observable = (primary_observable + force_window) / weight_sum
+            # Burden is an inequality constraint in Phase 1, while basis
+            # orthogonality remains a structural regularizer.
+            total = total - training.lambda_operator_burden * terms["burden"]
+            total = total + training.lambda_physics * state.physics_scale * primary_observable
+            constraints = {
+                name: (
+                    torch.stack(values).sum() / weight_sum
+                    if values
+                    else total.new_zeros(())
+                )
+                for name, values in constraint_values.items()
+            }
+            constraints["burden"] = terms["burden_mean"] - training.operator_burden_target
+            for name, value in constraints.items():
+                terms[f"constraint_{name}"] = value
+            if augmented_lagrangian is None:
+                raise RuntimeError("phase-1 training requires augmented-Lagrangian state")
+            augmented_penalty = augmented_lagrangian.penalty(constraints)
+            total = total + state.physics_scale * augmented_penalty
+            terms["observable_primary"] = primary_observable
+        else:
+            observable_objective = (
+                physics
+                + training.lambda_observable_noninferiority * observable_noninferiority
+            )
+            total = total + training.lambda_physics * state.physics_scale * observable_objective
     terms["physics"] = physics
+    terms["force_window"] = force_window / max(state.observable_normalizer, 1.0)
     terms["observable_noninferiority"] = observable_noninferiority
+    terms["augmented_lagrangian"] = augmented_penalty
     terms["physics_scale"] = total.new_tensor(state.physics_scale)
     return total, terms
 
@@ -355,6 +447,7 @@ def _evaluate_stabilized(
     condition_std: torch.Tensor,
     config: ProjectConfig,
     physical: FrozenDecoderObservables | None,
+    augmented_lagrangian: InequalityAugmentedLagrangian | None,
     device: torch.device,
 ) -> dict[str, float]:
     assert config.v0_9_training
@@ -373,6 +466,7 @@ def _evaluate_stabilized(
             config,
             validation_epoch,
             physical,
+            augmented_lagrangian,
             validation=True,
         )
         batch_count = batch["target_latents"].shape[0]
@@ -436,6 +530,31 @@ def train_v0_9(
             expected_backbone_sha256=cache.backbone_checkpoint_sha256,
             device=selected,
         )
+    observable_scale_state: RobustObservableScaleState | None = None
+    augmented_lagrangian: InequalityAugmentedLagrangian | None = None
+    if resolved.v0_9_training.phase1_enabled:
+        if physical is None:
+            raise ValueError("phase-1 V0.9 training requires frozen decoder observables")
+        train_trajectory_ids = tuple(item.trajectory_id for item in cache.select("train"))
+        observable_scale_state = physical.fit_training_scales(
+            train_trajectory_ids,
+            split_fingerprint=cache.data_fingerprint,
+        )
+        augmented_lagrangian = InequalityAugmentedLagrangian(
+            ("divergence", "boundary", "burden"),
+            initial_penalty=(
+                resolved.v0_9_training.augmented_lagrangian_initial_penalty
+            ),
+            penalty_growth=(
+                resolved.v0_9_training.augmented_lagrangian_penalty_growth
+            ),
+            maximum_penalty=(
+                resolved.v0_9_training.augmented_lagrangian_max_penalty
+            ),
+            improvement_ratio=(
+                resolved.v0_9_training.augmented_lagrangian_improvement_ratio
+            ),
+        )
     optimizer = AdamW(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
         lr=resolved.v0_9_training.learning_rate,
@@ -452,7 +571,10 @@ def train_v0_9(
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled and amp_dtype is torch.float16)
     history = int(context_payload["history_length_steps"])
     if stabilized:
-        maximum_horizon = resolved.v0_9_training.rollout_horizons[-1]
+        maximum_horizon = max(
+            resolved.v0_9_training.rollout_horizons[-1],
+            *resolved.v0_9_training.active_observable_horizons,
+        )
         datasets = {
             split: AdaptiveRolloutDataset(
                 cache,
@@ -488,6 +610,7 @@ def train_v0_9(
     start_epoch = global_step = optimizer_update_step = 0
     best_score = float("inf")
     best_state: dict[str, Any] | None = None
+    best_phase1_state: dict[str, Any] | None = None
     stale = 0
     if resume_from is not None:
         saved = load_adaptive_checkpoint(resume_from)
@@ -507,6 +630,28 @@ def train_v0_9(
         best_score = float(saved["best_validation_score"])
         best_state = dict(saved["best_adaptive_state"])
         stale = int(saved["epochs_without_improvement"])
+        if resolved.v0_9_training.phase1_enabled:
+            phase1_state = saved.get("phase1_state")
+            if not isinstance(phase1_state, dict):
+                raise ValueError("phase-1 V0.9 resume checkpoint lacks phase1_state")
+            saved_scale = RobustObservableScaleState.from_dict(
+                phase1_state["observable_scale_state"]
+            )
+            if observable_scale_state is None or (
+                saved_scale.to_dict() != observable_scale_state.to_dict()
+            ):
+                raise ValueError("phase-1 V0.9 resume observable scales mismatch")
+            assert physical is not None and augmented_lagrangian is not None
+            physical.set_scale_state(saved_scale)
+            augmented_lagrangian.load_state_dict(
+                phase1_state["augmented_lagrangian_state"]
+            )
+            best_phase1_state = dict(
+                phase1_state.get(
+                    "best_augmented_lagrangian_state",
+                    phase1_state["augmented_lagrangian_state"],
+                )
+            )
     latest = destination / "checkpoints" / "latest.pt"
     best = destination / "checkpoints" / "best_scientific_gate.pt"
 
@@ -543,6 +688,17 @@ def train_v0_9(
             "condition_std": condition_std_cpu,
             "best_validation_score": best_score,
             "epochs_without_improvement": stale,
+            "phase1_state": None
+            if not resolved.v0_9_training.phase1_enabled
+            else {
+                "observable_scale_state": observable_scale_state.to_dict()
+                if observable_scale_state is not None
+                else None,
+                "augmented_lagrangian_state": augmented_lagrangian.state_dict()
+                if augmented_lagrangian is not None
+                else None,
+                "best_augmented_lagrangian_state": best_phase1_state,
+            },
             "git_commit": get_git_commit(Path.cwd()),
             "runtime": {
                 "device": str(selected),
@@ -565,6 +721,19 @@ def train_v0_9(
         maturity_fraction * max(resolved.v0_9_training.epochs - 1, 1)
     )
     log_path = destination / "logs" / "epoch_metrics.csv"
+    gradient_log_path = destination / "logs" / "gradient_geometry.jsonl"
+    gradient_records: list[dict[str, Any]] = []
+    latest_constraint_diagnostics: dict[str, float] = {
+        "constraint_max_violation": 0.0,
+        **{
+            f"multiplier_{name}": 0.0
+            for name in ("divergence", "boundary", "burden")
+        },
+        **{
+            f"penalty_{name}": 0.0
+            for name in ("divergence", "boundary", "burden")
+        },
+    }
     with log_path.open("w", newline="", encoding="utf-8") as stream:
         fields = [
             "epoch",
@@ -575,17 +744,27 @@ def train_v0_9(
             "train_rollout",
             "train_physics",
             "train_observable_noninferiority",
+            "train_force_window",
             "train_propagator_growth",
             "validation_total",
+            "validation_selection_score",
             "validation_forecast",
             "validation_rollout",
             "validation_physics",
             "validation_observable_noninferiority",
+            "validation_force_window",
             "validation_burden",
             "validation_burden_max",
             "validation_stability",
             "validation_propagator_growth",
             "validation_gate_mean",
+            "constraint_max_violation",
+            "multiplier_divergence",
+            "multiplier_boundary",
+            "multiplier_burden",
+            "penalty_divergence",
+            "penalty_boundary",
+            "penalty_burden",
             *[
                 f"validation_rollout_gain_h{horizon}"
                 for horizon in resolved.v0_9_training.rollout_horizons
@@ -607,10 +786,15 @@ def train_v0_9(
                 "rollout": 0.0,
                 "physics": 0.0,
                 "observable_noninferiority": 0.0,
+                "force_window": 0.0,
                 "propagator_growth": 0.0,
+                "constraint_divergence": 0.0,
+                "constraint_boundary": 0.0,
+                "constraint_burden": 0.0,
             }
             count = 0
-            for raw in loaders["train"]:
+            constraint_count = 0
+            for batch_index, raw in enumerate(loaders["train"]):
                 batch = _move_rollout(raw, selected) if stabilized else _move(raw, selected)
                 optimizer.zero_grad(set_to_none=True)
                 autocast = (
@@ -629,6 +813,7 @@ def train_v0_9(
                             resolved,
                             epoch,
                             physical,
+                            augmented_lagrangian,
                             validation=False,
                         )
                     else:
@@ -640,6 +825,43 @@ def train_v0_9(
                             condition_std,
                             resolved,
                         )
+                audit_interval = resolved.v0_9_training.gradient_audit_interval
+                if (
+                    stabilized
+                    and audit_interval > 0
+                    and batch_index == 0
+                    and epoch % audit_interval == 0
+                ):
+                    gradient_objectives: dict[str, torch.Tensor] = {}
+                    for name in ("forecast", "rollout"):
+                        if name in terms:
+                            gradient_objectives[name] = terms[name]
+                    for component in resolved.v0_9_training.observable_names:
+                        values = [
+                            value
+                            for name, value in terms.items()
+                            if name.startswith(f"observable_{component}_h")
+                            and "nominal" not in name
+                        ]
+                        if values:
+                            gradient_objectives[component] = torch.stack(values).mean()
+                    for component in ("force_waveform", "force_correlation", "force_spectrum"):
+                        values = [
+                            value
+                            for name, value in terms.items()
+                            if name.startswith(f"observable_{component}_h")
+                        ]
+                        if values:
+                            gradient_objectives[component] = torch.stack(values).mean()
+                    if len(gradient_objectives) >= 2:
+                        geometry = gradient_cosine_matrix(
+                            gradient_objectives,
+                            tuple(model.operator_adapter.parameters()),
+                        )
+                        record = {"epoch": epoch + 1, **geometry.to_dict()}
+                        gradient_records.append(record)
+                        with gradient_log_path.open("a", encoding="utf-8") as audit_stream:
+                            audit_stream.write(json.dumps(record, sort_keys=True) + "\n")
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
@@ -658,10 +880,20 @@ def train_v0_9(
                     "rollout",
                     "physics",
                     "observable_noninferiority",
+                    "force_window",
                     "propagator_growth",
                 ):
                     if name in terms:
                         sums[name] += float(terms[name].detach()) * batch_count
+                if all(
+                    f"constraint_{name}" in terms
+                    for name in ("divergence", "boundary", "burden")
+                ):
+                    for name in ("divergence", "boundary", "burden"):
+                        sums[f"constraint_{name}"] += float(
+                            terms[f"constraint_{name}"].detach()
+                        ) * batch_count
+                    constraint_count += batch_count
                 count += batch_count
                 global_step += 1
                 optimizer_update_step += 1
@@ -675,6 +907,7 @@ def train_v0_9(
                     condition_std,
                     resolved,
                     physical,
+                    augmented_lagrangian,
                     selected,
                 )
                 if stabilized
@@ -688,6 +921,19 @@ def train_v0_9(
                     selected,
                 )
             )
+            if (
+                augmented_lagrangian is not None
+                and constraint_count > 0
+                and (epoch + 1)
+                % resolved.v0_9_training.augmented_lagrangian_update_interval
+                == 0
+            ):
+                latest_constraint_diagnostics = augmented_lagrangian.update(
+                    {
+                        name: sums[f"constraint_{name}"] / constraint_count
+                        for name in ("divergence", "boundary", "burden")
+                    }
+                )
             row: dict[str, Any] = {
                 "epoch": epoch + 1,
                 "active_horizons": ";".join(str(value) for value in state.active_horizons),
@@ -699,14 +945,22 @@ def train_v0_9(
                 "train_observable_noninferiority": (
                     sums["observable_noninferiority"] / count
                 ),
+                "train_force_window": sums["force_window"] / count,
                 "train_propagator_growth": sums["propagator_growth"] / count,
                 "validation_total": validation["total"],
+                "validation_selection_score": validation["total"]
+                - validation.get("augmented_lagrangian", 0.0)
+                + sum(
+                    max(validation.get(f"constraint_{name}", 0.0), 0.0) ** 2
+                    for name in ("divergence", "boundary", "burden")
+                ),
                 "validation_forecast": validation["forecast"],
                 "validation_rollout": validation.get("rollout", 0.0),
                 "validation_physics": validation.get("physics", 0.0),
                 "validation_observable_noninferiority": validation.get(
                     "observable_noninferiority", 0.0
                 ),
+                "validation_force_window": validation.get("force_window", 0.0),
                 "validation_burden": validation["burden"],
                 "validation_burden_max": validation.get("burden_max", 0.0),
                 "validation_stability": validation["stability"],
@@ -714,6 +968,18 @@ def train_v0_9(
                     "propagator_growth", 0.0
                 ),
                 "validation_gate_mean": validation.get("gate_mean", 1.0),
+                **{
+                    name: latest_constraint_diagnostics.get(name, 0.0)
+                    for name in (
+                        "constraint_max_violation",
+                        "multiplier_divergence",
+                        "multiplier_boundary",
+                        "multiplier_burden",
+                        "penalty_divergence",
+                        "penalty_boundary",
+                        "penalty_burden",
+                    )
+                },
             }
             for horizon in resolved.v0_9_training.rollout_horizons:
                 row[f"validation_rollout_gain_h{horizon}"] = validation.get(
@@ -721,13 +987,15 @@ def train_v0_9(
                 )
             writer.writerow(row)
             stream.flush()
-            score = validation["total"]
+            score = float(row["validation_selection_score"])
             if score < best_score:
                 best_score = score
                 best_state = {
                     key: value.detach().cpu().clone()
                     for key, value in model.operator_adapter.state_dict().items()
                 }
+                if augmented_lagrangian is not None:
+                    best_phase1_state = augmented_lagrangian.state_dict()
                 stale = 0
                 save_adaptive_checkpoint(checkpoint_payload(epoch + 1), best)
             else:
@@ -742,6 +1010,8 @@ def train_v0_9(
     if best_state is None:
         raise RuntimeError("V0.9 training produced no validation checkpoint")
     model.operator_adapter.load_state_dict(best_state, strict=True)
+    if augmented_lagrangian is not None and best_phase1_state is not None:
+        augmented_lagrangian.load_state_dict(best_phase1_state)
     validation = (
         _evaluate_stabilized(
             model,
@@ -751,6 +1021,7 @@ def train_v0_9(
             condition_std,
             resolved,
             physical,
+            augmented_lagrangian,
             selected,
         )
         if stabilized
@@ -781,6 +1052,7 @@ def train_v0_9(
             "bounded_coordinates": resolved.v0_9_adaptive.bounded_coordinates,
             "trust_gate": resolved.v0_9_adaptive.trust_gate,
             "frozen_decoder_observables": resolved.v0_9_training.lambda_physics > 0,
+            "phase1_constrained_optimization": resolved.v0_9_training.phase1_enabled,
         },
         "curriculum": {
             "rollout_horizons": list(resolved.v0_9_training.rollout_horizons),
@@ -796,8 +1068,30 @@ def train_v0_9(
                 resolved.v0_9_training.active_observable_horizons
             ),
             "observable_names": list(resolved.v0_9_training.observable_names),
+            "observable_horizon_probabilities": list(
+                resolved.v0_9_training.observable_horizon_probabilities
+            ),
+        },
+        "phase1": {
+            "observable_scale_state": None
+            if observable_scale_state is None
+            else observable_scale_state.to_dict(),
+            "augmented_lagrangian_state": None
+            if augmented_lagrangian is None
+            else augmented_lagrangian.state_dict(),
+            "gradient_audit_records": len(gradient_records),
+            "minimum_gradient_cosine": None
+            if not gradient_records
+            else min(
+                float(record["minimum_off_diagonal_cosine"])
+                for record in gradient_records
+            ),
         },
     }
+    (destination / "evaluation" / "gradient_geometry_summary.json").write_text(
+        json.dumps(summary["phase1"], indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     (destination / "evaluation" / "training_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

@@ -20,6 +20,9 @@ class CurriculumState:
     active_horizons: tuple[int, ...]
     active_weights: tuple[float, ...]
     physics_scale: float
+    observable_horizons: tuple[int, ...]
+    observable_weights: tuple[float, ...]
+    observable_normalizer: float
 
 
 @dataclass(slots=True)
@@ -54,10 +57,30 @@ def curriculum_state(
             1.0 - config.physics_start_fraction, 1e-12
         )
         physics_scale = min(1.0, (progress - config.physics_start_fraction) / denominator)
+    observable_horizons: tuple[int, ...] = ()
+    observable_weights: tuple[float, ...] = ()
+    observable_normalizer = sum(config.active_observable_horizon_weights)
+    if physics_scale > 0 and observable_normalizer > 0:
+        if validation or not config.phase1_enabled:
+            observable_horizons = config.active_observable_horizons
+            observable_weights = config.active_observable_horizon_weights
+        else:
+            probabilities = config.observable_horizon_probabilities or tuple(
+                1.0 / len(config.active_observable_horizons)
+                for _ in config.active_observable_horizons
+            )
+            selected = int(torch.multinomial(torch.tensor(probabilities), 1).item())
+            observable_horizons = (config.active_observable_horizons[selected],)
+            observable_weights = (
+                config.active_observable_horizon_weights[selected] / probabilities[selected],
+            )
     return CurriculumState(
         tuple(item[0] for item in active),
         tuple(item[1] for item in active),
         physics_scale,
+        observable_horizons,
+        observable_weights,
+        observable_normalizer,
     )
 
 
@@ -170,7 +193,7 @@ def adaptive_stabilization_objective(
     required_steps = max(
         1,
         *(curriculum.active_horizons or (1,)),
-        max(config.active_observable_horizons) if curriculum.physics_scale > 0 else 1,
+        max(curriculum.observable_horizons) if curriculum.observable_horizons else 1,
     )
     if batch["future_dts"].shape[1] < required_steps:
         raise ValueError("rollout batch is shorter than the active curriculum")
@@ -223,9 +246,7 @@ def adaptive_stabilization_objective(
         {
             *(curriculum.active_horizons or (1,)),
             *(
-                config.active_observable_horizons
-                if curriculum.physics_scale > 0
-                else ()
+                curriculum.observable_horizons
             ),
         }
     )
@@ -258,6 +279,8 @@ def adaptive_stabilization_objective(
         {
             "rollout": rollout_loss,
             "burden": burden,
+            "burden_mean": burdens.mean(),
+            "burden_max": burdens.max(),
             "burden_max": burdens.max(),
             "smoothness": smoothness,
             "stability": stability,

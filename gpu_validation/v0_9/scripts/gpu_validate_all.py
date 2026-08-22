@@ -68,6 +68,7 @@ def _run_tests(python: str, log_path: Path) -> None:
         "tests/test_v0_9_adaptive.py",
         "tests/test_v0_9_physical_problem.py",
         "tests/test_v0_9_workflow.py",
+        "tests/test_v0_9_phase1.py",
     ]
     with log_path.open("w", encoding="utf-8") as stream:
         process = subprocess.Popen(

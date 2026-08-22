@@ -61,11 +61,26 @@ v0_9_training:
   physics_drag_weight: 0.0
   observable_names: [velocity, vorticity, divergence, boundary, lift, drag]
   observable_component_weights: [1.0, 0.2, 0.5, 0.2, 0.1, 0.05]
-  observable_horizons: [4, 8, 16]
-  observable_horizon_weights: [0.2, 0.4, 0.4]
+  observable_horizons: [4, 8, 16, 32, 80]
+  observable_horizon_weights: [0.10, 0.15, 0.20, 0.25, 0.30]
+  observable_horizon_probabilities: [0.15, 0.20, 0.25, 0.20, 0.20]
   lambda_observable_noninferiority: 0.05
   observable_noninferiority_margin: 0.10
   observable_noninferiority_floor: 0.001
+  phase1_enabled: true
+  observable_scale_method: mad
+  observable_scale_epsilon: 0.000001
+  observable_scale_max_samples: 262144
+  observable_huber_delta: 1.0
+  force_correlation_weight: 0.1
+  force_spectrum_weight: 0.05
+  force_window_stride: 4
+  augmented_lagrangian_initial_penalty: 1.0
+  augmented_lagrangian_penalty_growth: 2.0
+  augmented_lagrangian_max_penalty: 100.0
+  augmented_lagrangian_improvement_ratio: 0.9
+  augmented_lagrangian_update_interval: 1
+  gradient_audit_interval: 5
   rank_sweep_epochs: 40
   gradient_clip_norm: 1.0
   patience: 16
