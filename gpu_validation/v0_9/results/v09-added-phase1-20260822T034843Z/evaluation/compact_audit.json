@@ -1,0 +1,109 @@
+{
+  "complete": true,
+  "error_attribution_row_count": 252,
+  "formal_decision_count": 18,
+  "gradient_audit_record_count": 285,
+  "observable_gate_result_count": 252,
+  "plot_count": 6,
+  "rank_selection": {
+    "burden_limit": 0.35,
+    "constraint_eligible_ranks": [
+      2,
+      8,
+      12
+    ],
+    "constraints_satisfied": true,
+    "longest_curriculum_horizon": 32,
+    "maximum_operator_burdens": {
+      "12": 0.09228268966955297,
+      "2": 0.038696169634075725,
+      "4": 0.06190141794436118,
+      "8": 0.08220401756903704
+    },
+    "mean_long_horizon_gains": {
+      "12": 0.017746939378626207,
+      "2": 0.011200266725876751,
+      "4": -0.01831657045027789,
+      "8": 0.017145696808310115
+    },
+    "near_optimal_tolerance": 0.02,
+    "scores": {
+      "12": 4.512850901659798,
+      "2": 9.050958717570586,
+      "4": 3.9116235901327694,
+      "8": 5.181622000301585
+    },
+    "selected_rank": 12,
+    "selection_rule": "smallest rank within tolerance of the minimum validation objective among ranks with non-negative longest-horizon gain and bounded operator burden; fall back to the same parsimony rule over all ranks if none are eligible",
+    "selection_split": "validation",
+    "test_opened": false
+  },
+  "scientific_gate_result_count": 126,
+  "training_epoch_metric_count": 1419,
+  "training_summary_count": 18,
+  "v0_8_handoff": {
+    "compact_result": "/home/ai_group/Documents/files/SQ/JKA_model/gpu_validation/v0_8/results/v08-final-20260820T111016Z",
+    "context_family": "history_mlp",
+    "handoff_policy": "supported",
+    "joint_v0_9_support_fraction": 0.6666666666666666,
+    "raw_run": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_8/v08-final-20260820T111016Z",
+    "route": "R3",
+    "seeds": [
+      {
+        "backbone_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_8/v08-final-20260820T111016Z/seeds/seed_47/backbone_runs/v0_6/gpu/seed-47/checkpoints/best_forecast_post_warmup.pt",
+        "backbone_seed": 47,
+        "context_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_8/v08-final-20260820T111016Z/seeds/seed_47/candidates/history_mlp/init_607/checkpoints/best.pt",
+        "context_init_seed": 607
+      },
+      {
+        "backbone_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_8/v08-final-20260820T111016Z/seeds/seed_53/backbone_runs/v0_6/gpu/seed-53/checkpoints/best_forecast_post_warmup.pt",
+        "backbone_seed": 53,
+        "context_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_8/v08-final-20260820T111016Z/seeds/seed_53/candidates/history_mlp/init_607/checkpoints/best.pt",
+        "context_init_seed": 607
+      },
+      {
+        "backbone_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_8/v08-final-20260820T111016Z/seeds/seed_59/backbone_runs/v0_6/gpu/seed-59/checkpoints/best_forecast_post_warmup.pt",
+        "backbone_seed": 59,
+        "context_checkpoint": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_8/v08-final-20260820T111016Z/seeds/seed_59/candidates/history_mlp/init_607/checkpoints/best.pt",
+        "context_init_seed": 607
+      }
+    ],
+    "source_nested_seed_support": {
+      "47": {
+        "adequacy_pass_fraction": 0.6666666666666666,
+        "context_init_support_fraction": 0.6666666666666666,
+        "context_rank_pass_fraction": 0.6666666666666666,
+        "history_pass_fraction": 1.0,
+        "longest_horizon_pass_fraction": 1.0,
+        "physics_pass_fraction": 1.0,
+        "positive_rollout_fraction": 1.0,
+        "supported": true,
+        "v0_9_supported": true
+      },
+      "53": {
+        "adequacy_pass_fraction": 0.3333333333333333,
+        "context_init_support_fraction": 0.3333333333333333,
+        "context_rank_pass_fraction": 0.3333333333333333,
+        "history_pass_fraction": 1.0,
+        "longest_horizon_pass_fraction": 0.6666666666666666,
+        "physics_pass_fraction": 0.6666666666666666,
+        "positive_rollout_fraction": 0.6666666666666666,
+        "supported": false,
+        "v0_9_supported": false
+      },
+      "59": {
+        "adequacy_pass_fraction": 1.0,
+        "context_init_support_fraction": 1.0,
+        "context_rank_pass_fraction": 1.0,
+        "history_pass_fraction": 1.0,
+        "longest_horizon_pass_fraction": 1.0,
+        "physics_pass_fraction": 1.0,
+        "positive_rollout_fraction": 1.0,
+        "supported": true,
+        "v0_9_supported": true
+      }
+    },
+    "strict_readiness": false,
+    "validation_id": "v08-final-20260820T111016Z"
+  }
+}
