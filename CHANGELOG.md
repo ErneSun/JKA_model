@@ -2,6 +2,13 @@
 
 ## 0.9.0 — Context-conditioned low-rank adaptive Koopman dynamics
 
+- Revised Phase 2 after the complete stable GPU run showed over-constrained adaptation: added one
+  continuous static-oracle, dynamic-residual and observer-gated latent curriculum.
+- Replaced branch-wise half budgets with a single logarithmic-norm projection of the combined
+  operator increment and a `0.05 -> 0.10 -> 0.15` budget curriculum.
+- Made H80 gain primary in rank selection, moved H80 supervision into the operator-identification
+  stage, increased long-horizon physical sampling, and separated numerical stability from
+  long-rollout predictive skill in reports.
 - Added a post-baseline stabilization revision after the first GPU science result showed
   short-horizon gains but H32/H80 and decoded-physics degradation.
 - Added bounded adaptive coordinates, a learned trust gate, H4/H8/H16/H32 teacher-free

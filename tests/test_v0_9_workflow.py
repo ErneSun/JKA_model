@@ -47,6 +47,15 @@ def test_v09_config_and_revision_id_contract(tmp_path: Path) -> None:
     assert config.v0_9_training.gradient_conflict_method == "pcgrad"
     assert sum(config.v0_9_training.observable_horizon_probabilities) == 1.0
     assert config.v0_9_training.observable_names[-2:] == ("lift", "drag")
+    assert config.v0_9_phase2 is not None and config.v0_9_phase2.enabled
+    assert config.v0_9_phase2.static_stage_end_fraction == 0.30
+    assert config.v0_9_phase2.dynamic_stage_end_fraction == 0.70
+    assert config.v0_9_phase2.symmetric_delta_budget == 0.15
+    assert (
+        config.v0_9_training.rollout_start_fractions[-1]
+        < config.v0_9_phase2.dynamic_stage_end_fraction
+    )
+    assert config.v0_9_training.observable_horizon_probabilities[-1] == 0.35
     first = create_versioned_session(tmp_path, "v09-test")
     second = create_versioned_session(tmp_path, "v09-test")
     assert first.resolved_id == "v09-test"
@@ -97,6 +106,38 @@ def test_rank_selection_enforces_long_horizon_and_burden_before_parsimony() -> N
     assert fallback["selected_rank"] == 4
     assert not fallback["constraints_satisfied"]
 
+    gain_driven = select_validation_rank(
+        {
+            2: [
+                {
+                    "selection_score": 22.99,
+                    "rollout_gain_h80": 0.0012,
+                    "burden_max": 0.011,
+                }
+            ],
+            4: [
+                {
+                    "selection_score": 22.94,
+                    "rollout_gain_h80": 0.0027,
+                    "burden_max": 0.011,
+                }
+            ],
+            8: [
+                {
+                    "selection_score": 22.90,
+                    "rollout_gain_h80": -0.0024,
+                    "burden_max": 0.011,
+                }
+            ],
+        },
+        longest_horizon=80,
+        burden_limit=0.35,
+        material_gain=0.02,
+    )
+    assert gain_driven["selected_rank"] == 4
+    assert not gain_driven["constraints_satisfied"]
+    assert gain_driven["gain_equivalent_ranks"] == [4]
+
 
 def test_generic_metric_gates_handle_resolution_zero_baselines_and_inconclusive() -> None:
     frequency = evaluate_metric_gate(
@@ -129,9 +170,7 @@ def test_generic_metric_gates_handle_resolution_zero_baselines_and_inconclusive(
         float("nan"),
         MetricGateSpec("missing", MetricDirection.HIGHER_IS_BETTER, threshold=0.0),
     )
-    combined = aggregate_gate_results(
-        "combined", [frequency, nonfinite], minimum_count=2
-    )
+    combined = aggregate_gate_results("combined", [frequency, nonfinite], minimum_count=2)
     assert combined.status is GateStatus.INCONCLUSIVE
 
 
@@ -147,9 +186,7 @@ def test_v08_handoff_requires_three_jointly_passing_backbones(tmp_path: Path) ->
         "joint_v0_9_support_fraction": 1.0,
         "v0_7_route_on_new_problem": "R3",
         "context_family": "HISTORY_MLP",
-        "nested_seed_support": {
-            str(seed): {"v0_9_supported": True} for seed in (47, 53, 59)
-        },
+        "nested_seed_support": {str(seed): {"v0_9_supported": True} for seed in (47, 53, 59)},
     }
     (compact / "evaluation" / "v0_8_scientific_decision.json").write_text(
         json.dumps(decision), encoding="utf-8"
@@ -205,9 +242,7 @@ def test_v08_handoff_requires_three_jointly_passing_backbones(tmp_path: Path) ->
 def test_legacy_v08_ready_report_is_detected_for_strict_reassessment() -> None:
     legacy = {
         "v0_9_ready": True,
-        "nested_seed_support": {
-            str(seed): {"supported": True} for seed in (47, 53, 59)
-        },
+        "nested_seed_support": {str(seed): {"supported": True} for seed in (47, 53, 59)},
     }
     assert not strict_v0_8_handoff_fields_present(legacy)
     strict = {
@@ -215,17 +250,14 @@ def test_legacy_v08_ready_report_is_detected_for_strict_reassessment() -> None:
         "joint_v0_9_support_fraction": 1.0,
         "v0_9_required_backbone_fraction": 1.0,
         "nested_seed_support": {
-            str(seed): {"supported": True, "v0_9_supported": True}
-            for seed in (47, 53, 59)
+            str(seed): {"supported": True, "v0_9_supported": True} for seed in (47, 53, 59)
         },
     }
     assert strict_v0_8_handoff_fields_present(strict)
 
 
 def test_clean_gate_ignores_generated_results_but_not_source_changes() -> None:
-    assert dirty_source_paths(
-        " M gpu_validation/v0_8/results/v08/completion.json\n"
-    ) == []
+    assert dirty_source_paths(" M gpu_validation/v0_8/results/v08/completion.json\n") == []
     porcelain = "\n".join(
         (
             " M gpu_validation/v0_8/results/v08/report.md",
@@ -318,9 +350,7 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
                             "phase1": {
                                 "gradient_audit_records": 1,
                                 "minimum_gradient_cosine": -0.2,
-                                "observable_scale_state": {
-                                    "split_fingerprint": f"train-{seed}"
-                                },
+                                "observable_scale_state": {"split_fingerprint": f"train-{seed}"},
                             },
                         }
                     ),
@@ -375,9 +405,15 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
     assert result["dynamic_operator_adaptation"] == "SUPPORTED"
     assert result["observable_support"] == "SUPPORTED"
     assert result["representation_physical_floor"] == "SUPPORTED"
+    assert result["numerical_stability"] == "PASS"
+    assert result["long_rollout_skill"] == "PASS"
+    assert not result["claims"]["oracle_condition_curriculum_train_only"]
     assert result["v1_0_ready"]
     assert result["compact_audit"]["complete"]
     assert (output / "report.md").is_file()
+    report = (output / "report.md").read_text(encoding="utf-8")
+    assert "NUMERICAL STABILITY: PASS" in report
+    assert "LONG-ROLLOUT SKILL: PASS" in report
     (session / "v0_8_handoff_audit.json").write_text(
         json.dumps(
             {
@@ -391,8 +427,7 @@ def test_nested_v09_aggregation_and_completion_contract(tmp_path: Path) -> None:
     )
     for seed in (47, 53):
         for decision_path in session.glob(
-            f"seeds/seed_{seed}/formal/*/init_*/evaluation/"
-            "v0_9_scientific_decision.json"
+            f"seeds/seed_{seed}/formal/*/init_*/evaluation/v0_9_scientific_decision.json"
         ):
             record = json.loads(decision_path.read_text(encoding="utf-8"))
             record["operator_explained_status"] = "INCONCLUSIVE"

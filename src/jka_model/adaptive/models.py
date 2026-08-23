@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
 import torch
@@ -104,9 +105,7 @@ class LowRankAdaptiveOperator(nn.Module):
         gate = (
             torch.sigmoid(self.trust_gate_head(features))
             if self.trust_gate_head is not None
-            else torch.ones(
-                (context.shape[0], 1), device=context.device, dtype=context.dtype
-            )
+            else torch.ones((context.shape[0], 1), device=context.device, dtype=context.dtype)
         )
         return coordinates * gate, gate
 
@@ -144,9 +143,7 @@ class LowRankAdaptiveOperator(nn.Module):
             raise ValueError("z must have shape [B,d_K]")
         if dt.shape not in {(z.shape[0],), (z.shape[0], 1)} or torch.any(dt <= 0):
             raise ValueError("dt must be positive with shape [B] or [B,1]")
-        prediction, eta, _, delta, adapted = self.step_with_gate(
-            z, context, dt, condition
-        )
+        prediction, eta, _, delta, adapted = self.step_with_gate(z, context, dt, condition)
         return prediction, eta, delta, adapted
 
     def step_with_gate(
@@ -279,17 +276,13 @@ class FactorizedAdaptiveOperator(nn.Module):
     def factors(self) -> tuple[Tensor, Tensor]:
         static = self._factor_pair("static")
         dynamic = self._factor_pair("dynamic")
-        return torch.cat((static[0], dynamic[0]), dim=1), torch.cat(
-            (static[1], dynamic[1]), dim=1
-        )
+        return torch.cat((static[0], dynamic[0]), dim=1), torch.cat((static[1], dynamic[1]), dim=1)
 
     def condition_prediction(self, context: Tensor) -> Tensor:
         if context.ndim != 2 or context.shape[1] != self.context_dim:
             raise ValueError("context must have shape [B,d_c]")
         raw = self.condition_observer(context)
-        return self.observer_output_limit * torch.tanh(
-            raw / self.observer_output_limit
-        )
+        return self.observer_output_limit * torch.tanh(raw / self.observer_output_limit)
 
     @staticmethod
     def _limit_symmetric_growth(delta: Tensor, budget: float) -> tuple[Tensor, Tensor]:
@@ -308,7 +301,15 @@ class FactorizedAdaptiveOperator(nn.Module):
         *,
         dynamic_context: Tensor | None = None,
         condition_override: Tensor | None = None,
+        active_components: str = "full",
+        detach_static: bool = False,
+        delta_budget: float | None = None,
     ) -> dict[str, Tensor]:
+        if active_components not in {"static", "full"}:
+            raise ValueError("Phase-2 active_components must be static or full")
+        budget = self.symmetric_delta_budget if delta_budget is None else delta_budget
+        if not math.isfinite(float(budget)) or budget <= 0:
+            raise ValueError("Phase-2 total delta budget must be finite and positive")
         q_hat = self.condition_prediction(context)
         if condition_override is not None:
             if condition_override.shape != q_hat.shape:
@@ -349,21 +350,26 @@ class FactorizedAdaptiveOperator(nn.Module):
         )
         static_coordinates = static_coordinates * static_gate
         dynamic_coordinates = dynamic_coordinates * dynamic_gate
+        if active_components == "static":
+            dynamic_coordinates = torch.zeros_like(dynamic_coordinates)
+            dynamic_gate = torch.zeros_like(dynamic_gate)
         static_left, static_right = self._factor_pair("static")
         dynamic_left, dynamic_right = self._factor_pair("dynamic")
-        static_delta = torch.einsum(
-            "ir,br,jr->bij", static_left, static_coordinates, static_right
-        )
+        static_delta = torch.einsum("ir,br,jr->bij", static_left, static_coordinates, static_right)
         dynamic_delta = torch.einsum(
             "ir,br,jr->bij", dynamic_left, dynamic_coordinates, dynamic_right
         )
-        branch_budget = 0.5 * self.symmetric_delta_budget
-        static_delta, static_stability_scale = self._limit_symmetric_growth(
-            static_delta, branch_budget
-        )
-        dynamic_delta, dynamic_stability_scale = self._limit_symmetric_growth(
-            dynamic_delta, branch_budget
-        )
+        if detach_static:
+            # Stage 2 is a residual fit: the dynamic branch sees the forecast
+            # error left by the already identified condition branch, but cannot
+            # rewrite that branch or its dyadic basis.
+            static_coordinates = static_coordinates.detach()
+            static_delta = static_delta.detach()
+        raw_delta = static_delta + dynamic_delta
+        _, total_stability_scale = self._limit_symmetric_growth(raw_delta, budget)
+        static_delta = static_delta * total_stability_scale[:, None]
+        dynamic_delta = dynamic_delta * total_stability_scale[:, None]
+        delta = static_delta + dynamic_delta
         return {
             "q_hat": q_hat,
             "q_used": q_used,
@@ -371,12 +377,14 @@ class FactorizedAdaptiveOperator(nn.Module):
             "dynamic_coordinates": dynamic_coordinates,
             "static_delta": static_delta,
             "dynamic_delta": dynamic_delta,
-            "delta": static_delta + dynamic_delta,
+            "delta": delta,
             "gate": torch.maximum(static_gate, dynamic_gate),
             "static_gate": static_gate,
             "dynamic_gate": dynamic_gate,
-            "static_stability_scale": static_stability_scale,
-            "dynamic_stability_scale": dynamic_stability_scale,
+            "static_stability_scale": total_stability_scale,
+            "dynamic_stability_scale": total_stability_scale,
+            "total_stability_scale": total_stability_scale,
+            "delta_budget": delta.new_full((delta.shape[0], 1), budget),
         }
 
     def adaptation_parameters(
@@ -395,9 +403,23 @@ class FactorizedAdaptiveOperator(nn.Module):
         return self.adaptation_parameters(context, condition)[1]
 
     def generator_with_gate(
-        self, context: Tensor, condition: Tensor | None = None
+        self,
+        context: Tensor,
+        condition: Tensor | None = None,
+        *,
+        condition_override: Tensor | None = None,
+        active_components: str = "full",
+        detach_static: bool = False,
+        delta_budget: float | None = None,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        components = self.phase2_components(context, condition)
+        components = self.phase2_components(
+            context,
+            condition,
+            condition_override=condition_override,
+            active_components=active_components,
+            detach_static=detach_static,
+            delta_budget=delta_budget,
+        )
         coordinates = torch.cat(
             (components["static_coordinates"], components["dynamic_coordinates"]), dim=-1
         )
@@ -422,9 +444,7 @@ class FactorizedAdaptiveOperator(nn.Module):
         dt: Tensor,
         condition: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        prediction, coordinates, _, delta, adapted = self.step_with_gate(
-            z, context, dt, condition
-        )
+        prediction, coordinates, _, delta, adapted = self.step_with_gate(z, context, dt, condition)
         return prediction, coordinates, delta, adapted
 
     def step_with_gate(
@@ -433,34 +453,49 @@ class FactorizedAdaptiveOperator(nn.Module):
         context: Tensor,
         dt: Tensor,
         condition: Tensor | None = None,
+        *,
+        condition_override: Tensor | None = None,
+        active_components: str = "full",
+        detach_static: bool = False,
+        delta_budget: float | None = None,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         if z.ndim != 2 or z.shape[1] != self.latent_dim:
             raise ValueError("z must have shape [B,d_K]")
         if dt.shape not in {(z.shape[0],), (z.shape[0], 1)} or torch.any(dt <= 0):
             raise ValueError("dt must be positive with shape [B] or [B,1]")
-        coordinates, gate, delta, adapted = self.generator_with_gate(context, condition)
+        coordinates, gate, delta, adapted = self.generator_with_gate(
+            context,
+            condition,
+            condition_override=condition_override,
+            active_components=active_components,
+            detach_static=detach_static,
+            delta_budget=delta_budget,
+        )
         with torch.autocast(device_type=z.device.type, enabled=False):
-            transition = torch.linalg.matrix_exp(
-                adapted.float() * dt.reshape(-1, 1, 1).float()
-            )
+            transition = torch.linalg.matrix_exp(adapted.float() * dt.reshape(-1, 1, 1).float())
             prediction = torch.einsum("bij,bj->bi", transition, z.float())
         return prediction, coordinates, gate, delta, adapted
 
-    def orthogonality_loss(self) -> Tensor:
+    def orthogonality_loss(self, component: str = "full") -> Tensor:
+        if component not in {"static", "dynamic", "full"}:
+            raise ValueError("Phase-2 orthogonality component is invalid")
         result = self.nominal_generator.new_zeros(())
         for kind, rank in (("static", self.static_rank), ("dynamic", self.dynamic_rank)):
+            if component != "full" and kind != component:
+                continue
             left, right = self._factor_pair(kind)
             identity = torch.eye(rank, device=left.device, dtype=left.dtype)
             result = result + (left.T @ left - identity).square().mean()
             result = result + (right.T @ right - identity).square().mean()
         return result
 
-    def cross_basis_orthogonality_loss(self) -> Tensor:
+    def cross_basis_orthogonality_loss(self, *, detach_static: bool = False) -> Tensor:
         static_left, static_right = self._factor_pair("static")
         dynamic_left, dynamic_right = self._factor_pair("dynamic")
-        frobenius_inner = (static_left.T @ dynamic_left) * (
-            static_right.T @ dynamic_right
-        )
+        if detach_static:
+            static_left = static_left.detach()
+            static_right = static_right.detach()
+        frobenius_inner = (static_left.T @ dynamic_left) * (static_right.T @ dynamic_right)
         return frobenius_inner.square().mean()
 
 
@@ -502,9 +537,7 @@ class AdaptiveKoopmanModel(nn.Module):
         condition: Tensor | None = None,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         with torch.no_grad():
-            context = self.context_encoder(
-                history_z, history_dts, next_dt, context_parameters
-            )
+            context = self.context_encoder(history_z, history_dts, next_dt, context_parameters)
         prediction, eta, delta, adapted = self.operator_adapter.step(
             history_z[:, -1], context, next_dt, condition
         )

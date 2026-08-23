@@ -3,7 +3,7 @@
 从项目根目录运行：
 
 ```bash
-.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_all.py --validation-id v09-added-p2-identifiable-$(date -u +%Y%m%dT%H%M%SZ) --v0-8-handoff-policy supported --seeds 47 53 59
+.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_all.py --validation-id v09-added-p2-continuous-$(date -u +%Y%m%dT%H%M%SZ) --v0-8-handoff-policy supported --seeds 47 53 59
 ```
 
 该命令对应当前已知的 V0.8 supported handoff，并运行 G0 targeted tests；不要加
@@ -22,7 +22,7 @@
 `V1.0 READY`。
 
 流程执行 targeted tests、V0.8 audit、12 类升/降/循环 controlled data/cache、带 H4–H80 课程与冻结 decoder
-observables 的 validation-only rank sweep、known/latent 3×3 训练、condition/history 成对辨识、isolated shuffle、
+observables 的 validation-only rank sweep、连续 static-oracle/dynamic-residual/observer-gated 训练、known/latent 3×3 训练、condition/history 成对辨识、isolated shuffle、
 locked test、physics rollout 和 compact report。若 ID 已存在，自动分配 `-r1/-r2/...`。
 
 原始文件位于 `runs/v0_9/<resolved-id>/`；紧凑结果位于

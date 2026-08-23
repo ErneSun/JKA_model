@@ -12,6 +12,7 @@ from jka_model.adaptive import (
     conditional_centering_loss,
     curriculum_state,
     matched_history_pairs,
+    phase2_training_state,
 )
 from jka_model.config import (
     CylinderWake2DConfig,
@@ -103,20 +104,84 @@ def test_latent_condition_is_bounded_detached_and_generator_growth_limited() -> 
         adapter.dynamic_coordinate_head[-1].bias.fill_(100.0)
     components = adapter.phase2_components(1.0e6 * torch.randn(4, 8))
     assert torch.isfinite(components["q_hat"]).all()
-    assert (
-        float(components["q_hat"].detach().abs().max())
-        <= adapter.observer_output_limit
-    )
+    assert float(components["q_hat"].detach().abs().max()) <= adapter.observer_output_limit
     assert components["q_hat"].requires_grad
     assert not components["q_used"].requires_grad
-    for name in ("static_delta", "dynamic_delta"):
-        delta = components[name]
-        symmetric = 0.5 * (delta + delta.transpose(-1, -2))
-        burden = torch.linalg.matrix_norm(symmetric, ord=2)
-        assert (
-            float(burden.detach().max())
-            <= 0.5 * adapter.symmetric_delta_budget + 1.0e-6
-        )
+    delta = components["delta"]
+    assert torch.allclose(delta, components["static_delta"] + components["dynamic_delta"])
+    symmetric = 0.5 * (delta + delta.transpose(-1, -2))
+    burden = torch.linalg.matrix_norm(symmetric, ord="fro")
+    assert float(burden.detach().max()) <= adapter.symmetric_delta_budget + 1.0e-6
+
+
+def test_phase2_continuous_stage_contract_and_oracle_boundary() -> None:
+    phase2 = V09Phase2Config(
+        enabled=True,
+        static_rank=2,
+        dynamic_rank=2,
+        observer_width=12,
+    )
+    static = phase2_training_state(
+        phase2,
+        epoch=0,
+        epochs=100,
+        condition_mode="latent_inferred",
+        observer_ready=False,
+    )
+    dynamic = phase2_training_state(
+        phase2,
+        epoch=40,
+        epochs=100,
+        condition_mode="latent_inferred",
+        observer_ready=False,
+    )
+    observer = phase2_training_state(
+        phase2,
+        epoch=80,
+        epochs=100,
+        condition_mode="latent_inferred",
+        observer_ready=False,
+    )
+    joint = phase2_training_state(
+        phase2,
+        epoch=80,
+        epochs=100,
+        condition_mode="latent_inferred",
+        observer_ready=True,
+    )
+    assert static.name == "static_oracle" and static.active_components == "static"
+    assert static.use_oracle_condition and static.observer_weight == 0.0
+    assert dynamic.name == "dynamic_residual_oracle" and dynamic.detach_static
+    assert observer.name == "observer_calibration" and observer.observer_only
+    assert joint.name == "latent_joint_refinement" and not joint.use_oracle_condition
+    assert (
+        static.delta_budget
+        < dynamic.delta_budget
+        <= observer.delta_budget
+        == phase2.symmetric_delta_budget
+    )
+
+
+def test_phase2_dynamic_residual_freezes_static_branch_and_uses_total_projection() -> None:
+    adapter = _operator("latent_inferred")
+    context = torch.randn(4, 8)
+    oracle = torch.randn(4, 3)
+    with torch.no_grad():
+        adapter.static_coordinate_head[-1].bias.fill_(0.25)
+        adapter.dynamic_coordinate_head[-1].bias.fill_(0.25)
+    components = adapter.phase2_components(
+        context,
+        condition_override=oracle,
+        detach_static=True,
+        delta_budget=0.10,
+    )
+    assert torch.equal(components["q_used"], oracle)
+    components["delta"].square().mean().backward()
+    assert adapter.static_coordinate_head[-1].weight.grad is None
+    assert adapter.static_left_factor.grad is None
+    assert adapter.dynamic_coordinate_head[-1].weight.grad is not None
+    symmetric = 0.5 * (components["delta"] + components["delta"].transpose(-1, -2))
+    assert float(torch.linalg.matrix_norm(symmetric, ord="fro").detach().max()) <= 0.100001
 
 
 def test_condition_rate_is_causal_and_centering_has_no_variance_floor() -> None:
@@ -220,14 +285,12 @@ def test_phase2_rollout_objective_connects_observer_and_factorized_operator() ->
         "latent_inferred",
         curriculum_state(training, 1, validation=True),
         torch.ones(4, dtype=torch.bool),
-        V09Phase2Config(
-            enabled=True, static_rank=2, dynamic_rank=2, observer_width=12
-        ),
+        V09Phase2Config(enabled=True, static_rank=2, dynamic_rank=2, observer_width=12),
     )
     assert torch.isfinite(result.total)
-    assert set(
-        ("condition_observer", "condition_centering", "basis_cross_orthogonality")
-    ).issubset(result.terms)
+    assert set(("condition_observer", "condition_centering", "basis_cross_orthogonality")).issubset(
+        result.terms
+    )
     result.total.backward()
     assert model.operator_adapter.condition_observer[-1].weight.grad is not None
 

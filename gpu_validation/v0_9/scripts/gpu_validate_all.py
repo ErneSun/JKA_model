@@ -112,9 +112,7 @@ def _latest_eligible_v0_8(handoff_policy: str) -> str:
         if eligible and completion.get("status") == "PASS":
             candidates.append((completion_path.stat().st_mtime, result.name))
     if not candidates:
-        raise ValueError(
-            f"no {handoff_policy} V0.8 raw+compact handoff found; pass --v0-8-id"
-        )
+        raise ValueError(f"no {handoff_policy} V0.8 raw+compact handoff found; pass --v0-8-id")
     return max(candidates)[1]
 
 
@@ -126,10 +124,7 @@ def strict_v0_8_handoff_fields_present(decision: dict[str, Any]) -> bool:
         and "v0_9_required_backbone_fraction" in decision
         and isinstance(nested, dict)
         and len(nested) == 3
-        and all(
-            isinstance(item, dict) and "v0_9_supported" in item
-            for item in nested.values()
-        )
+        and all(isinstance(item, dict) and "v0_9_supported" in item for item in nested.values())
     )
 
 
@@ -155,11 +150,20 @@ def select_validation_rank(
     *,
     longest_horizon: int,
     burden_limit: float,
+    material_gain: float = 0.02,
     near_optimal_tolerance: float = 0.02,
+    gain_equivalence_tolerance: float | None = None,
 ) -> dict[str, Any]:
-    """Apply the predeclared long-horizon, burden and parsimony rank rule."""
-    if not sweep_metrics or burden_limit <= 0 or near_optimal_tolerance < 0:
+    """Apply feasibility -> long-horizon skill -> objective -> parsimony."""
+    if not sweep_metrics or burden_limit <= 0 or material_gain < 0 or near_optimal_tolerance < 0:
         raise ValueError("invalid V0.9 rank-selection inputs")
+    gain_tolerance = (
+        max(0.05 * material_gain, 1.0e-4)
+        if gain_equivalence_tolerance is None
+        else gain_equivalence_tolerance
+    )
+    if gain_tolerance < 0:
+        raise ValueError("V0.9 rank gain-equivalence tolerance must be non-negative")
     gain_key = f"rollout_gain_h{longest_horizon}"
     for rank, values in sweep_metrics.items():
         if rank < 1 or not values:
@@ -173,7 +177,10 @@ def select_validation_rank(
             if any(item is None or not math.isfinite(float(item)) for item in required):
                 raise ValueError("V0.9 rank selection received incomplete/non-finite metrics")
     mean_scores = {
-        rank: sum(item.get("selection_score", item["total"]) for item in values)
+        rank: sum(
+            item["selection_score"] if "selection_score" in item else item["total"]
+            for item in values
+        )
         / len(values)
         for rank, values in sweep_metrics.items()
     }
@@ -182,19 +189,25 @@ def select_validation_rank(
         for rank, values in sweep_metrics.items()
     }
     maximum_burdens = {
-        rank: max(item["burden_max"] for item in values)
-        for rank, values in sweep_metrics.items()
+        rank: max(item["burden_max"] for item in values) for rank, values in sweep_metrics.items()
     }
     constraint_eligible = [
         rank
         for rank in sorted(sweep_metrics)
-        if mean_long_gains[rank] >= 0 and maximum_burdens[rank] <= burden_limit
+        if mean_long_gains[rank] >= material_gain and maximum_burdens[rank] <= burden_limit
     ]
-    selection_pool = constraint_eligible or sorted(sweep_metrics)
-    minimum = min(mean_scores[rank] for rank in selection_pool)
+    burden_eligible = [
+        rank for rank in sorted(sweep_metrics) if maximum_burdens[rank] <= burden_limit
+    ]
+    selection_pool = constraint_eligible or burden_eligible or sorted(sweep_metrics)
+    best_gain = max(mean_long_gains[rank] for rank in selection_pool)
+    gain_equivalent = [
+        rank for rank in selection_pool if mean_long_gains[rank] >= best_gain - gain_tolerance
+    ]
+    minimum = min(mean_scores[rank] for rank in gain_equivalent)
     near_optimal = [
         rank
-        for rank in selection_pool
+        for rank in gain_equivalent
         if mean_scores[rank] <= minimum * (1.0 + near_optimal_tolerance)
     ]
     return {
@@ -205,14 +218,20 @@ def select_validation_rank(
         "mean_long_horizon_gains": mean_long_gains,
         "maximum_operator_burdens": maximum_burdens,
         "burden_limit": burden_limit,
+        "material_long_horizon_gain": material_gain,
+        "gain_equivalence_tolerance": gain_tolerance,
         "constraint_eligible_ranks": constraint_eligible,
+        "burden_eligible_ranks": burden_eligible,
+        "gain_equivalent_ranks": gain_equivalent,
         "constraints_satisfied": bool(constraint_eligible),
         "near_optimal_tolerance": near_optimal_tolerance,
         "selected_rank": min(near_optimal),
         "selection_rule": (
-            "smallest rank within tolerance of the minimum validation objective among "
-            "ranks with non-negative longest-horizon gain and bounded operator burden; "
-            "fall back to the same parsimony rule over all ranks if none are eligible"
+            "require bounded burden and material longest-horizon gain; maximize "
+            "longest-horizon gain up to a declared equivalence tolerance, then minimize "
+            "validation objective and use rank parsimony only as the final tie-break; "
+            "if no rank reaches material gain, retain the same ordering over burden-feasible "
+            "ranks and report constraints_satisfied=false"
         ),
     }
 
@@ -446,14 +465,15 @@ def main() -> None:
             cache_path = raw / "seeds" / f"seed_{seed}" / "cache" / "adaptive_cache.pt"
             _stage(
                 f"G3 adaptive latent cache seed={seed}",
-                lambda base_config=base_config, item=item, dataset_path=dataset_path,
-                cache_path=cache_path: prepare_v0_9_cache(
-                    base_config,
-                    backbone_checkpoint=item.backbone_checkpoint,
-                    context_checkpoint=item.context_checkpoint,
-                    physical_dataset=dataset_path,
-                    destination=cache_path,
-                    device="cuda",
+                lambda base_config=base_config, item=item, dataset_path=dataset_path, cache_path=cache_path: (  # noqa: E501
+                    prepare_v0_9_cache(
+                        base_config,
+                        backbone_checkpoint=item.backbone_checkpoint,
+                        context_checkpoint=item.context_checkpoint,
+                        physical_dataset=dataset_path,
+                        destination=cache_path,
+                        device="cuda",
+                    )
                 ),
             )
             artifacts[seed] = {"dataset": dataset_path, "cache": cache_path}
@@ -465,6 +485,7 @@ def main() -> None:
         sweep_metrics: dict[int, list[dict[str, float]]] = {
             rank: [] for rank in template.v0_9_adaptive.rank_candidates
         }
+        latent_rank_diagnostics: dict[int, dict[str, float]] = {}
         first_operator_seed = template.v0_9_evaluation.operator_initialization_seeds[0]
         for rank in template.v0_9_adaptive.rank_candidates:
             for mode in ("known", "latent_inferred"):
@@ -493,15 +514,24 @@ def main() -> None:
                     ),
                 )
                 save_config(config, raw / "configs" / f"rank_{rank}_{mode}.yaml")
-                sweep_metrics[rank].append(trained.validation_metrics)
+                if mode == "known":
+                    # Rank is an operator-capacity decision.  Select it from the
+                    # oracle condition route so an inadequate observer cannot
+                    # masquerade as insufficient or excessive Koopman rank.
+                    sweep_metrics[rank].append(trained.validation_metrics)
+                else:
+                    latent_rank_diagnostics[rank] = trained.validation_metrics
                 last_checkpoint = str(trained.best_checkpoint)
                 completed["rank_sweep"] += 1
         rank_selection = select_validation_rank(
             sweep_metrics,
             longest_horizon=template.v0_9_training.rollout_horizons[-1],
             burden_limit=template.v0_9_training.operator_burden_target,
+            material_gain=template.v0_9_evaluation.material_relative_gain,
         )
         selected_rank = int(rank_selection["selected_rank"])
+        rank_selection["selection_condition_mode"] = "known"
+        rank_selection["latent_rank_diagnostics"] = latent_rank_diagnostics
         (raw / "rank_selection.json").write_text(
             json.dumps(rank_selection, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -527,12 +557,7 @@ def main() -> None:
                         operator_seed=operator_seed,
                     )
                     run_dir = (
-                        raw
-                        / "seeds"
-                        / f"seed_{seed}"
-                        / "formal"
-                        / mode
-                        / f"init_{operator_seed}"
+                        raw / "seeds" / f"seed_{seed}" / "formal" / mode / f"init_{operator_seed}"
                     )
                     trained = _stage(
                         f"G5 train seed={seed} mode={mode} init={operator_seed}",
@@ -550,24 +575,23 @@ def main() -> None:
                     last_checkpoint = str(trained.best_checkpoint)
                     _stage(
                         f"G6 locked test seed={seed} mode={mode} init={operator_seed}",
-                        lambda config=config, run_dir=run_dir, item=item, seed=seed,
-                        trained=trained: evaluate_v0_9(
-                            config,
-                            checkpoint=trained.best_checkpoint,
-                            context_checkpoint=item.context_checkpoint,
-                            adaptive_cache=artifacts[seed]["cache"],
-                            backbone_checkpoint=item.backbone_checkpoint,
-                            physical_dataset=artifacts[seed]["dataset"],
-                            output_dir=run_dir,
-                            device="cuda",
+                        lambda config=config, run_dir=run_dir, item=item, seed=seed, trained=trained: (  # noqa: E501
+                            evaluate_v0_9(
+                                config,
+                                checkpoint=trained.best_checkpoint,
+                                context_checkpoint=item.context_checkpoint,
+                                adaptive_cache=artifacts[seed]["cache"],
+                                backbone_checkpoint=item.backbone_checkpoint,
+                                physical_dataset=artifacts[seed]["dataset"],
+                                output_dir=run_dir,
+                                device="cuda",
+                            )
                         ),
                     )
                     completed["formal_evaluation"] += 1
                     save_config(
                         config,
-                        raw
-                        / "configs"
-                        / f"seed_{seed}_{mode}_init_{operator_seed}.yaml",
+                        raw / "configs" / f"seed_{seed}_{mode}_init_{operator_seed}.yaml",
                     )
 
         current_stage = "nested_aggregation"
@@ -625,8 +649,7 @@ def main() -> None:
                 json.dumps(failure, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
         print(
-            f"V0.9 VALIDATION FAILED id={session.resolved_id} "
-            f"report={compact / 'failure.json'}",
+            f"V0.9 VALIDATION FAILED id={session.resolved_id} report={compact / 'failure.json'}",
             flush=True,
         )
         raise

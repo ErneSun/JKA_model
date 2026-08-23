@@ -39,9 +39,11 @@ from jka_model.adaptive.models import (
 from jka_model.adaptive.objectives import (
     AdaptiveObjectiveResult,
     CurriculumState,
+    Phase2TrainingState,
     adaptive_stabilization_objective,
     curriculum_state,
     differentiable_adaptive_rollout,
+    phase2_training_state,
     relative_propagator_growth_loss,
 )
 from jka_model.adaptive.physics import (
@@ -64,6 +66,7 @@ __all__ = [
     "MatchedHistoryPair",
     "AdaptiveObjectiveResult",
     "CurriculumState",
+    "Phase2TrainingState",
     "FrozenCylinderPhysics",
     "FrozenDecoderObservables",
     "FactorizedAdaptiveOperator",
@@ -83,6 +86,7 @@ __all__ = [
     "audit_v0_8_handoff",
     "curriculum_state",
     "differentiable_adaptive_rollout",
+    "phase2_training_state",
     "aggregate_v0_9_results",
     "build_adaptive_cache",
     "load_adaptive_cache",

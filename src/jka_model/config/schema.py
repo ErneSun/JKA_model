@@ -1855,9 +1855,7 @@ class V09ConditionConfig:
             ),
             known_condition_features=tuple(
                 str(value)
-                for value in data.get(
-                    "known_condition_features", defaults.known_condition_features
-                )
+                for value in data.get("known_condition_features", defaults.known_condition_features)
             ),
         )
 
@@ -1929,9 +1927,7 @@ class V09AdaptiveConfig:
             zero_output_initialization=bool(
                 data.get("zero_output_initialization", defaults.zero_output_initialization)
             ),
-            bounded_coordinates=bool(
-                data.get("bounded_coordinates", defaults.bounded_coordinates)
-            ),
+            bounded_coordinates=bool(data.get("bounded_coordinates", defaults.bounded_coordinates)),
             eta_max=float(data.get("eta_max", defaults.eta_max)),
             trust_gate=bool(data.get("trust_gate", defaults.trust_gate)),
             trust_gate_bias=float(data.get("trust_gate_bias", defaults.trust_gate_bias)),
@@ -2002,50 +1998,57 @@ class V09TrainingConfig:
     operator_initialization_seed: int = 701
 
     def __post_init__(self) -> None:
-        if min(
-            self.epochs,
-            self.batch_size,
-            self.rollout_batch_size,
-            self.rollout_stride,
-            self.physics_batch_size,
-            self.rank_sweep_epochs,
-            self.patience,
-        ) < 1 or self.learning_rate <= 0:
+        if (
+            min(
+                self.epochs,
+                self.batch_size,
+                self.rollout_batch_size,
+                self.rollout_stride,
+                self.physics_batch_size,
+                self.rank_sweep_epochs,
+                self.patience,
+            )
+            < 1
+            or self.learning_rate <= 0
+        ):
             raise ValueError(
                 "V0.9 epochs, batch size, patience, and learning rate must be positive"
             )
-        if min(
-            self.weight_decay,
-            self.lambda_operator_burden,
-            self.lambda_smooth,
-            self.lambda_stability,
-            self.lambda_rollout,
-            self.lambda_propagator_growth,
-            self.lambda_physics,
-            self.physics_velocity_weight,
-            self.physics_vorticity_weight,
-            self.physics_divergence_weight,
-            self.physics_boundary_weight,
-            self.physics_lift_weight,
-            self.physics_drag_weight,
-            self.lambda_observable_noninferiority,
-            self.observable_noninferiority_margin,
-            self.observable_noninferiority_floor,
-            self.observable_scale_epsilon,
-            self.observable_huber_delta,
-            self.force_correlation_weight,
-            self.force_spectrum_weight,
-            self.augmented_lagrangian_initial_penalty,
-            self.augmented_lagrangian_penalty_growth,
-            self.augmented_lagrangian_max_penalty,
-            self.augmented_lagrangian_improvement_ratio,
-            self.augmented_lagrangian_dual_step_size,
-            self.augmented_lagrangian_max_multiplier,
-            self.gradient_conflict_start_fraction,
-            *self.observable_component_weights,
-            *self.observable_horizon_weights,
-            *self.observable_horizon_probabilities,
-        ) < 0:
+        if (
+            min(
+                self.weight_decay,
+                self.lambda_operator_burden,
+                self.lambda_smooth,
+                self.lambda_stability,
+                self.lambda_rollout,
+                self.lambda_propagator_growth,
+                self.lambda_physics,
+                self.physics_velocity_weight,
+                self.physics_vorticity_weight,
+                self.physics_divergence_weight,
+                self.physics_boundary_weight,
+                self.physics_lift_weight,
+                self.physics_drag_weight,
+                self.lambda_observable_noninferiority,
+                self.observable_noninferiority_margin,
+                self.observable_noninferiority_floor,
+                self.observable_scale_epsilon,
+                self.observable_huber_delta,
+                self.force_correlation_weight,
+                self.force_spectrum_weight,
+                self.augmented_lagrangian_initial_penalty,
+                self.augmented_lagrangian_penalty_growth,
+                self.augmented_lagrangian_max_penalty,
+                self.augmented_lagrangian_improvement_ratio,
+                self.augmented_lagrangian_dual_step_size,
+                self.augmented_lagrangian_max_multiplier,
+                self.gradient_conflict_start_fraction,
+                *self.observable_component_weights,
+                *self.observable_horizon_weights,
+                *self.observable_horizon_probabilities,
+            )
+            < 0
+        ):
             raise ValueError("V0.9 regularization weights must be non-negative")
         if tuple(sorted(set(self.rollout_horizons))) != self.rollout_horizons:
             raise ValueError("V0.9 training rollout horizons must be unique and increasing")
@@ -2089,18 +2092,14 @@ class V09TrainingConfig:
                 raise ValueError("V0.9 observable horizons must be unique and increasing")
             if self.observable_horizons[0] < 1:
                 raise ValueError("V0.9 observable horizons must be positive")
-            if (
-                self.observable_horizons[-1] > self.rollout_horizons[-1]
-                and not self.phase1_enabled
-            ):
-                raise ValueError(
-                    "V0.9 observables beyond latent rollout require phase1_enabled"
-                )
+            if self.observable_horizons[-1] > self.rollout_horizons[-1] and not self.phase1_enabled:
+                raise ValueError("V0.9 observables beyond latent rollout require phase1_enabled")
             if not any(weight > 0 for weight in self.observable_horizon_weights):
                 raise ValueError("V0.9 observable curriculum requires a positive horizon weight")
-            if self.observable_horizon_probabilities and not abs(
-                sum(self.observable_horizon_probabilities) - 1.0
-            ) <= 1.0e-6:
+            if (
+                self.observable_horizon_probabilities
+                and not abs(sum(self.observable_horizon_probabilities) - 1.0) <= 1.0e-6
+            ):
                 raise ValueError("V0.9 observable horizon probabilities must sum to one")
         if self.propagator_growth_margin < 0 or self.operator_burden_target <= 0:
             raise ValueError("invalid V0.9 growth margin or burden target")
@@ -2108,19 +2107,19 @@ class V09TrainingConfig:
             raise ValueError("invalid V0.9 clipping or initialization seed")
         if self.observable_scale_method not in {"mad", "rms"}:
             raise ValueError("invalid V0.9 observable scale method")
-        if min(
-            self.observable_scale_epsilon,
-            self.observable_huber_delta,
-            self.augmented_lagrangian_initial_penalty,
-            self.augmented_lagrangian_improvement_ratio,
-        ) <= 0:
+        if (
+            min(
+                self.observable_scale_epsilon,
+                self.observable_huber_delta,
+                self.augmented_lagrangian_initial_penalty,
+                self.augmented_lagrangian_improvement_ratio,
+            )
+            <= 0
+        ):
             raise ValueError("invalid V0.9 phase-1 positive hyperparameter")
         if self.augmented_lagrangian_penalty_growth < 1:
             raise ValueError("V0.9 augmented-Lagrangian penalty growth must be >=1")
-        if (
-            self.augmented_lagrangian_max_penalty
-            < self.augmented_lagrangian_initial_penalty
-        ):
+        if self.augmented_lagrangian_max_penalty < self.augmented_lagrangian_initial_penalty:
             raise ValueError("V0.9 augmented-Lagrangian maximum penalty is too small")
         if not 0 < self.augmented_lagrangian_improvement_ratio <= 1:
             raise ValueError("invalid V0.9 augmented-Lagrangian improvement ratio")
@@ -2128,11 +2127,15 @@ class V09TrainingConfig:
             raise ValueError("invalid V0.9 augmented-Lagrangian dual step")
         if self.augmented_lagrangian_max_multiplier <= 0:
             raise ValueError("invalid V0.9 augmented-Lagrangian multiplier cap")
-        if min(
-            self.observable_scale_max_samples,
-            self.force_window_stride,
-            self.augmented_lagrangian_update_interval,
-        ) < 1 or self.gradient_audit_interval < 0:
+        if (
+            min(
+                self.observable_scale_max_samples,
+                self.force_window_stride,
+                self.augmented_lagrangian_update_interval,
+            )
+            < 1
+            or self.gradient_audit_interval < 0
+        ):
             raise ValueError("invalid V0.9 phase-1 interval or sample count")
         if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
             raise ValueError("invalid V0.9 precision")
@@ -2145,9 +2148,7 @@ class V09TrainingConfig:
                 raise ValueError("phase-1 V0.9 requires physical observable training")
             required_constraints = {"divergence", "boundary"}
             if not required_constraints <= set(self.observable_names):
-                raise ValueError(
-                    "phase-1 V0.9 requires divergence and boundary observables"
-                )
+                raise ValueError("phase-1 V0.9 requires divergence and boundary observables")
 
     @property
     def active_observable_horizons(self) -> tuple[int, ...]:
@@ -2261,9 +2262,10 @@ class V09EvaluationConfig:
             raise ValueError("invalid V0.9 scientific seed threshold")
         if self.v1_0_readiness_fraction != 1.0:
             raise ValueError("V1.0 readiness requires all backbone/data seeds")
-        if len(self.operator_initialization_seeds) != 3 or len(
-            set(self.operator_initialization_seeds)
-        ) != 3:
+        if (
+            len(self.operator_initialization_seeds) != 3
+            or len(set(self.operator_initialization_seeds)) != 3
+        ):
             raise ValueError("V0.9 formal evaluation requires three operator seeds")
 
     def to_dict(self) -> dict[str, Any]:
@@ -2312,9 +2314,7 @@ class V09EvaluationConfig:
             max_physics_degradation=float(
                 data.get("max_physics_degradation", defaults.max_physics_degradation)
             ),
-            max_divergence_mse=float(
-                data.get("max_divergence_mse", defaults.max_divergence_mse)
-            ),
+            max_divergence_mse=float(data.get("max_divergence_mse", defaults.max_divergence_mse)),
             max_boundary_mse=float(data.get("max_boundary_mse", defaults.max_boundary_mse)),
             observable_pair_pass_fraction=float(
                 data.get(
@@ -2351,7 +2351,11 @@ class V09Phase2Config:
     observer_depth: int = 2
     observer_warmup_fraction: float = 0.20
     observer_output_limit: float = 16.0
-    symmetric_delta_budget: float = 0.05
+    static_stage_end_fraction: float = 0.30
+    dynamic_stage_end_fraction: float = 0.70
+    initial_symmetric_delta_budget: float = 0.05
+    intermediate_symmetric_delta_budget: float = 0.10
+    symmetric_delta_budget: float = 0.15
     lambda_condition_observer: float = 1.0
     lambda_condition_centering: float = 0.10
     lambda_basis_cross_orthogonality: float = 0.10
@@ -2385,12 +2389,16 @@ class V09Phase2Config:
             raise ValueError("V0.9 Phase-2 ranks and observer dimensions must be positive")
         if not 0 <= self.observer_warmup_fraction < 1:
             raise ValueError("V0.9 Phase-2 observer warmup must lie in [0,1)")
+        if not (0 < self.static_stage_end_fraction < self.dynamic_stage_end_fraction < 1):
+            raise ValueError("V0.9 Phase-2 stage boundaries must satisfy 0 < static < dynamic < 1")
         positive = (
             self.lambda_condition_observer,
             self.lambda_condition_centering,
             self.lambda_basis_cross_orthogonality,
             self.conditional_centering_bandwidth,
             self.observer_output_limit,
+            self.initial_symmetric_delta_budget,
+            self.intermediate_symmetric_delta_budget,
             self.symmetric_delta_budget,
             self.max_condition_observer_normalized_rmse,
             self.matched_condition_tolerance,
@@ -2401,6 +2409,12 @@ class V09Phase2Config:
         )
         if any(not math.isfinite(value) or value <= 0 for value in positive):
             raise ValueError("V0.9 Phase-2 losses, scales, and tolerances must be positive")
+        if not (
+            self.initial_symmetric_delta_budget
+            <= self.intermediate_symmetric_delta_budget
+            <= self.symmetric_delta_budget
+        ):
+            raise ValueError("V0.9 Phase-2 stability budgets must be non-decreasing")
         if not -1 < self.min_condition_observer_r2 < 1:
             raise ValueError("V0.9 Phase-2 observer R2 gate must lie in (-1,1)")
         if self.paired_horizon < 1 or self.minimum_identifiable_pairs < 1:
@@ -2745,19 +2759,13 @@ class ProjectConfig:
                     self.v0_9_phase2.static_rank + self.v0_9_phase2.dynamic_rank
                     != self.v0_9_adaptive.rank
                 ):
-                    raise ValueError(
-                        "V0.9 Phase-2 static/dynamic ranks must sum to adaptive rank"
-                    )
-                if (
-                    self.v0_9_condition.schedule_types
-                    != self.v0_9_phase2.schedule_variants
-                ):
+                    raise ValueError("V0.9 Phase-2 static/dynamic ranks must sum to adaptive rank")
+                if self.v0_9_condition.schedule_types != self.v0_9_phase2.schedule_variants:
                     raise ValueError(
                         "V0.9 Phase-2 schedule variants must match the condition contract"
                     )
                 if (
-                    self.cylinder_wake_2d.num_trajectories
-                    < len(self.v0_9_phase2.schedule_variants)
+                    self.cylinder_wake_2d.num_trajectories < len(self.v0_9_phase2.schedule_variants)
                     or self.cylinder_wake_2d.num_trajectories
                     % len(self.v0_9_phase2.schedule_variants)
                     != 0
@@ -2919,18 +2927,12 @@ class ProjectConfig:
             "v0_9_condition": None
             if self.v0_9_condition is None
             else self.v0_9_condition.to_dict(),
-            "v0_9_adaptive": None
-            if self.v0_9_adaptive is None
-            else self.v0_9_adaptive.to_dict(),
-            "v0_9_training": None
-            if self.v0_9_training is None
-            else self.v0_9_training.to_dict(),
+            "v0_9_adaptive": None if self.v0_9_adaptive is None else self.v0_9_adaptive.to_dict(),
+            "v0_9_training": None if self.v0_9_training is None else self.v0_9_training.to_dict(),
             "v0_9_evaluation": None
             if self.v0_9_evaluation is None
             else self.v0_9_evaluation.to_dict(),
-            "v0_9_phase2": None
-            if self.v0_9_phase2 is None
-            else self.v0_9_phase2.to_dict(),
+            "v0_9_phase2": None if self.v0_9_phase2 is None else self.v0_9_phase2.to_dict(),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }

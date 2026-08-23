@@ -2,8 +2,8 @@
 
 ## Status and scientific scope
 
-- Implementation: complete locally
-- Targeted verification: pass
+- Implementation: continuous three-stage revision complete locally
+- Targeted verification: 45 relevant tests pass
 - Formal three-seed GPU evidence: pending
 - Scientific claim: not assigned before the formal report
 
@@ -17,7 +17,7 @@ in validation while training contains smooth rates, so the normalized condition-
 extrapolate. Joint operator gradients could then distort the observer and amplify a closed-loop
 state before the next context call.
 
-The revision applies three problem-independent corrections:
+That first stability revision applied three problem-independent corrections:
 
 1. normalized observer output is smoothly bounded and trained with Huber loss;
 2. latent `q_hat` is stop-gradient when consumed by the operator, so only its physical supervision
@@ -45,6 +45,54 @@ it recognizes the current operating condition, even when older history carries n
 predictive information. The implementation therefore separates those two mechanisms without
 changing the frozen V0.8 representation, the nominal generator `A0`, the cylinder equations, or
 the physical constraints.
+
+### Continuous three-stage revision after `v09-added-p2-stable-20260823T110904Z`
+
+The stability-corrected run completed 18/18 formal train/evaluation pairs and all 216 rollouts
+remained finite, but scientific support was not obtained. Relative to Phase-1 r1, average operator
+burden fell from roughly 10--11% to 0.55--0.67%; known-condition one-step gain fell to 0.64% and
+latent-inferred gain to 0.02%. The condition observer passed 0/18 nested runs. This is evidence of
+over-constrained adaptation, not numerical divergence.
+
+Phase 2 now uses one continuous run with auditable mechanism states:
+
+1. `static_oracle`: train only `Delta A_s(q)` from true train/validation condition labels;
+2. `dynamic_residual_oracle`: detach the identified static branch and fit `Delta A_d(h,q)` to its
+   remaining forecast error;
+3. `observer_calibration`: train `Q(h)` alone; latent joint refinement is activated only after
+   validation NRMSE and R2 pass their predeclared gates.
+
+Oracle conditions are privileged training information only. Locked latent evaluation remains
+teacher-free and rejects condition-label input. A failed observer gate therefore produces valid
+negative latent evidence rather than silently falling back to known conditions.
+
+The old branch-wise stability projection is replaced by one projection of the physical total
+generator increment:
+
+\[
+\Delta A=\Delta A_s+\Delta A_d,\qquad
+\widetilde{\Delta A}=s\Delta A,
+\quad
+s=\min\left(1,\frac{\rho}
+{\sqrt{\|\operatorname{sym}(\Delta A)\|_F^2+\epsilon}}\right).
+\]
+
+The budget follows `0.05 -> 0.10 -> 0.15`. This bounds the logarithmic-norm contribution of the
+actual combined operator while avoiding the unnecessary requirement that each branch consume
+exactly half the budget. Dynamic-stage gradients cannot rewrite the static dyads.
+
+Rank selection now uses the known-condition oracle sweep only and is lexicographic: burden
+feasibility, material H80 gain, maximum H80 gain up to a narrow equivalence tolerance, validation
+objective, then smallest rank. Latent rank runs remain observer diagnostics but cannot choose
+operator capacity. If no rank reaches
+the 2% H80 gate, the workflow still selects the best burden-feasible diagnostic rank but records
+`constraints_satisfied=false`. This prevents a broad loss-relative tolerance from selecting an
+underfit rank solely for parsimony.
+
+H80 is activated during the dynamic-operator stage, receives 35% of stochastic physical-horizon
+sampling and 45% of physical-horizon weight. PCGrad begins with the physical curriculum. Reports
+separate `NUMERICAL STABILITY` (finite and burden-bounded) from `LONG-ROLLOUT SKILL` (material
+predictive gain).
 
 ## Mathematical contract
 
@@ -87,10 +135,11 @@ required.
 
 All coordinate heads are zero-initialized, hence `A_t=A0` exactly at initialization. Static and
 dynamic trust gates are separate: the static gate reads only `q`, while the dynamic gate may read
-history and `q`; this prevents hidden history leakage into the condition-only control. The condition
-observer is pretrained for the declared warm-up fraction before operator/physics optimization.
-This prevents an initially meaningless inferred condition from being absorbed into the dynamic
-branch.
+history and `q`; this prevents hidden history leakage into the condition-only control. Training
+first identifies the static branch, then fits the dynamic residual with the static branch detached,
+and only then calibrates the observer. Latent joint refinement is unavailable until the validation
+observer gate passes. This prevents an initially meaningless inferred condition from being
+absorbed into either operator branch.
 
 ## Problem-independent controls
 
@@ -143,7 +192,7 @@ Insufficient matched pairs are `INCONCLUSIVE`, never silently converted to failu
   observer metrics, and matched-pair selection;
 - `adaptive/objectives.py`: Phase-2 supervised and identifiability losses;
 - `data/cylinder_wake_2d.py`: extended controlled schedules only;
-- `train/train_v0_9.py`: observer warm-up and joint optimization orchestration;
+- `train/train_v0_9.py`: continuous static/dynamic/observer state orchestration and observer gate;
 - `eval/evaluate_v0_9.py`: isolated controls and paired locked-test audit;
 - `adaptive/reporting.py`: nested seed aggregation and valid-negative classification.
 

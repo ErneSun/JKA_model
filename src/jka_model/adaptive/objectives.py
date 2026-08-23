@@ -27,11 +27,96 @@ class CurriculumState:
     observable_normalizer: float
 
 
+@dataclass(frozen=True, slots=True)
+class Phase2TrainingState:
+    """One auditable state in the continuous Phase-2 identification curriculum."""
+
+    name: str
+    active_components: str
+    train_component: str
+    use_oracle_condition: bool
+    detach_static: bool
+    observer_only: bool
+    observer_weight: float
+    delta_budget: float
+
+
 @dataclass(slots=True)
 class AdaptiveObjectiveResult:
     total: Tensor
     terms: dict[str, Tensor]
     rollout: dict[str, Tensor]
+
+
+def phase2_training_state(
+    phase2: V09Phase2Config,
+    *,
+    epoch: int,
+    epochs: int,
+    condition_mode: str,
+    observer_ready: bool,
+) -> Phase2TrainingState:
+    """Static oracle -> dynamic residual -> observer-gated joint refinement."""
+    if epochs < 1 or not 0 <= epoch < epochs:
+        raise ValueError("Phase-2 training stage epoch is outside the configured range")
+    if condition_mode not in {"known", "latent_inferred"}:
+        raise ValueError("Phase-2 condition mode is invalid")
+    progress = epoch / max(epochs - 1, 1)
+    if progress < phase2.static_stage_end_fraction:
+        local = progress / phase2.static_stage_end_fraction
+        budget = phase2.initial_symmetric_delta_budget + local * (
+            phase2.intermediate_symmetric_delta_budget - phase2.initial_symmetric_delta_budget
+        )
+        return Phase2TrainingState(
+            "static_oracle",
+            "static",
+            "static",
+            condition_mode == "latent_inferred",
+            False,
+            False,
+            0.0,
+            budget,
+        )
+    if progress < phase2.dynamic_stage_end_fraction:
+        local = (progress - phase2.static_stage_end_fraction) / (
+            phase2.dynamic_stage_end_fraction - phase2.static_stage_end_fraction
+        )
+        budget = phase2.intermediate_symmetric_delta_budget + local * (
+            phase2.symmetric_delta_budget - phase2.intermediate_symmetric_delta_budget
+        )
+        return Phase2TrainingState(
+            "dynamic_residual_oracle",
+            "full",
+            "dynamic",
+            condition_mode == "latent_inferred",
+            True,
+            False,
+            0.0,
+            budget,
+        )
+    if condition_mode == "latent_inferred" and not observer_ready:
+        return Phase2TrainingState(
+            "observer_calibration",
+            "full",
+            "observer",
+            True,
+            True,
+            True,
+            1.0,
+            phase2.symmetric_delta_budget,
+        )
+    return Phase2TrainingState(
+        "latent_joint_refinement"
+        if condition_mode == "latent_inferred"
+        else "known_joint_refinement",
+        "full",
+        "full",
+        False,
+        False,
+        False,
+        1.0,
+        phase2.symmetric_delta_budget,
+    )
 
 
 def curriculum_state(
@@ -93,6 +178,9 @@ def differentiable_adaptive_rollout(
     future_dts: Tensor,
     context_parameters: Tensor,
     conditions: Tensor | None,
+    *,
+    oracle_conditions: Tensor | None = None,
+    phase2_state: Phase2TrainingState | None = None,
 ) -> dict[str, Tensor]:
     """Closed-loop rollout that retains gradients only through the operator adapter."""
     if initial_history.ndim != 3:
@@ -109,6 +197,12 @@ def differentiable_adaptive_rollout(
         condition_dim,
     ):
         raise ValueError(f"known conditions must have shape [B,T,{condition_dim}]")
+    if oracle_conditions is not None and oracle_conditions.shape != (
+        batch,
+        future_dts.shape[1],
+        condition_dim,
+    ):
+        raise ValueError(f"oracle conditions must have shape [B,T,{condition_dim}]")
     if model.context_encoder.latent_dim != latent_dim or model.context_encoder.history != history:
         raise ValueError("initial history disagrees with the frozen context contract")
     latent_buffer = initial_history
@@ -135,19 +229,37 @@ def differentiable_adaptive_rollout(
     for index in range(future_dts.shape[1]):
         next_dt = future_dts[:, index : index + 1]
         condition = None if conditions is None else conditions[:, index]
+        condition_override = None if oracle_conditions is None else oracle_conditions[:, index]
         # The encoder parameters are frozen, but its Jacobian with respect to a
         # predicted history must remain in the graph.  Otherwise multi-step
         # training degenerates into detached one-step corrections.
-        context = model.context_encoder(
-            latent_buffer, dt_buffer, next_dt, context_parameters
-        )
+        context = model.context_encoder(latent_buffer, dt_buffer, next_dt, context_parameters)
         phase2_provider = getattr(model.operator_adapter, "phase2_components", None)
         if phase2_provider is not None:
-            components = phase2_provider(context, condition)
+            components = phase2_provider(
+                context,
+                condition,
+                condition_override=condition_override,
+                active_components=(
+                    "full" if phase2_state is None else phase2_state.active_components
+                ),
+                detach_static=(False if phase2_state is None else phase2_state.detach_static),
+                delta_budget=(None if phase2_state is None else phase2_state.delta_budget),
+            )
             for name in phase2_values:
                 phase2_values[name].append(components[name])
+        step_kwargs = {}
+        if phase2_provider is not None:
+            step_kwargs = {
+                "condition_override": condition_override,
+                "active_components": (
+                    "full" if phase2_state is None else phase2_state.active_components
+                ),
+                "detach_static": (False if phase2_state is None else phase2_state.detach_static),
+                "delta_budget": (None if phase2_state is None else phase2_state.delta_budget),
+            }
         prediction, eta, gate, delta, adapted = model.operator_adapter.step_with_gate(
-            latent_buffer[:, -1], context, next_dt, condition
+            latent_buffer[:, -1], context, next_dt, condition, **step_kwargs
         )
         if not torch.isfinite(prediction).all():
             raise FloatingPointError(
@@ -180,11 +292,7 @@ def differentiable_adaptive_rollout(
         "a_t": torch.stack(generators, dim=1),
     }
     result.update(
-        {
-            name: torch.stack(values, dim=1)
-            for name, values in phase2_values.items()
-            if values
-        }
+        {name: torch.stack(values, dim=1) for name, values in phase2_values.items() if values}
     )
     return result
 
@@ -225,6 +333,7 @@ def adaptive_stabilization_objective(
     curriculum: CurriculumState,
     smooth_schedule_mask: Tensor,
     phase2: V09Phase2Config | None = None,
+    phase2_state: Phase2TrainingState | None = None,
 ) -> AdaptiveObjectiveResult:
     required_steps = max(
         1,
@@ -245,6 +354,9 @@ def adaptive_stabilization_objective(
         if condition_mode == "known"
         else None
     )
+    oracle_conditions = None
+    if phase2_state is not None and phase2_state.use_oracle_condition:
+        oracle_conditions = (condition_source[:, :required_steps] - condition_mean) / condition_std
     rollout = differentiable_adaptive_rollout(
         model,
         batch["history_z"],
@@ -252,43 +364,43 @@ def adaptive_stabilization_objective(
         future_dts,
         batch["context_parameters"],
         conditions,
+        oracle_conditions=oracle_conditions,
+        phase2_state=phase2_state,
     )
     one_step = ((rollout["adapted"][:, 0] - truth[:, 0]) / residual_scale).square().mean()
     rollout_loss = one_step.new_zeros(())
     terms: dict[str, Tensor] = {"forecast": one_step}
-    for horizon, weight in zip(
-        curriculum.active_horizons, curriculum.active_weights, strict=True
-    ):
+    for horizon, weight in zip(curriculum.active_horizons, curriculum.active_weights, strict=True):
         endpoint = (
-            (rollout["adapted"][:, horizon - 1] - truth[:, horizon - 1])
-            / residual_scale
-        ).square().mean()
+            ((rollout["adapted"][:, horizon - 1] - truth[:, horizon - 1]) / residual_scale)
+            .square()
+            .mean()
+        )
         rollout_loss = rollout_loss + weight * endpoint
         terms[f"rollout_h{horizon}"] = endpoint
         adaptive_rmse = (
-            rollout["adapted"][:, horizon - 1] - truth[:, horizon - 1]
-        ).square().mean().sqrt()
+            (rollout["adapted"][:, horizon - 1] - truth[:, horizon - 1]).square().mean().sqrt()
+        )
         nominal_rmse = (
-            rollout["nominal"][:, horizon - 1] - truth[:, horizon - 1]
-        ).square().mean().sqrt()
+            (rollout["nominal"][:, horizon - 1] - truth[:, horizon - 1]).square().mean().sqrt()
+        )
         terms[f"rollout_gain_h{horizon}"] = 1.0 - adaptive_rmse / nominal_rmse.clamp_min(1e-12)
     burdens = operator_burden(
         rollout["delta_a"].reshape(-1, *rollout["delta_a"].shape[-2:]),
         model.operator_adapter.nominal_generator,
     ).reshape(rollout["delta_a"].shape[:2])
-    burden = burdens.square().mean() + torch.relu(
-        burdens - config.operator_burden_target
-    ).square().mean()
+    burden = (
+        burdens.square().mean()
+        + torch.relu(burdens - config.operator_burden_target).square().mean()
+    )
     baseline_proxy = symmetric_abscissa_proxy(model.operator_adapter.nominal_generator).detach()
-    stability = torch.relu(
-        symmetric_abscissa_proxy(rollout["a_t"]) - baseline_proxy
-    ).square().mean()
+    stability = (
+        torch.relu(symmetric_abscissa_proxy(rollout["a_t"]) - baseline_proxy).square().mean()
+    )
     growth_horizons = sorted(
         {
             *(curriculum.active_horizons or (1,)),
-            *(
-                curriculum.observable_horizons
-            ),
+            *(curriculum.observable_horizons),
         }
     )
     growth_indices = torch.tensor(
@@ -307,19 +419,22 @@ def adaptive_stabilization_objective(
         differences = torch.diff(rollout["eta"][smooth_schedule_mask], dim=1)
         dt = future_dts[smooth_schedule_mask, 1:].clamp_min(1e-12)
         smoothness = (differences.square().sum(dim=-1) / dt).mean()
-    orthogonality = model.operator_adapter.orthogonality_loss()
+    orthogonality_provider = model.operator_adapter.orthogonality_loss
+    orthogonality = (
+        orthogonality_provider(phase2_state.train_component)
+        if phase2_state is not None and phase2_state.train_component != "observer"
+        else one_step.new_zeros(())
+        if phase2_state is not None
+        else orthogonality_provider()
+    )
     observer_loss = one_step.new_zeros(())
     centering = one_step.new_zeros(())
     cross_orthogonality = one_step.new_zeros(())
     if phase2 is not None and phase2.enabled:
         if "q_hat" not in rollout or "dynamic_coordinates" not in rollout:
             raise RuntimeError("Phase-2 objective requires factorized rollout diagnostics")
-        observer_target = (
-            condition_source[:, :required_steps] - condition_mean
-        ) / condition_std
-        observer_loss = F.smooth_l1_loss(
-            rollout["q_hat"], observer_target, beta=1.0
-        )
+        observer_target = (condition_source[:, :required_steps] - condition_mean) / condition_std
+        observer_loss = F.smooth_l1_loss(rollout["q_hat"], observer_target, beta=1.0)
         selected_indices = sorted(
             {
                 0,
@@ -334,17 +449,23 @@ def adaptive_stabilization_objective(
         )
         innovations = rollout["dynamic_coordinates"].index_select(1, index).flatten(0, 1)
         observed_conditions = rollout["q_used"].index_select(1, index).flatten(0, 1)
-        centering = conditional_centering_loss(
-            innovations,
-            observed_conditions,
-            bandwidth=phase2.conditional_centering_bandwidth,
-        )
-        cross_provider = getattr(
-            model.operator_adapter, "cross_basis_orthogonality_loss", None
-        )
+        if phase2_state is None or phase2_state.active_components == "full":
+            centering = conditional_centering_loss(
+                innovations,
+                observed_conditions,
+                bandwidth=phase2.conditional_centering_bandwidth,
+            )
+        cross_provider = getattr(model.operator_adapter, "cross_basis_orthogonality_loss", None)
         if cross_provider is None:
             raise RuntimeError("Phase-2 adapter lacks cross-basis orthogonality")
-        cross_orthogonality = cross_provider()
+        if phase2_state is None or phase2_state.active_components == "full":
+            cross_orthogonality = cross_provider(
+                detach_static=(False if phase2_state is None else phase2_state.detach_static)
+            )
+    observer_weight = 1.0 if phase2_state is None else phase2_state.observer_weight
+    centering_weight = (
+        1.0 if phase2_state is None or phase2_state.train_component in {"dynamic", "full"} else 0.0
+    )
     total = (
         one_step
         + config.lambda_rollout * rollout_loss
@@ -352,10 +473,13 @@ def adaptive_stabilization_objective(
         + config.lambda_smooth * smoothness
         + config.lambda_stability * stability
         + config.lambda_propagator_growth * growth
-        + (0.0 if phase2 is None else phase2.lambda_condition_observer) * observer_loss
-        + (0.0 if phase2 is None else phase2.lambda_condition_centering) * centering
-        + (0.0 if phase2 is None else phase2.lambda_basis_cross_orthogonality)
-        * cross_orthogonality
+        + (0.0 if phase2 is None else phase2.lambda_condition_observer)
+        * observer_weight
+        * observer_loss
+        + (0.0 if phase2 is None else phase2.lambda_condition_centering)
+        * centering_weight
+        * centering
+        + (0.0 if phase2 is None else phase2.lambda_basis_cross_orthogonality) * cross_orthogonality
     )
     terms.update(
         {
@@ -371,6 +495,13 @@ def adaptive_stabilization_objective(
             "condition_observer": observer_loss,
             "condition_centering": centering,
             "basis_cross_orthogonality": cross_orthogonality,
+            "phase2_delta_budget": one_step.new_tensor(
+                phase2.symmetric_delta_budget
+                if phase2_state is None and phase2 is not None
+                else 0.0
+                if phase2_state is None
+                else phase2_state.delta_budget
+            ),
         }
     )
     return AdaptiveObjectiveResult(total, terms, rollout)

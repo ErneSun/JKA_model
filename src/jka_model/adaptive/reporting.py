@@ -58,11 +58,7 @@ def _simple_plots(output: Path, records: list[dict[str, Any]]) -> None:
         plt.close(fig)
 
     horizons = sorted(
-        {
-            int(horizon)
-            for row in records
-            for horizon in row["closed_loop_by_horizon"]
-        }
+        {int(horizon) for row in records for horizon in row["closed_loop_by_horizon"]}
     )
     for field, title in (
         ("relative_gain_mean", "Rollout relative gain"),
@@ -97,10 +93,7 @@ def _simple_plots(output: Path, records: list[dict[str, Any]]) -> None:
     )
     fig, axis = plt.subplots(figsize=(7.2, 4.2))
     fractions = [
-        sum(
-            str(row.get(field, row.get("physics_status", "FAIL"))) == "PASS"
-            for row in records
-        )
+        sum(str(row.get(field, row.get("physics_status", "FAIL"))) == "PASS" for row in records)
         / len(records)
         for field in statuses
     ]
@@ -134,12 +127,10 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
     if len(seeds) != 3:
         raise ValueError("V0.9 formal evidence requires three backbone/data seeds")
     problem_names = {
-        str(row.get("problem_name", "cylinder_wake_2d_controlled_inlet"))
-        for row in records
+        str(row.get("problem_name", "cylinder_wake_2d_controlled_inlet")) for row in records
     }
     observable_objectives = {
-        str(row.get("observable_objective", "legacy_cylinder_observables"))
-        for row in records
+        str(row.get("observable_objective", "legacy_cylinder_observables")) for row in records
     }
     if len(problem_names) != 1 or len(observable_objectives) != 1:
         raise ValueError("V0.9 formal evidence cannot mix problems or observable objectives")
@@ -158,8 +149,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
             for mode in sorted(modes):
                 rows = grouped[(seed, mode)]
                 statuses = [
-                    str(row[status_field]) if status_field in row else fallback(row)
-                    for row in rows
+                    str(row[status_field]) if status_field in row else fallback(row) for row in rows
                 ]
                 passed = sum(status == "PASS" for status in statuses)
                 inconclusive = sum(status == "INCONCLUSIVE" for status in statuses)
@@ -216,9 +206,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "dynamic_over_condition_only_status",
         fallback=lambda row: (
             "PASS"
-            if float(
-                row.get("dynamic_over_condition_only_gain", row["dynamic_over_static_gain"])
-            )
+            if float(row.get("dynamic_over_condition_only_gain", row["dynamic_over_static_gain"]))
             >= 0.02
             else "FAIL"
         ),
@@ -254,15 +242,14 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
             }
         joint = all(item["supported"] for item in mode_support.values())
         per_backbone[str(seed)] = {"modes": mode_support, "joint_supported": joint}
-    backbone_fraction = sum(
-        bool(item["joint_supported"]) for item in per_backbone.values()
-    ) / len(per_backbone)
+    backbone_fraction = sum(bool(item["joint_supported"]) for item in per_backbone.values()) / len(
+        per_backbone
+    )
     known_fraction = sum(
         bool(item["modes"]["known"]["supported"]) for item in per_backbone.values()
     ) / len(per_backbone)
     latent_fraction = sum(
-        bool(item["modes"]["latent_inferred"]["supported"])
-        for item in per_backbone.values()
+        bool(item["modes"]["latent_inferred"]["supported"]) for item in per_backbone.values()
     ) / len(per_backbone)
     known_decision = "SUPPORTED" if known_fraction >= 2.0 / 3.0 else "NOT_SUPPORTED"
     latent_decision = "SUPPORTED" if latent_fraction >= 2.0 / 3.0 else "NOT_SUPPORTED"
@@ -277,8 +264,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         else "CONDITIONALLY_SUPPORTED"
     )
     phase1_attribution_complete = all(
-        bool(row.get("claims", {}).get("phase1_error_attribution_complete"))
-        for row in records
+        bool(row.get("claims", {}).get("phase1_error_attribution_complete")) for row in records
     )
     phase1_artifacts_complete = all(
         (
@@ -329,7 +315,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         and phase1_artifacts_complete
     )
     decision = {
-        "schema_version": 3,
+        "schema_version": 4,
         "physical_problem": next(iter(problem_names)),
         "observable_objective": next(iter(observable_objectives)),
         "v0_8_strict_readiness": "PASS" if strict_handoff else "NOT_READY",
@@ -348,9 +334,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "condition_observer": condition_observer_support["status"],
         "paired_history_identifiability": paired_history_support["status"],
         "phase2_classification": phase2_classification,
-        "phase2_diagnostic_artifacts": (
-            "COMPLETE" if phase2_artifacts_complete else "INCOMPLETE"
-        ),
+        "phase2_diagnostic_artifacts": ("COMPLETE" if phase2_artifacts_complete else "INCOMPLETE"),
         "observable_support": observable_support["status"],
         "representation_physical_floor": representation_support["status"],
         "phase1_diagnosis": (
@@ -360,21 +344,47 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
             if representation_support["status"] == "SUPPORTED"
             else "INCONCLUSIVE"
         ),
-        "phase1_error_attribution": (
-            "COMPLETE" if phase1_attribution_complete else "INCOMPLETE"
+        "phase1_error_attribution": ("COMPLETE" if phase1_attribution_complete else "INCOMPLETE"),
+        "phase1_diagnostic_artifacts": ("COMPLETE" if phase1_artifacts_complete else "INCOMPLETE"),
+        "numerical_stability": (
+            "PASS"
+            if all(
+                row.get("numerical_stability", row["long_rollout_stability"]) == "PASS"
+                for row in records
+            )
+            else "FAIL"
         ),
-        "phase1_diagnostic_artifacts": (
-            "COMPLETE" if phase1_artifacts_complete else "INCOMPLETE"
+        "long_rollout_skill": (
+            "PASS"
+            if all(
+                row.get("long_rollout_skill", row.get("all_horizons_status")) == "PASS"
+                for row in records
+            )
+            else "FAIL"
         ),
         "long_rollout_stability": (
-            "PASS" if all(row["long_rollout_stability"] == "PASS" for row in records) else "FAIL"
+            "PASS"
+            if all(
+                row.get("numerical_stability", row["long_rollout_stability"]) == "PASS"
+                for row in records
+            )
+            else "FAIL"
         ),
         "physics_status": (
             "PASS" if all(row["physics_status"] == "PASS" for row in records) else "FAIL"
         ),
         "strict_all_run_status": {
+            "numerical_stability_pass_count": sum(
+                row.get("numerical_stability", row["long_rollout_stability"]) == "PASS"
+                for row in records
+            ),
+            "long_rollout_skill_pass_count": sum(
+                row.get("long_rollout_skill", row.get("all_horizons_status")) == "PASS"
+                for row in records
+            ),
             "long_rollout_pass_count": sum(
-                row["long_rollout_stability"] == "PASS" for row in records
+                row.get("long_rollout_skill", row.get("all_horizons_status")) == "PASS"
+                for row in records
             ),
             "physics_pass_count": sum(row["physics_status"] == "PASS" for row in records),
             "formal_run_count": len(records),
@@ -404,6 +414,8 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
             "additive_residual_enabled": False,
             "persistent_z_R_present": False,
             "phase2_factorized_operator": phase2_enabled,
+            "oracle_condition_curriculum_train_only": phase2_enabled,
+            "locked_latent_evaluation_is_teacher_free": phase2_enabled,
             "innovation_variance_floor": False,
             "unseen_condition_generalization_tested": False,
         },
@@ -469,8 +481,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         if attribution_path.is_file():
             with attribution_path.open(newline="", encoding="utf-8") as stream:
                 attribution_rows.extend(
-                    dict(row, source_file=str(attribution_path))
-                    for row in csv.DictReader(stream)
+                    dict(row, source_file=str(attribution_path)) for row in csv.DictReader(stream)
                 )
         summary = _read(root.parent / "evaluation" / "training_summary.json")
         training_row = {
@@ -497,9 +508,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
             "minimum_gradient_cosine"
         )
         scale_state = phase1_summary.get("observable_scale_state") or {}
-        training_row["phase1_scale_split_fingerprint"] = scale_state.get(
-            "split_fingerprint"
-        )
+        training_row["phase1_scale_split_fingerprint"] = scale_state.get("split_fingerprint")
         training_rows.append(training_row)
         gradient_path = root.parent / "logs" / "gradient_geometry.jsonl"
         if gradient_path.is_file():
@@ -576,10 +585,13 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         f"REPRESENTATION PHYSICAL FLOOR: {decision['representation_physical_floor']}  \n"
         f"PHASE-1 DIAGNOSIS: {decision['phase1_diagnosis']}  \n"
         f"PHASE-1 DIAGNOSTIC ARTIFACTS: {decision['phase1_diagnostic_artifacts']}  \n"
-        f"LONG-ROLLOUT STABILITY: {decision['long_rollout_stability']}  \n"
+        f"NUMERICAL STABILITY: {decision['numerical_stability']}  \n"
+        f"LONG-ROLLOUT SKILL: {decision['long_rollout_skill']}  \n"
         f"PHYSICS STATUS: {decision['physics_status']}  \n"
         f"STRICT ALL-RUN STATUS: "
-        f"rollout={decision['strict_all_run_status']['long_rollout_pass_count']}/"
+        f"numerical={decision['strict_all_run_status']['numerical_stability_pass_count']}/"
+        f"{decision['strict_all_run_status']['formal_run_count']}, "
+        f"rollout_skill={decision['strict_all_run_status']['long_rollout_skill_pass_count']}/"
         f"{decision['strict_all_run_status']['formal_run_count']}, "
         f"physics={decision['strict_all_run_status']['physics_pass_count']}/"
         f"{decision['strict_all_run_status']['formal_run_count']}  \n"
@@ -615,10 +627,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
                     }
                 )
                 == len(records),
-                sum(
-                    bool(row.get("phase1_scale_split_fingerprint"))
-                    for row in training_rows
-                )
+                sum(bool(row.get("phase1_scale_split_fingerprint")) for row in training_rows)
                 == len(records),
             )
         ),

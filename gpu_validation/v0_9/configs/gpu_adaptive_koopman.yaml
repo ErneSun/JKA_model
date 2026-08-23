@@ -37,9 +37,13 @@ v0_9_phase2:
   dynamic_rank: 4
   observer_width: 64
   observer_depth: 2
-  observer_warmup_fraction: 0.20
+  observer_warmup_fraction: 0.0
   observer_output_limit: 16.0
-  symmetric_delta_budget: 0.05
+  static_stage_end_fraction: 0.30
+  dynamic_stage_end_fraction: 0.70
+  initial_symmetric_delta_budget: 0.05
+  intermediate_symmetric_delta_budget: 0.10
+  symmetric_delta_budget: 0.15
   lambda_condition_observer: 1.0
   lambda_condition_centering: 0.10
   lambda_basis_cross_orthogonality: 0.10
@@ -64,7 +68,7 @@ v0_9_training:
   lambda_smooth: 0.001
   lambda_stability: 0.02
   rollout_horizons: [4, 8, 16, 32, 80]
-  rollout_start_fractions: [0.0, 0.2, 0.45, 0.7, 0.8]
+  rollout_start_fractions: [0.0, 0.10, 0.25, 0.40, 0.55]
   rollout_weights: [0.7, 0.6, 0.4, 0.25, 0.15]
   lambda_rollout: 1.0
   lambda_propagator_growth: 0.05
@@ -84,8 +88,8 @@ v0_9_training:
   observable_names: [velocity, vorticity, divergence, boundary, lift, drag]
   observable_component_weights: [1.0, 0.2, 0.5, 0.2, 0.1, 0.05]
   observable_horizons: [4, 8, 16, 32, 80]
-  observable_horizon_weights: [0.10, 0.15, 0.20, 0.25, 0.30]
-  observable_horizon_probabilities: [0.15, 0.20, 0.25, 0.20, 0.20]
+  observable_horizon_weights: [0.05, 0.10, 0.15, 0.25, 0.45]
+  observable_horizon_probabilities: [0.10, 0.15, 0.20, 0.20, 0.35]
   lambda_observable_noninferiority: 0.05
   observable_noninferiority_margin: 0.10
   observable_noninferiority_floor: 0.001
@@ -106,7 +110,7 @@ v0_9_training:
   augmented_lagrangian_max_multiplier: 20.0
   gradient_audit_interval: 5
   gradient_conflict_method: pcgrad
-  gradient_conflict_start_fraction: 0.6
+  gradient_conflict_start_fraction: 0.35
   rank_sweep_epochs: 40
   gradient_clip_norm: 1.0
   patience: 16

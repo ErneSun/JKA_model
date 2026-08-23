@@ -111,18 +111,14 @@ def _condition_only_rollout(
         dt = future_dts[:, index : index + 1]
         condition = None if conditions is None else conditions[:, index]
         context = model.context_encoder(history, dt_history, dt, context_parameters)
-        components = adapter.phase2_components(context, condition)
+        components = adapter.phase2_components(context, condition, active_components="static")
         generator = adapter.nominal_generator.unsqueeze(0) + components["static_delta"]
         transition = torch.linalg.matrix_exp(generator.float() * dt.reshape(-1, 1, 1))
         prediction = torch.einsum("bij,bj->bi", transition, history[:, -1].float())
         states.append(prediction)
         if history.shape[1] > 1:
             history = torch.cat((history[:, 1:], prediction.unsqueeze(1)), dim=1)
-            dt_history = (
-                torch.cat((dt_history[:, 1:], dt), dim=1)
-                if history.shape[1] > 2
-                else dt
-            )
+            dt_history = torch.cat((dt_history[:, 1:], dt), dim=1) if history.shape[1] > 2 else dt
         else:
             history = prediction.unsqueeze(1)
     return torch.stack(states, dim=1)
@@ -213,9 +209,9 @@ def evaluate_v0_9(
     history = int(context_payload["history_length_steps"])
     test_dataset = AdaptiveWindowDataset(cache, "test", history)
     train_dataset = AdaptiveWindowDataset(cache, "train", history)
-    static_delta = _mean_training_delta(
-        model, train_dataset, resolved, payload, mode, selected
-    ).to(selected)
+    static_delta = _mean_training_delta(model, train_dataset, resolved, payload, mode, selected).to(
+        selected
+    )
     nominal_a = cache.nominal_generator.to(selected)
     one_step_rows: list[dict[str, Any]] = []
     all_nominal: list[torch.Tensor] = []
@@ -241,15 +237,16 @@ def evaluate_v0_9(
         global_static_transition = torch.linalg.matrix_exp(
             (nominal_a + static_delta).unsqueeze(0) * next_dt.reshape(-1, 1, 1)
         )
-        global_static = torch.einsum(
-            "bij,bj->bi", global_static_transition, history_z[:, -1]
-        )
+        global_static = torch.einsum("bij,bj->bi", global_static_transition, history_z[:, -1])
         static = global_static
         if phase2_enabled:
             if not isinstance(model.operator_adapter, FactorizedAdaptiveOperator):
                 raise RuntimeError("Phase-2 evaluation loaded the wrong adapter")
             components = model.operator_adapter.phase2_components(context, condition)
-            condition_generator = nominal_a.unsqueeze(0) + components["static_delta"]
+            static_components = model.operator_adapter.phase2_components(
+                context, condition, active_components="static"
+            )
+            condition_generator = nominal_a.unsqueeze(0) + static_components["static_delta"]
             static_transition = torch.linalg.matrix_exp(
                 condition_generator.float() * next_dt.reshape(-1, 1, 1)
             )
@@ -272,9 +269,7 @@ def evaluate_v0_9(
                 nominal[index : index + 1],
             )
             static_rmse = float((static[index] - truth[index]).square().mean().sqrt())
-            global_static_rmse = float(
-                (global_static[index] - truth[index]).square().mean().sqrt()
-            )
+            global_static_rmse = float((global_static[index] - truth[index]).square().mean().sqrt())
             one_step_rows.append(
                 {
                     "trajectory_id": raw["trajectory_id"][index],
@@ -286,8 +281,7 @@ def evaluate_v0_9(
                     "global_static_latent_rmse": global_static_rmse,
                     "condition_only_latent_rmse": static_rmse,
                     "condition_only_relative_gain": 1.0
-                    - static_rmse
-                    / max(dynamic_metrics["nominal_latent_rmse"], 1e-12),
+                    - static_rmse / max(dynamic_metrics["nominal_latent_rmse"], 1e-12),
                     "static_relative_gain": 1.0
                     - dynamic_metrics["latent_rmse"] / max(static_rmse, 1e-12),
                     "dynamic_over_condition_only_gain": 1.0
@@ -298,9 +292,7 @@ def evaluate_v0_9(
                     "trust_gate": float(gate[index, 0]),
                 }
             )
-    gamma = float(
-        operator_explained_fraction(torch.cat(all_nominal), torch.cat(all_remaining))
-    )
+    gamma = float(operator_explained_fraction(torch.cat(all_nominal), torch.cat(all_remaining)))
 
     shuffled_gain: float | None = None
     if history > 1:
@@ -319,9 +311,7 @@ def evaluate_v0_9(
             if phase2_enabled:
                 adapter = model.operator_adapter
                 assert isinstance(adapter, FactorizedAdaptiveOperator)
-                real_context = model.context_encoder(
-                    history_z, history_dts, next_dt, parameters
-                )
+                real_context = model.context_encoder(history_z, history_dts, next_dt, parameters)
                 shuffled_context = model.context_encoder(
                     raw["history_z"].to(selected).float(),
                     raw["history_dts"].to(selected).float(),
@@ -335,14 +325,8 @@ def evaluate_v0_9(
                     dynamic_context=shuffled_context,
                     condition_override=real_components["q_used"],
                 )
-                generator = (
-                    adapter.nominal_generator.unsqueeze(0)
-                    + real_components["static_delta"]
-                    + shuffled_components["dynamic_delta"]
-                )
-                transition = torch.linalg.matrix_exp(
-                    generator.float() * next_dt.reshape(-1, 1, 1)
-                )
+                generator = adapter.nominal_generator.unsqueeze(0) + shuffled_components["delta"]
+                transition = torch.linalg.matrix_exp(generator.float() * next_dt.reshape(-1, 1, 1))
                 prediction = torch.einsum("bij,bj->bi", transition, history_z[:, -1])
             else:
                 prediction, *_ = model(
@@ -381,8 +365,7 @@ def evaluate_v0_9(
                     else trajectory.conditions
                 )
                 conditions = (
-                    trajectory_condition[start : start + horizon].to(selected)
-                    - condition_mean
+                    trajectory_condition[start : start + horizon].to(selected) - condition_mean
                 ) / condition_std
                 conditions = conditions.unsqueeze(0)
             bundle = adaptive_latent_rollout(
@@ -449,8 +432,7 @@ def evaluate_v0_9(
                 else trajectory.conditions
             )
             conditions = (
-                trajectory_condition[start : start + longest].to(selected)
-                - condition_mean
+                trajectory_condition[start : start + longest].to(selected) - condition_mean
             ) / condition_std
             conditions = conditions.unsqueeze(0)
         bundle = adaptive_latent_rollout(
@@ -475,9 +457,7 @@ def evaluate_v0_9(
         }
         reconstructed_raw = normalizer.inverse_transform(
             backbone.decode(
-                trajectory.latents[start + 1 : start + longest + 1]
-                .to(selected)
-                .unsqueeze(0)
+                trajectory.latents[start + 1 : start + longest + 1].to(selected).unsqueeze(0)
             )
         )[0]
         attribution_metrics["reconstruction"] = observable_objective.evaluation_metrics(
@@ -576,11 +556,7 @@ def evaluate_v0_9(
                 supplied,
             )
             full_errors.append(
-                ((full[:, -1] - target[:, -1]) / residual_scale)
-                .square()
-                .mean(dim=-1)
-                .sqrt()
-                .cpu()
+                ((full[:, -1] - target[:, -1]) / residual_scale).square().mean(dim=-1).sqrt().cpu()
             )
             condition_errors.append(
                 ((condition_only[:, -1] - target[:, -1]) / residual_scale)
@@ -601,12 +577,8 @@ def evaluate_v0_9(
             torch.cat(pair_futures),
             condition_tolerance=resolved.v0_9_phase2.matched_condition_tolerance,
             latent_tolerance=resolved.v0_9_phase2.matched_latent_tolerance,
-            minimum_history_separation=(
-                resolved.v0_9_phase2.minimum_history_separation
-            ),
-            minimum_future_separation=(
-                resolved.v0_9_phase2.minimum_future_separation
-            ),
+            minimum_history_separation=(resolved.v0_9_phase2.minimum_history_separation),
+            minimum_future_separation=(resolved.v0_9_phase2.minimum_future_separation),
             group_ids=pair_ids,
         )
         full_error = torch.cat(full_errors)
@@ -647,8 +619,7 @@ def evaluate_v0_9(
             "gamma_operator_mean": sum(gammas) / len(gammas),
             "pass": bool(
                 rows
-                and sum(gains) / len(gains)
-                >= resolved.v0_9_evaluation.material_relative_gain
+                and sum(gains) / len(gains) >= resolved.v0_9_evaluation.material_relative_gain
                 and sum(gammas) / len(gammas)
                 >= resolved.v0_9_evaluation.min_operator_explained_fraction
                 and all(bool(row["finite"]) for row in rows)
@@ -725,6 +696,7 @@ def evaluate_v0_9(
         float(row["operator_burden_max"]) <= resolved.v0_9_evaluation.max_operator_burden
         for row in rollout_rows
     )
+    finite_rollout_pass = all(bool(row["finite"]) for row in rollout_rows)
     one_step_gain = sum(float(row["relative_gain"]) for row in one_step_rows) / len(one_step_rows)
     dynamic_over_static = sum(float(row["static_relative_gain"]) for row in one_step_rows) / len(
         one_step_rows
@@ -872,7 +844,7 @@ def evaluate_v0_9(
         and burden_pass
     )
     decision = {
-        "schema_version": 3,
+        "schema_version": 4,
         "backbone_seed": int(payload["backbone_seed"]),
         "context_init_seed": int(payload["context_init_seed"]),
         "operator_init_seed": int(payload["operator_init_seed"]),
@@ -900,7 +872,11 @@ def evaluate_v0_9(
         "all_horizons_status": "PASS" if all_horizons_pass else "FAIL",
         "longest_horizon_status": "PASS" if longest_pass else "FAIL",
         "operator_burden_status": "PASS" if burden_pass else "FAIL",
-        "long_rollout_stability": "PASS" if all_horizons_pass and burden_pass else "FAIL",
+        "numerical_stability": ("PASS" if finite_rollout_pass and burden_pass else "FAIL"),
+        "long_rollout_skill": "PASS" if all_horizons_pass else "FAIL",
+        # Compatibility alias.  From schema 4 onward this field has the literal
+        # stability meaning; predictive skill is reported separately above.
+        "long_rollout_stability": ("PASS" if finite_rollout_pass and burden_pass else "FAIL"),
         "physics_status": "PASS" if physics_pass else "FAIL",
         "observable_status": observable_gate.status.value,
         "representation_physical_floor_status": representation_gate.status.value,
@@ -909,9 +885,7 @@ def evaluate_v0_9(
         else "OPERATOR_OPTIMIZATION_IDENTIFIABLE",
         "scientific_gates": scientific_gates,
         "adaptive_koopman": "SUPPORTED" if supported else "NOT_SUPPORTED",
-        "parameterized_koopman": (
-            "SUPPORTED" if condition_only_gate.passed else "NOT_SUPPORTED"
-        ),
+        "parameterized_koopman": ("SUPPORTED" if condition_only_gate.passed else "NOT_SUPPORTED"),
         "history_adaptation": "SUPPORTED" if controls_pass else "NOT_SUPPORTED",
         "phase2_classification": (
             "DYNAMIC_ADAPTIVE_KOOPMAN_SUPPORTED"
@@ -932,6 +906,9 @@ def evaluate_v0_9(
             "phase1_error_attribution_complete": bool(attribution_rows),
             "phase2_factorized_operator": phase2_enabled,
             "condition_centered_history_innovation": phase2_enabled,
+            "oracle_condition_curriculum_train_only": phase2_enabled,
+            "locked_latent_evaluation_is_teacher_free": mode == "latent_inferred",
+            "long_rollout_stability_is_numerical": True,
             "innovation_variance_floor": False,
         },
     }
