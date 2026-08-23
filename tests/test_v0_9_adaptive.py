@@ -244,6 +244,7 @@ def test_stabilized_bundle_applies_problem_observables_at_multiple_horizons() ->
     payload["v0_9_adaptive"].update(
         {"rank": 2, "rank_candidates": [1, 2], "width": 8}
     )
+    payload["v0_9_phase2"]["enabled"] = False
     payload["v0_9_training"].update(
         {
             "epochs": 2,
@@ -442,6 +443,14 @@ def test_v0_9_operator_only_training_writes_reloadable_checkpoint(tmp_path: Path
             "trust_gate": False,
         }
     )
+    payload["v0_9_phase2"].update(
+        {
+            "static_rank": 1,
+            "dynamic_rank": 1,
+            "paired_horizon": 2,
+            "observer_warmup_fraction": 0.0,
+        }
+    )
     payload["v0_9_training"].update(
         {
             "epochs": 1,
@@ -478,6 +487,7 @@ def test_v0_9_operator_only_training_writes_reloadable_checkpoint(tmp_path: Path
     assert saved["adaptive_cache_fingerprint"] == adaptive_cache.fingerprint
 
     legacy_config = saved["config"]
+    legacy_config.pop("v0_9_phase2", None)
     for name in ("bounded_coordinates", "eta_max", "trust_gate", "trust_gate_bias"):
         legacy_config["v0_9_adaptive"].pop(name)
     for name in (

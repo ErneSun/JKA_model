@@ -16,6 +16,14 @@ from jka_model.adaptive.checkpoint import (
 from jka_model.adaptive.dataset import AdaptiveRolloutDataset, AdaptiveWindowDataset
 from jka_model.adaptive.error_attribution import observable_error_attribution
 from jka_model.adaptive.handoff import V08Handoff, V08SeedHandoff, audit_v0_8_handoff
+from jka_model.adaptive.identifiability import (
+    MatchedHistoryPair,
+    condition_observer_metrics,
+    condition_targets,
+    conditional_centering_loss,
+    matched_history_pairs,
+    phase2_condition_scales,
+)
 from jka_model.adaptive.metrics import (
     latent_prediction_metrics,
     operator_explained_fraction,
@@ -23,6 +31,7 @@ from jka_model.adaptive.metrics import (
 )
 from jka_model.adaptive.models import (
     AdaptiveKoopmanModel,
+    FactorizedAdaptiveOperator,
     LowRankAdaptiveOperator,
     operator_burden,
     symmetric_abscissa_proxy,
@@ -52,10 +61,12 @@ __all__ = [
     "V08Handoff",
     "V08SeedHandoff",
     "LowRankAdaptiveOperator",
+    "MatchedHistoryPair",
     "AdaptiveObjectiveResult",
     "CurriculumState",
     "FrozenCylinderPhysics",
     "FrozenDecoderObservables",
+    "FactorizedAdaptiveOperator",
     "PhysicalLossResult",
     "latent_prediction_metrics",
     "operator_burden",
@@ -64,6 +75,9 @@ __all__ = [
     "residual_decomposition",
     "symmetric_abscissa_proxy",
     "adaptive_training_scales",
+    "condition_observer_metrics",
+    "condition_targets",
+    "conditional_centering_loss",
     "adaptive_stabilization_objective",
     "adaptive_latent_rollout",
     "audit_v0_8_handoff",
@@ -73,6 +87,8 @@ __all__ = [
     "build_adaptive_cache",
     "load_adaptive_cache",
     "load_adaptive_checkpoint",
+    "matched_history_pairs",
+    "phase2_condition_scales",
     "save_adaptive_cache",
     "save_adaptive_checkpoint",
     "relative_propagator_growth_loss",

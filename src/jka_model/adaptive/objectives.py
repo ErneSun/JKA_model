@@ -7,12 +7,13 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from jka_model.adaptive.identifiability import conditional_centering_loss
 from jka_model.adaptive.models import (
     AdaptiveKoopmanModel,
     operator_burden,
     symmetric_abscissa_proxy,
 )
-from jka_model.config import V09TrainingConfig
+from jka_model.config import V09Phase2Config, V09TrainingConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +101,13 @@ def differentiable_adaptive_rollout(
         raise ValueError("history dt alignment mismatch")
     if future_dts.ndim != 2 or future_dts.shape[0] != batch or torch.any(future_dts <= 0):
         raise ValueError("future_dts must be positive [B,T]")
-    if conditions is not None and conditions.shape != (batch, future_dts.shape[1], 2):
-        raise ValueError("known conditions must have shape [B,T,2]")
+    condition_dim = int(getattr(model.operator_adapter, "condition_dim", 2))
+    if conditions is not None and conditions.shape != (
+        batch,
+        future_dts.shape[1],
+        condition_dim,
+    ):
+        raise ValueError(f"known conditions must have shape [B,T,{condition_dim}]")
     if model.context_encoder.latent_dim != latent_dim or model.context_encoder.history != history:
         raise ValueError("initial history disagrees with the frozen context contract")
     latent_buffer = initial_history
@@ -113,6 +119,17 @@ def differentiable_adaptive_rollout(
     gates: list[Tensor] = []
     deltas: list[Tensor] = []
     generators: list[Tensor] = []
+    phase2_values: dict[str, list[Tensor]] = {
+        name: []
+        for name in (
+            "q_hat",
+            "q_used",
+            "static_coordinates",
+            "dynamic_coordinates",
+            "static_delta",
+            "dynamic_delta",
+        )
+    }
     nominal = model.operator_adapter.nominal_generator
     for index in range(future_dts.shape[1]):
         next_dt = future_dts[:, index : index + 1]
@@ -123,6 +140,11 @@ def differentiable_adaptive_rollout(
         context = model.context_encoder(
             latent_buffer, dt_buffer, next_dt, context_parameters
         )
+        phase2_provider = getattr(model.operator_adapter, "phase2_components", None)
+        if phase2_provider is not None:
+            components = phase2_provider(context, condition)
+            for name in phase2_values:
+                phase2_values[name].append(components[name])
         prediction, eta, gate, delta, adapted = model.operator_adapter.step_with_gate(
             latent_buffer[:, -1], context, next_dt, condition
         )
@@ -144,7 +166,7 @@ def differentiable_adaptive_rollout(
             dt_buffer = torch.cat((dt_buffer[:, 1:], next_dt), dim=1) if history > 2 else next_dt
         else:
             latent_buffer = prediction.unsqueeze(1)
-    return {
+    result = {
         "adapted": torch.stack(adapted_states, dim=1),
         "nominal": torch.stack(nominal_states, dim=1),
         "eta": torch.stack(etas, dim=1),
@@ -152,6 +174,14 @@ def differentiable_adaptive_rollout(
         "delta_a": torch.stack(deltas, dim=1),
         "a_t": torch.stack(generators, dim=1),
     }
+    result.update(
+        {
+            name: torch.stack(values, dim=1)
+            for name, values in phase2_values.items()
+            if values
+        }
+    )
+    return result
 
 
 def relative_propagator_growth_loss(
@@ -189,6 +219,7 @@ def adaptive_stabilization_objective(
     condition_mode: str,
     curriculum: CurriculumState,
     smooth_schedule_mask: Tensor,
+    phase2: V09Phase2Config | None = None,
 ) -> AdaptiveObjectiveResult:
     required_steps = max(
         1,
@@ -199,8 +230,13 @@ def adaptive_stabilization_objective(
         raise ValueError("rollout batch is shorter than the active curriculum")
     future_dts = batch["future_dts"][:, :required_steps]
     truth = batch["target_latents"][:, :required_steps]
+    condition_source = (
+        batch["future_condition_targets"]
+        if phase2 is not None and phase2.enabled
+        else batch["future_conditions"]
+    )
     conditions = (
-        (batch["future_conditions"][:, :required_steps] - condition_mean) / condition_std
+        (condition_source[:, :required_steps] - condition_mean) / condition_std
         if condition_mode == "known"
         else None
     )
@@ -267,6 +303,41 @@ def adaptive_stabilization_objective(
         dt = future_dts[smooth_schedule_mask, 1:].clamp_min(1e-12)
         smoothness = (differences.square().sum(dim=-1) / dt).mean()
     orthogonality = model.operator_adapter.orthogonality_loss()
+    observer_loss = one_step.new_zeros(())
+    centering = one_step.new_zeros(())
+    cross_orthogonality = one_step.new_zeros(())
+    if phase2 is not None and phase2.enabled:
+        if "q_hat" not in rollout or "dynamic_coordinates" not in rollout:
+            raise RuntimeError("Phase-2 objective requires factorized rollout diagnostics")
+        observer_target = (
+            condition_source[:, :required_steps] - condition_mean
+        ) / condition_std
+        observer_loss = (rollout["q_hat"] - observer_target).square().mean()
+        selected_indices = sorted(
+            {
+                0,
+                *(horizon - 1 for horizon in curriculum.active_horizons),
+                *(horizon - 1 for horizon in curriculum.observable_horizons),
+            }
+        )
+        index = torch.tensor(
+            selected_indices,
+            device=rollout["dynamic_coordinates"].device,
+            dtype=torch.long,
+        )
+        innovations = rollout["dynamic_coordinates"].index_select(1, index).flatten(0, 1)
+        observed_conditions = rollout["q_used"].index_select(1, index).flatten(0, 1)
+        centering = conditional_centering_loss(
+            innovations,
+            observed_conditions,
+            bandwidth=phase2.conditional_centering_bandwidth,
+        )
+        cross_provider = getattr(
+            model.operator_adapter, "cross_basis_orthogonality_loss", None
+        )
+        if cross_provider is None:
+            raise RuntimeError("Phase-2 adapter lacks cross-basis orthogonality")
+        cross_orthogonality = cross_provider()
     total = (
         one_step
         + config.lambda_rollout * rollout_loss
@@ -274,6 +345,10 @@ def adaptive_stabilization_objective(
         + config.lambda_smooth * smoothness
         + config.lambda_stability * stability
         + config.lambda_propagator_growth * growth
+        + (0.0 if phase2 is None else phase2.lambda_condition_observer) * observer_loss
+        + (0.0 if phase2 is None else phase2.lambda_condition_centering) * centering
+        + (0.0 if phase2 is None else phase2.lambda_basis_cross_orthogonality)
+        * cross_orthogonality
     )
     terms.update(
         {
@@ -286,6 +361,9 @@ def adaptive_stabilization_objective(
             "propagator_growth": growth,
             "orthogonality": orthogonality,
             "gate_mean": rollout["gate"].mean(),
+            "condition_observer": observer_loss,
+            "condition_centering": centering,
+            "basis_cross_orthogonality": cross_orthogonality,
         }
     )
     return AdaptiveObjectiveResult(total, terms, rollout)

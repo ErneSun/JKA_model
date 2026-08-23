@@ -213,10 +213,24 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         ),
     )
     dynamic_support = nested_gate_support(
-        "dynamic_over_static_status",
+        "dynamic_over_condition_only_status",
         fallback=lambda row: (
-            "PASS" if float(row["dynamic_over_static_gain"]) >= 0.02 else "FAIL"
+            "PASS"
+            if float(
+                row.get("dynamic_over_condition_only_gain", row["dynamic_over_static_gain"])
+            )
+            >= 0.02
+            else "FAIL"
         ),
+    )
+    condition_only_support = nested_gate_support(
+        "condition_only_status", fallback=lambda row: "INCONCLUSIVE"
+    )
+    condition_observer_support = nested_gate_support(
+        "condition_observer_status", fallback=lambda row: "INCONCLUSIVE"
+    )
+    paired_history_support = nested_gate_support(
+        "paired_identifiability_status", fallback=lambda row: "INCONCLUSIVE"
     )
     observable_support = nested_gate_support(
         "observable_status",
@@ -285,6 +299,28 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         )
         for source in sources
     )
+    phase2_enabled = all(
+        bool(row.get("claims", {}).get("phase2_factorized_operator")) for row in records
+    )
+    phase2_artifacts_complete = bool(
+        phase2_enabled
+        and all(
+            (source.parent / "condition_observer_metrics.json").is_file()
+            and (source.parent / "matched_history_pairs.json").is_file()
+            for source in sources
+        )
+    )
+    phase2_classification = (
+        "DYNAMIC_ADAPTIVE_KOOPMAN_SUPPORTED"
+        if dynamic_support["status"] == "SUPPORTED"
+        and paired_history_support["status"] == "SUPPORTED"
+        else "PARAMETERIZED_KOOPMAN_SUPPORTED; HISTORY_ADAPTATION_NOT_REQUIRED"
+        if condition_only_support["status"] == "SUPPORTED"
+        and condition_observer_support["status"] == "SUPPORTED"
+        else "LATENT_CONDITION_NOT_IDENTIFIABLE"
+        if condition_observer_support["status"] == "NOT_SUPPORTED"
+        else "PHASE2_INCONCLUSIVE"
+    )
     v1_ready = bool(
         strict_handoff
         and backbone_fraction == 1.0
@@ -293,7 +329,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         and phase1_artifacts_complete
     )
     decision = {
-        "schema_version": 2,
+        "schema_version": 3,
         "physical_problem": next(iter(problem_names)),
         "observable_objective": next(iter(observable_objectives)),
         "v0_8_strict_readiness": "PASS" if strict_handoff else "NOT_READY",
@@ -308,6 +344,13 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "adaptive_mechanism_result": adaptive_mechanism,
         "operator_explained_residual": operator_support["status"],
         "dynamic_operator_adaptation": dynamic_support["status"],
+        "condition_parameterized_operator": condition_only_support["status"],
+        "condition_observer": condition_observer_support["status"],
+        "paired_history_identifiability": paired_history_support["status"],
+        "phase2_classification": phase2_classification,
+        "phase2_diagnostic_artifacts": (
+            "COMPLETE" if phase2_artifacts_complete else "INCOMPLETE"
+        ),
         "observable_support": observable_support["status"],
         "representation_physical_floor": representation_support["status"],
         "phase1_diagnosis": (
@@ -329,6 +372,14 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "physics_status": (
             "PASS" if all(row["physics_status"] == "PASS" for row in records) else "FAIL"
         ),
+        "strict_all_run_status": {
+            "long_rollout_pass_count": sum(
+                row["long_rollout_stability"] == "PASS" for row in records
+            ),
+            "physics_pass_count": sum(row["physics_status"] == "PASS" for row in records),
+            "formal_run_count": len(records),
+            "requires_all_runs": True,
+        },
         "v1_0_readiness": "READY" if v1_ready else "NOT_READY",
         "v1_0_ready": v1_ready,
         "scientific_backbone_support_fraction": backbone_fraction,
@@ -340,6 +391,9 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "independent_gate_support": {
             "operator_explained_residual": operator_support,
             "dynamic_operator_adaptation": dynamic_support,
+            "condition_parameterized_operator": condition_only_support,
+            "condition_observer": condition_observer_support,
+            "paired_history_identifiability": paired_history_support,
             "observables": observable_support,
             "representation_physical_floor": representation_support,
         },
@@ -349,6 +403,8 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
             "A0_frozen": True,
             "additive_residual_enabled": False,
             "persistent_z_R_present": False,
+            "phase2_factorized_operator": phase2_enabled,
+            "innovation_variance_floor": False,
             "unseen_condition_generalization_tested": False,
         },
     }
@@ -374,17 +430,34 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
     observable_gate_rows: list[dict[str, Any]] = []
     attribution_rows: list[dict[str, Any]] = []
     gradient_audit_rows: list[dict[str, Any]] = []
+    matched_pair_rows: list[dict[str, Any]] = []
+    observer_rows: list[dict[str, Any]] = []
     for source in sources:
         root = source.parent
+        source_decision = _read(source)
         for filename, target in (
             ("rollout_metrics.csv", rollout_rows),
             ("physical_metrics.csv", physical_rows),
+            ("matched_history_pairs.csv", matched_pair_rows),
         ):
-            with (root / filename).open(newline="", encoding="utf-8") as stream:
-                target.extend(
-                    dict(row, source_file=str(root / filename))
-                    for row in csv.DictReader(stream)
-                )
+            source_csv = root / filename
+            if not source_csv.is_file():
+                continue
+            with source_csv.open(newline="", encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+                if filename == "matched_history_pairs.csv":
+                    rows = [row for row in rows if "pair_index" in row]
+                target.extend(dict(row, source_file=str(source_csv)) for row in rows)
+        observer_path = root / "condition_observer_metrics.json"
+        if observer_path.is_file():
+            observer_rows.append(
+                {
+                    "backbone_seed": source_decision["backbone_seed"],
+                    "condition_mode": source_decision["condition_mode"],
+                    "operator_init_seed": source_decision["operator_init_seed"],
+                    **_read(observer_path),
+                }
+            )
         observable_gate_path = root / "observable_gate_results.csv"
         if observable_gate_path.is_file():
             with observable_gate_path.open(newline="", encoding="utf-8") as stream:
@@ -400,7 +473,6 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
                     for row in csv.DictReader(stream)
                 )
         summary = _read(root.parent / "evaluation" / "training_summary.json")
-        source_decision = _read(source)
         training_row = {
             "backbone_seed": source_decision["backbone_seed"],
             "condition_mode": source_decision["condition_mode"],
@@ -476,6 +548,8 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
     _write_csv(evaluation / "observable_gate_results.csv", observable_gate_rows)
     _write_csv(evaluation / "error_attribution.csv", attribution_rows)
     _write_csv(evaluation / "gradient_geometry.csv", gradient_audit_rows)
+    _write_csv(evaluation / "matched_history_pairs.csv", matched_pair_rows)
+    _write_csv(evaluation / "condition_observer_metrics.csv", observer_rows)
     _simple_plots(output, records)
     report = (
         "# V0.9 scientific report\n\n"
@@ -492,12 +566,23 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         f"ADAPTIVE MECHANISM RESULT: {adaptive_mechanism}  \n"
         f"OPERATOR-EXPLAINED RESIDUAL: {decision['operator_explained_residual']}  \n"
         f"DYNAMIC OPERATOR ADAPTATION: {decision['dynamic_operator_adaptation']}  \n"
+        f"CONDITION-PARAMETERIZED OPERATOR: "
+        f"{decision['condition_parameterized_operator']}  \n"
+        f"LATENT CONDITION OBSERVER: {decision['condition_observer']}  \n"
+        f"PAIRED HISTORY IDENTIFIABILITY: "
+        f"{decision['paired_history_identifiability']}  \n"
+        f"PHASE-2 CLASSIFICATION: {decision['phase2_classification']}  \n"
         f"OBSERVABLE SUPPORT: {decision['observable_support']}  \n"
         f"REPRESENTATION PHYSICAL FLOOR: {decision['representation_physical_floor']}  \n"
         f"PHASE-1 DIAGNOSIS: {decision['phase1_diagnosis']}  \n"
         f"PHASE-1 DIAGNOSTIC ARTIFACTS: {decision['phase1_diagnostic_artifacts']}  \n"
         f"LONG-ROLLOUT STABILITY: {decision['long_rollout_stability']}  \n"
         f"PHYSICS STATUS: {decision['physics_status']}  \n"
+        f"STRICT ALL-RUN STATUS: "
+        f"rollout={decision['strict_all_run_status']['long_rollout_pass_count']}/"
+        f"{decision['strict_all_run_status']['formal_run_count']}, "
+        f"physics={decision['strict_all_run_status']['physics_pass_count']}/"
+        f"{decision['strict_all_run_status']['formal_run_count']}  \n"
         f"V1.0 READINESS: {decision['v1_0_readiness']}\n\n"
         f"Selected rank: {decision['selected_rank']}; formal nested run count: "
         f"{decision['formal_run_count']}. Additive residual correction and persistent z_R "
@@ -516,6 +601,8 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
                 bool(epoch_rows),
                 len(gate_rows) >= 6 * len(records),
                 bool(observable_gate_rows),
+                bool(observer_rows) if phase2_enabled else True,
+                phase2_artifacts_complete if phase2_enabled else True,
                 len({row["source_file"] for row in attribution_rows}) == len(records),
                 len(
                     {
@@ -542,6 +629,9 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "observable_gate_result_count": len(observable_gate_rows),
         "error_attribution_row_count": len(attribution_rows),
         "gradient_audit_record_count": len(gradient_audit_rows),
+        "condition_observer_record_count": len(observer_rows),
+        "matched_history_pair_count": len(matched_pair_rows),
+        "phase2_artifacts_complete": phase2_artifacts_complete,
         "plot_count": len(list((output / "plots").glob("*.png"))),
         "rank_selection": rank_selection,
         "v0_8_handoff": handoff,

@@ -6,6 +6,7 @@ import torch
 from torch.utils.data import Dataset
 
 from jka_model.adaptive.cache import AdaptiveCache
+from jka_model.adaptive.identifiability import condition_targets
 
 
 class AdaptiveWindowDataset(Dataset[dict[str, object]]):
@@ -49,6 +50,7 @@ class AdaptiveWindowDataset(Dataset[dict[str, object]]):
             previous_start : previous_target + 1
         ].clone()
         previous_history_dts = trajectory.dts[previous_start:previous_target].clone()
+        targets = condition_targets(trajectory.conditions, trajectory.dts)
         if self.shuffle_older_history and self.history > 1:
             source_index, source_target = self.locations[self.permutation[index]]
             source = self.trajectories[source_index]
@@ -61,6 +63,7 @@ class AdaptiveWindowDataset(Dataset[dict[str, object]]):
             "next_dt": trajectory.dts[target_index : target_index + 1],
             "context_parameters": trajectory.context_parameters,
             "condition": trajectory.conditions[target_index],
+            "condition_target": targets[target_index],
             "target_next": trajectory.latents[target_index + 1],
             "nominal_residual": trajectory.nominal_residuals[target_index],
             "schedule_type": trajectory.schedule_type,
@@ -71,8 +74,9 @@ class AdaptiveWindowDataset(Dataset[dict[str, object]]):
             "previous_history_dts": previous_history_dts,
             "previous_next_dt": trajectory.dts[previous_target : previous_target + 1],
             "previous_condition": trajectory.conditions[previous_target],
+            "previous_condition_target": targets[previous_target],
             "smoothness_eligible": bool(
-                previous_available and trajectory.schedule_type == "smooth"
+                previous_available and "abrupt" not in trajectory.schedule_type
             ),
         }
 
@@ -120,11 +124,13 @@ class AdaptiveRolloutDataset(Dataset[dict[str, object]]):
         trajectory = self.trajectories[trajectory_index]
         start = target_index - self.history + 1
         stop = target_index + self.horizon
+        targets = condition_targets(trajectory.conditions, trajectory.dts)
         return {
             "history_z": trajectory.latents[start : target_index + 1].clone(),
             "history_dts": trajectory.dts[start:target_index].clone(),
             "future_dts": trajectory.dts[target_index:stop].clone(),
             "future_conditions": trajectory.conditions[target_index:stop].clone(),
+            "future_condition_targets": targets[target_index:stop].clone(),
             "target_latents": trajectory.latents[target_index + 1 : stop + 1].clone(),
             "context_parameters": trajectory.context_parameters,
             "schedule_type": trajectory.schedule_type,

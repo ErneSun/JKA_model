@@ -24,8 +24,13 @@ def adaptive_latent_rollout(
         raise ValueError("history dt alignment mismatch")
     if future_dts.ndim != 2 or future_dts.shape[0] != batch or torch.any(future_dts <= 0):
         raise ValueError("future_dts must be positive [B,T]")
-    if conditions is not None and conditions.shape != (batch, future_dts.shape[1], 2):
-        raise ValueError("known conditions must have shape [B,T,2]")
+    condition_dim = int(getattr(model.operator_adapter, "condition_dim", 2))
+    if conditions is not None and conditions.shape != (
+        batch,
+        future_dts.shape[1],
+        condition_dim,
+    ):
+        raise ValueError(f"known conditions must have shape [B,T,{condition_dim}]")
     if model.context_encoder.latent_dim != latent_dim or model.context_encoder.history != history:
         raise ValueError("initial history disagrees with the frozen context contract")
     latent_buffer = initial_history.clone()
@@ -37,6 +42,17 @@ def adaptive_latent_rollout(
     gates: list[Tensor] = []
     deltas: list[Tensor] = []
     generators: list[Tensor] = []
+    phase2_values: dict[str, list[Tensor]] = {
+        name: []
+        for name in (
+            "q_hat",
+            "q_used",
+            "static_coordinates",
+            "dynamic_coordinates",
+            "static_delta",
+            "dynamic_delta",
+        )
+    }
     nominal = model.operator_adapter.nominal_generator
     for index in range(future_dts.shape[1]):
         next_dt = future_dts[:, index : index + 1]
@@ -44,6 +60,11 @@ def adaptive_latent_rollout(
         context = model.context_encoder(
             latent_buffer, dt_buffer, next_dt, context_parameters
         )
+        phase2_provider = getattr(model.operator_adapter, "phase2_components", None)
+        if phase2_provider is not None:
+            components = phase2_provider(context, current_condition)
+            for name in phase2_values:
+                phase2_values[name].append(components[name])
         prediction, eta, gate, delta, adapted = model.operator_adapter.step_with_gate(
             latent_buffer[:, -1], context, next_dt, current_condition
         )
@@ -63,7 +84,7 @@ def adaptive_latent_rollout(
             dt_buffer = torch.cat((dt_buffer[:, 1:], next_dt), dim=1) if history > 2 else next_dt
         else:
             latent_buffer = prediction.unsqueeze(1)
-    return {
+    result = {
         "adapted": torch.stack(adapted_states, dim=1),
         "nominal": torch.stack(nominal_states, dim=1),
         "eta": torch.stack(etas, dim=1),
@@ -71,3 +92,11 @@ def adaptive_latent_rollout(
         "delta_a": torch.stack(deltas, dim=1),
         "a_t": torch.stack(generators, dim=1),
     }
+    result.update(
+        {
+            name: torch.stack(values, dim=1)
+            for name, values in phase2_values.items()
+            if values
+        }
+    )
+    return result

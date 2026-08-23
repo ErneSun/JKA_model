@@ -185,6 +185,7 @@ def test_phase1_curriculum_samples_one_training_horizon_and_all_validation_horiz
 def test_phase1_bundle_exposes_differentiable_constraints() -> None:
     payload = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml").to_dict()
     payload["v0_9_adaptive"].update({"rank": 2, "rank_candidates": [1, 2], "width": 8})
+    payload["v0_9_phase2"]["enabled"] = False
     payload["v0_9_training"].update(
         {
             "epochs": 2,

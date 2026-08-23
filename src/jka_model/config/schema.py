@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1797,8 +1798,24 @@ class V09ConditionConfig:
     def __post_init__(self) -> None:
         if tuple(dict.fromkeys(self.schedule_types)) != self.schedule_types:
             raise ValueError("V0.9 condition schedule types must be unique")
-        if not self.schedule_types or set(self.schedule_types) - {"smooth", "abrupt"}:
-            raise ValueError("V0.9 supports only smooth and abrupt primary schedules")
+        allowed = {
+            "smooth",
+            "abrupt",
+            "smooth_up_slow",
+            "smooth_up_medium",
+            "smooth_up_fast",
+            "abrupt_up",
+            "smooth_down_slow",
+            "smooth_down_medium",
+            "smooth_down_fast",
+            "abrupt_down",
+            "cyclic_slow_long",
+            "cyclic_slow_short",
+            "cyclic_fast_long",
+            "cyclic_fast_short",
+        }
+        if not self.schedule_types or set(self.schedule_types) - allowed:
+            raise ValueError("V0.9 condition config contains an unsupported schedule")
         if not 0 < self.reynolds_low < self.reynolds_high:
             raise ValueError("V0.9 requires 0 < Re_low < Re_high")
         if not 0 < self.transition_start_fraction < 1:
@@ -2324,6 +2341,110 @@ class V09EvaluationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class V09Phase2Config:
+    """Identifiable condition/dynamic factorization over the frozen V0.8 handoff."""
+
+    enabled: bool = False
+    static_rank: int = 4
+    dynamic_rank: int = 4
+    observer_width: int = 64
+    observer_depth: int = 2
+    observer_warmup_fraction: float = 0.20
+    lambda_condition_observer: float = 1.0
+    lambda_condition_centering: float = 0.10
+    lambda_basis_cross_orthogonality: float = 0.10
+    conditional_centering_bandwidth: float = 1.0
+    max_condition_observer_normalized_rmse: float = 0.50
+    min_condition_observer_r2: float = 0.20
+    paired_horizon: int = 8
+    matched_condition_tolerance: float = 0.20
+    matched_latent_tolerance: float = 0.75
+    minimum_history_separation: float = 0.25
+    minimum_future_separation: float = 0.05
+    minimum_identifiable_pairs: int = 8
+    min_paired_dynamic_gain: float = 0.02
+    schedule_variants: tuple[str, ...] = (
+        "smooth_up_slow",
+        "smooth_up_fast",
+        "abrupt_up",
+        "smooth_up_medium",
+        "smooth_down_slow",
+        "smooth_down_fast",
+        "abrupt_down",
+        "smooth_down_medium",
+        "cyclic_slow_long",
+        "cyclic_slow_short",
+        "cyclic_fast_long",
+        "cyclic_fast_short",
+    )
+
+    def __post_init__(self) -> None:
+        if min(self.static_rank, self.dynamic_rank, self.observer_width, self.observer_depth) < 1:
+            raise ValueError("V0.9 Phase-2 ranks and observer dimensions must be positive")
+        if not 0 <= self.observer_warmup_fraction < 1:
+            raise ValueError("V0.9 Phase-2 observer warmup must lie in [0,1)")
+        positive = (
+            self.lambda_condition_observer,
+            self.lambda_condition_centering,
+            self.lambda_basis_cross_orthogonality,
+            self.conditional_centering_bandwidth,
+            self.max_condition_observer_normalized_rmse,
+            self.matched_condition_tolerance,
+            self.matched_latent_tolerance,
+            self.minimum_history_separation,
+            self.minimum_future_separation,
+            self.min_paired_dynamic_gain,
+        )
+        if any(not math.isfinite(value) or value <= 0 for value in positive):
+            raise ValueError("V0.9 Phase-2 losses, scales, and tolerances must be positive")
+        if not -1 < self.min_condition_observer_r2 < 1:
+            raise ValueError("V0.9 Phase-2 observer R2 gate must lie in (-1,1)")
+        if self.paired_horizon < 1 or self.minimum_identifiable_pairs < 1:
+            raise ValueError("V0.9 Phase-2 paired audit dimensions must be positive")
+        if len(self.schedule_variants) < 6 or len(set(self.schedule_variants)) != len(
+            self.schedule_variants
+        ):
+            raise ValueError("V0.9 Phase-2 requires unique multi-route schedule variants")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            name: list(value) if isinstance(value, tuple) else value
+            for name in self.__dataclass_fields__
+            for value in (getattr(self, name),)
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V09Phase2Config:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.9 Phase-2 config")
+        values = {name: data.get(name, getattr(defaults, name)) for name in allowed}
+        for name in (
+            "static_rank",
+            "dynamic_rank",
+            "observer_width",
+            "observer_depth",
+            "paired_horizon",
+            "minimum_identifiable_pairs",
+        ):
+            values[name] = int(values[name])
+        values["enabled"] = bool(values["enabled"])
+        values["schedule_variants"] = tuple(str(value) for value in values["schedule_variants"])
+        for name in allowed - {
+            "enabled",
+            "schedule_variants",
+            "static_rank",
+            "dynamic_rank",
+            "observer_width",
+            "observer_depth",
+            "paired_horizon",
+            "minimum_identifiable_pairs",
+        }:
+            values[name] = float(values[name])
+        return cls(**values)
+
+
+@dataclass(frozen=True, slots=True)
 class DataConfig:
     """Static data expectations shared by V0.2+ pipelines."""
 
@@ -2465,6 +2586,7 @@ class ProjectConfig:
     v0_9_adaptive: V09AdaptiveConfig | None = None
     v0_9_training: V09TrainingConfig | None = None
     v0_9_evaluation: V09EvaluationConfig | None = None
+    v0_9_phase2: V09Phase2Config | None = None
     project_version: str = PROJECT_VERSION
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -2613,6 +2735,34 @@ class ProjectConfig:
                 raise ValueError("V0.9 requires time_varying_boundary=true")
             if self.v0_9_adaptive.rank >= self.koopman.state_dim:
                 raise ValueError("V0.9 requires strict low rank r < d_K")
+            if self.v0_9_phase2 is not None and self.v0_9_phase2.enabled:
+                assert self.v0_9_condition is not None
+                if (
+                    self.v0_9_phase2.static_rank + self.v0_9_phase2.dynamic_rank
+                    != self.v0_9_adaptive.rank
+                ):
+                    raise ValueError(
+                        "V0.9 Phase-2 static/dynamic ranks must sum to adaptive rank"
+                    )
+                if (
+                    self.v0_9_condition.schedule_types
+                    != self.v0_9_phase2.schedule_variants
+                ):
+                    raise ValueError(
+                        "V0.9 Phase-2 schedule variants must match the condition contract"
+                    )
+                if (
+                    self.cylinder_wake_2d.num_trajectories
+                    < len(self.v0_9_phase2.schedule_variants)
+                    or self.cylinder_wake_2d.num_trajectories
+                    % len(self.v0_9_phase2.schedule_variants)
+                    != 0
+                ):
+                    raise ValueError(
+                        "V0.9 Phase-2 requires balanced coverage of every schedule variant"
+                    )
+                if self.v0_9_phase2.paired_horizon > self.v0_9_training.rollout_horizons[-1]:
+                    raise ValueError("V0.9 Phase-2 paired horizon exceeds training rollout")
         elif self.cylinder_wake_2d is not None and self.cylinder_wake_2d.time_varying_boundary:
             raise ValueError("time-varying cylinder boundaries require the complete V0.9 contract")
         if (
@@ -2774,6 +2924,9 @@ class ProjectConfig:
             "v0_9_evaluation": None
             if self.v0_9_evaluation is None
             else self.v0_9_evaluation.to_dict(),
+            "v0_9_phase2": None
+            if self.v0_9_phase2 is None
+            else self.v0_9_phase2.to_dict(),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }
@@ -2817,6 +2970,7 @@ class ProjectConfig:
                 "v0_9_adaptive",
                 "v0_9_training",
                 "v0_9_evaluation",
+                "v0_9_phase2",
                 "project_version",
                 "tags",
             },
@@ -3045,6 +3199,13 @@ class ProjectConfig:
                 if data.get("v0_9_evaluation") is None
                 else V09EvaluationConfig.from_dict(
                     _ensure_mapping(data["v0_9_evaluation"], "V0.9 evaluation config")
+                )
+            ),
+            v0_9_phase2=(
+                None
+                if data.get("v0_9_phase2") is None
+                else V09Phase2Config.from_dict(
+                    _ensure_mapping(data["v0_9_phase2"], "V0.9 Phase-2 config")
                 )
             ),
             project_version=str(data.get("project_version", PROJECT_VERSION)),

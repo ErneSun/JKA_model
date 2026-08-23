@@ -70,6 +70,7 @@ def _run_tests(python: str, log_path: Path) -> None:
         "tests/test_v0_9_physical_problem.py",
         "tests/test_v0_9_workflow.py",
         "tests/test_v0_9_phase1.py",
+        "tests/test_v0_9_phase2.py",
     ]
     with log_path.open("w", encoding="utf-8") as stream:
         process = subprocess.Popen(
@@ -234,6 +235,11 @@ def _resolved(
     payload["data"]["split"]["seed"] = seed
     payload["cylinder_wake_2d"]["dataset_path"] = str(dataset_path.resolve())
     payload["v0_9_adaptive"].update({"condition_mode": condition_mode, "rank": rank})
+    if payload.get("v0_9_phase2", {}).get("enabled", False):
+        static_rank = max(1, rank // 2)
+        payload["v0_9_phase2"].update(
+            {"static_rank": static_rank, "dynamic_rank": rank - static_rank}
+        )
     payload["v0_9_training"]["operator_initialization_seed"] = operator_seed
     if epochs_override is not None:
         payload["v0_9_training"]["epochs"] = epochs_override

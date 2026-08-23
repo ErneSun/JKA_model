@@ -22,14 +22,29 @@ from train.train_v0_6 import initialize_v0_6_model
 
 
 def _stratified_schedule_manifest(config: ProjectConfig, records: object) -> SplitManifest:
-    groups: dict[str, list[object]] = {"smooth": [], "abrupt": []}
+    phase2 = config.v0_9_phase2 is not None and config.v0_9_phase2.enabled
+    groups: dict[str, list[object]] = (
+        {"up": [], "down": [], "cyclic": []}
+        if phase2
+        else {"smooth": [], "abrupt": []}
+    )
     for record in records:  # type: ignore[union-attr]
         schedule_type = str(record.metadata.get("schedule_type"))
-        if schedule_type not in groups:
+        if phase2:
+            family = (
+                "cyclic"
+                if schedule_type.startswith("cyclic_")
+                else "down"
+                if "_down" in schedule_type
+                else "up"
+            )
+        else:
+            family = schedule_type
+        if family not in groups:
             raise ValueError("V0.9 record lacks a registered schedule type")
-        groups[schedule_type].append(record)
+        groups[family].append(record)
     if any(len(group) < 3 for group in groups.values()):
-        raise ValueError("V0.9 requires at least three trajectories per schedule type")
+        raise ValueError("V0.9 requires at least three trajectories per schedule family")
     manifests = [make_split_manifest(group, config.data.split) for group in groups.values()]
     return SplitManifest(
         train=tuple(identifier for manifest in manifests for identifier in manifest.train),

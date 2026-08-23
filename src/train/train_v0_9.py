@@ -19,6 +19,7 @@ from jka_model.adaptive import (
     AdaptiveKoopmanModel,
     AdaptiveRolloutDataset,
     AdaptiveWindowDataset,
+    FactorizedAdaptiveOperator,
     FrozenDecoderObservables,
     LowRankAdaptiveOperator,
     adaptive_stabilization_objective,
@@ -27,6 +28,7 @@ from jka_model.adaptive import (
     load_adaptive_cache,
     load_adaptive_checkpoint,
     operator_burden,
+    phase2_condition_scales,
     save_adaptive_checkpoint,
     symmetric_abscissa_proxy,
 )
@@ -99,11 +101,19 @@ def _build_model(
         history=history,
     )
     dynamic.load_state_dict(context_payload["best_context_state"], strict=True)
-    adapter = LowRankAdaptiveOperator(
-        cache.nominal_generator,
-        config.v0_8_context.context_dim,
-        config.v0_9_adaptive,
-    )
+    if config.v0_9_phase2 is not None and config.v0_9_phase2.enabled:
+        adapter = FactorizedAdaptiveOperator(
+            cache.nominal_generator,
+            config.v0_8_context.context_dim,
+            config.v0_9_adaptive,
+            config.v0_9_phase2,
+        )
+    else:
+        adapter = LowRankAdaptiveOperator(
+            cache.nominal_generator,
+            config.v0_8_context.context_dim,
+            config.v0_9_adaptive,
+        )
     model = AdaptiveKoopmanModel(dynamic.context_encoder, adapter).to(device)
     configure_train_stage(model, TrainStage.ADAPTIVE)
     return model
@@ -116,11 +126,13 @@ def _move(raw: dict[str, Any], device: torch.device) -> dict[str, Any]:
         "next_dt",
         "context_parameters",
         "condition",
+        "condition_target",
         "target_next",
         "previous_history_z",
         "previous_history_dts",
         "previous_next_dt",
         "previous_condition",
+        "previous_condition_target",
     )
     result = dict(raw)
     for name in tensor_names:
@@ -136,6 +148,7 @@ def _move_rollout(raw: dict[str, Any], device: torch.device) -> dict[str, Any]:
         "history_dts",
         "future_dts",
         "future_conditions",
+        "future_condition_targets",
         "target_latents",
         "context_parameters",
     ):
@@ -148,6 +161,8 @@ def _uses_stabilized_objective(config: ProjectConfig) -> bool:
     training = config.v0_9_training
     adaptive = config.v0_9_adaptive
     return bool(
+        (config.v0_9_phase2 is not None and config.v0_9_phase2.enabled)
+        or
         training.lambda_rollout > 0
         or training.lambda_propagator_growth > 0
         or training.lambda_physics > 0
@@ -247,7 +262,7 @@ def _stabilized_loss_bundle(
     training = config.v0_9_training
     state = curriculum_state(training, epoch, validation=validation)
     smooth_mask = torch.tensor(
-        [str(value) == "smooth" for value in batch["schedule_type"]],
+        ["abrupt" not in str(value) for value in batch["schedule_type"]],
         device=batch["history_z"].device,
         dtype=torch.bool,
     )
@@ -261,9 +276,35 @@ def _stabilized_loss_bundle(
         config.v0_9_adaptive.condition_mode,
         state,
         smooth_mask,
+        config.v0_9_phase2,
     )
     total = objective.total
     terms = dict(objective.terms)
+    phase2 = config.v0_9_phase2
+    progress = epoch / max(training.epochs - 1, 1)
+    observer_warmup = bool(
+        not validation
+        and phase2 is not None
+        and phase2.enabled
+        and progress < phase2.observer_warmup_fraction
+    )
+    if observer_warmup:
+        # First identify the latent physical condition.  The operator heads are
+        # exactly zero-initialized, so this stage cannot alter A0 or invent a
+        # dynamic innovation before Q(history) becomes meaningful.
+        total = phase2.lambda_condition_observer * terms["condition_observer"]
+        terms.update(
+            {
+                "phase2_observer_warmup": total.new_ones(()),
+                "physics": total.new_zeros(()),
+                "force_window": total.new_zeros(()),
+                "observable_noninferiority": total.new_zeros(()),
+                "augmented_lagrangian": total.new_zeros(()),
+                "physics_scale": total.new_zeros(()),
+            }
+        )
+        return total, terms
+    terms["phase2_observer_warmup"] = total.new_zeros(())
     physics = total.new_zeros(())
     observable_noninferiority = total.new_zeros(())
     force_window = total.new_zeros(())
@@ -402,12 +443,26 @@ def _stabilized_loss_bundle(
             terms["objective_prediction"] = (
                 terms["forecast"] + training.lambda_rollout * terms["rollout"]
             )
+            if phase2 is not None and phase2.enabled:
+                terms["objective_prediction"] = (
+                    terms["objective_prediction"]
+                    + phase2.lambda_condition_observer
+                    * terms["condition_observer"]
+                )
             terms["objective_regularization"] = (
                 training.lambda_operator_burden * terms["orthogonality"]
                 + training.lambda_smooth * terms["smoothness"]
                 + training.lambda_stability * terms["stability"]
                 + training.lambda_propagator_growth * terms["propagator_growth"]
             )
+            if phase2 is not None and phase2.enabled:
+                terms["objective_regularization"] = (
+                    terms["objective_regularization"]
+                    + phase2.lambda_condition_centering
+                    * terms["condition_centering"]
+                    + phase2.lambda_basis_cross_orthogonality
+                    * terms["basis_cross_orthogonality"]
+                )
             terms["objective_observable"] = (
                 training.lambda_physics * state.physics_scale * primary_observable
             )
@@ -636,6 +691,8 @@ def train_v0_9(
         for split, dataset in datasets.items()
     }
     residual_scale_cpu, condition_mean_cpu, condition_std_cpu = adaptive_training_scales(cache)
+    if resolved.v0_9_phase2 is not None and resolved.v0_9_phase2.enabled:
+        condition_mean_cpu, condition_std_cpu = phase2_condition_scales(cache)
     residual_scale = residual_scale_cpu.to(selected)
     condition_mean = condition_mean_cpu.to(selected)
     condition_std = condition_std_cpu.to(selected)
@@ -781,6 +838,9 @@ def train_v0_9(
             "train_observable_noninferiority",
             "train_force_window",
             "train_propagator_growth",
+            "train_condition_observer",
+            "train_condition_centering",
+            "train_basis_cross_orthogonality",
             "train_pcgrad_conflicts",
             "train_pcgrad_comparisons",
             "validation_total",
@@ -795,6 +855,9 @@ def train_v0_9(
             "validation_stability",
             "validation_propagator_growth",
             "validation_gate_mean",
+            "validation_condition_observer",
+            "validation_condition_centering",
+            "validation_basis_cross_orthogonality",
             "constraint_max_violation",
             "multiplier_divergence",
             "multiplier_boundary",
@@ -825,6 +888,9 @@ def train_v0_9(
                 "observable_noninferiority": 0.0,
                 "force_window": 0.0,
                 "propagator_growth": 0.0,
+                "condition_observer": 0.0,
+                "condition_centering": 0.0,
+                "basis_cross_orthogonality": 0.0,
                 "constraint_divergence": 0.0,
                 "constraint_boundary": 0.0,
                 "constraint_burden": 0.0,
@@ -874,6 +940,13 @@ def train_v0_9(
                     gradient_objectives: dict[str, torch.Tensor] = {}
                     for name in ("forecast", "rollout"):
                         if name in terms:
+                            gradient_objectives[name] = terms[name]
+                    for name in (
+                        "condition_observer",
+                        "condition_centering",
+                        "basis_cross_orthogonality",
+                    ):
+                        if name in terms and bool(terms[name].requires_grad):
                             gradient_objectives[name] = terms[name]
                     for component in resolved.v0_9_training.observable_names:
                         values = [
@@ -952,6 +1025,9 @@ def train_v0_9(
                     "observable_noninferiority",
                     "force_window",
                     "propagator_growth",
+                    "condition_observer",
+                    "condition_centering",
+                    "basis_cross_orthogonality",
                 ):
                     if name in terms:
                         sums[name] += float(terms[name].detach()) * batch_count
@@ -1022,6 +1098,11 @@ def train_v0_9(
                 ),
                 "train_force_window": sums["force_window"] / count,
                 "train_propagator_growth": sums["propagator_growth"] / count,
+                "train_condition_observer": sums["condition_observer"] / count,
+                "train_condition_centering": sums["condition_centering"] / count,
+                "train_basis_cross_orthogonality": (
+                    sums["basis_cross_orthogonality"] / count
+                ),
                 "train_pcgrad_conflicts": sums["pcgrad_conflicts"],
                 "train_pcgrad_comparisons": sums["pcgrad_comparisons"],
                 "validation_total": validation["total"],
@@ -1040,6 +1121,15 @@ def train_v0_9(
                     "propagator_growth", 0.0
                 ),
                 "validation_gate_mean": validation.get("gate_mean", 1.0),
+                "validation_condition_observer": validation.get(
+                    "condition_observer", 0.0
+                ),
+                "validation_condition_centering": validation.get(
+                    "condition_centering", 0.0
+                ),
+                "validation_basis_cross_orthogonality": validation.get(
+                    "basis_cross_orthogonality", 0.0
+                ),
                 **{
                     name: latest_constraint_diagnostics.get(name, 0.0)
                     for name in (
@@ -1130,6 +1220,9 @@ def train_v0_9(
                 resolved.v0_9_training.gradient_conflict_method
             ),
             "worst_horizon_constraints": resolved.v0_9_training.phase1_enabled,
+            "phase2_condition_history_factorization": bool(
+                resolved.v0_9_phase2 is not None and resolved.v0_9_phase2.enabled
+            ),
         },
         "curriculum": {
             "rollout_horizons": list(resolved.v0_9_training.rollout_horizons),
@@ -1169,6 +1262,17 @@ def train_v0_9(
                 float(record["minimum_off_diagonal_cosine"])
                 for record in gradient_records
             ),
+        },
+        "phase2": None
+        if resolved.v0_9_phase2 is None or not resolved.v0_9_phase2.enabled
+        else {
+            "static_rank": resolved.v0_9_phase2.static_rank,
+            "dynamic_rank": resolved.v0_9_phase2.dynamic_rank,
+            "condition_target": ["Re", "U_infinity", "dRe_dt"],
+            "observer_warmup_fraction": (
+                resolved.v0_9_phase2.observer_warmup_fraction
+            ),
+            "conditional_centering_has_variance_floor": False,
         },
     }
     (destination / "evaluation" / "gradient_geometry_summary.json").write_text(

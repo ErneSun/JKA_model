@@ -36,7 +36,7 @@ class AdaptiveTrajectory:
     def __post_init__(self) -> None:
         if self.split not in {"train", "validation", "test"}:
             raise ValueError("invalid V0.9 cache split")
-        if self.schedule_type not in {"smooth", "abrupt"}:
+        if not self.schedule_type.strip():
             raise ValueError("invalid V0.9 schedule type")
         if self.latents.ndim != 2 or self.nominal_residuals.shape != self.latents[:-1].shape:
             raise ValueError("invalid V0.9 latent/residual alignment")

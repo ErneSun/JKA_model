@@ -18,7 +18,7 @@ v0_8_routing: {mode: auto, v0_7_result: ""}
 v0_8_context: {family: auto, context_dim: 8, history_length: 8, width: 64, layers: 2, heads: 4, ffn_multiplier: 2, dropout: 0.0, include_parameters: true}
 v0_8_training: {epochs: 80, batch_size: 256, learning_rate: 0.001, weight_decay: 0.00001, lambda_adequacy: 0.2, gradient_clip_norm: 1.0, patience: 16, precision: amp_bf16, context_initialization_seed: 401}
 v0_8_evaluation: {rollout_horizons: [8, 16, 32, 80], material_relative_gain: 0.02, min_context_effective_rank: 2.0, max_closure_burden: 0.25, max_physics_degradation: 0.10, max_divergence_mse: 0.02, max_boundary_mse: 0.05, seed_consistency_fraction: 0.6666666666666666, context_initialization_seeds: [401, 503, 607]}
-v0_9_condition: {schedule_types: [smooth, abrupt], reynolds_low: 80.0, reynolds_high: 120.0, transition_start_fraction: 0.35, smooth_duration_fraction: 0.25, known_condition_features: [reynolds_number, u_infinity]}
+v0_9_condition: {schedule_types: [smooth_up_slow, smooth_up_fast, abrupt_up, smooth_up_medium, smooth_down_slow, smooth_down_fast, abrupt_down, smooth_down_medium, cyclic_slow_long, cyclic_slow_short, cyclic_fast_long, cyclic_fast_short], reynolds_low: 80.0, reynolds_high: 120.0, transition_start_fraction: 0.35, smooth_duration_fraction: 0.25, known_condition_features: [reynolds_number, u_infinity]}
 v0_9_adaptive:
   condition_mode: latent_inferred
   rank: 8
@@ -31,6 +31,26 @@ v0_9_adaptive:
   eta_max: 0.35
   trust_gate: true
   trust_gate_bias: -1.3862943611198906
+v0_9_phase2:
+  enabled: true
+  static_rank: 4
+  dynamic_rank: 4
+  observer_width: 64
+  observer_depth: 2
+  observer_warmup_fraction: 0.20
+  lambda_condition_observer: 1.0
+  lambda_condition_centering: 0.10
+  lambda_basis_cross_orthogonality: 0.10
+  conditional_centering_bandwidth: 1.0
+  max_condition_observer_normalized_rmse: 0.50
+  min_condition_observer_r2: 0.20
+  paired_horizon: 8
+  matched_condition_tolerance: 0.20
+  matched_latent_tolerance: 0.75
+  minimum_history_separation: 0.25
+  minimum_future_separation: 0.05
+  minimum_identifiable_pairs: 8
+  min_paired_dynamic_gain: 0.02
 v0_9_training:
   epochs: 80
   batch_size: 256

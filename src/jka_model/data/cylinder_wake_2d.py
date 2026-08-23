@@ -397,12 +397,35 @@ def cylinder_condition_schedule(
     transition_index = max(1, min(steps - 2, round(condition.transition_start_fraction * steps)))
     ramp_steps = max(1, round(condition.smooth_duration_fraction * steps))
     indices = torch.arange(steps, dtype=torch.float64)
-    if schedule_type == "abrupt":
+    if "slow" in schedule_type:
+        ramp_steps = max(1, round(1.35 * ramp_steps))
+    elif "fast" in schedule_type:
+        ramp_steps = max(1, round(0.55 * ramp_steps))
+    ramp_steps = min(ramp_steps, max(1, steps - transition_index - 2))
+    family = "cyclic" if schedule_type.startswith("cyclic_") else (
+        "down" if "_down" in schedule_type else "up"
+    )
+    dwell_steps = 0
+    if schedule_type in {"abrupt", "abrupt_up", "abrupt_down"}:
         blend = (indices >= transition_index).to(torch.float64)
         ramp_steps = 0
+    elif family == "cyclic":
+        dwell_fraction = 0.18 if schedule_type.endswith("_long") else 0.07
+        dwell_steps = max(2, round(dwell_fraction * steps))
+        ramp_steps = min(
+            ramp_steps,
+            max(1, (steps - transition_index - dwell_steps - 2) // 2),
+        )
+        up_tau = ((indices - transition_index) / ramp_steps).clamp(0.0, 1.0)
+        down_start = transition_index + ramp_steps + dwell_steps
+        down_tau = ((indices - down_start) / ramp_steps).clamp(0.0, 1.0)
+        blend = 0.5 * (1.0 - torch.cos(torch.pi * up_tau))
+        blend = blend * (1.0 - 0.5 * (1.0 - torch.cos(torch.pi * down_tau)))
     else:
         tau = ((indices - transition_index) / ramp_steps).clamp(0.0, 1.0)
         blend = 0.5 * (1.0 - torch.cos(torch.pi * tau))
+    if family == "down":
+        blend = 1.0 - blend
     reynolds = condition.reynolds_low + (condition.reynolds_high - condition.reynolds_low) * blend
     lattice_inlet = config.lattice_viscosity * reynolds / config.cylinder_diameter_cells
     physical_inlet = config.u_infinity * reynolds / config.reynolds_number
@@ -412,6 +435,17 @@ def cylinder_condition_schedule(
         "schedule_type": schedule_type,
         "transition_index": transition_index,
         "ramp_steps": ramp_steps,
+        "schedule_family": family,
+        "rate_class": (
+            "abrupt"
+            if "abrupt" in schedule_type
+            else "slow"
+            if "slow" in schedule_type
+            else "fast"
+            if "fast" in schedule_type
+            else "medium"
+        ),
+        "dwell_steps": dwell_steps,
         "reynolds_number": reynolds.float(),
         "lattice_inflow_velocity": lattice_inlet.float(),
         "u_infinity": physical_inlet.float(),
@@ -482,6 +516,9 @@ def generate_v0_9_cylinder_wake_trajectories(
                     "schedule_type": schedule_type,
                     "transition_index": int(schedule["transition_index"]),
                     "ramp_steps": int(schedule["ramp_steps"]),
+                    "schedule_family": str(schedule["schedule_family"]),
+                    "rate_class": str(schedule["rate_class"]),
+                    "dwell_steps": int(schedule["dwell_steps"]),
                     "condition_series": condition_series.tolist(),
                     "diagnostics": diagnostics,
                     "dominant_lift_frequency": shedding_frequency(lift, config.snapshot_dt),
@@ -507,15 +544,38 @@ def validate_v0_9_cylinder_wake_dataset(
     schedule_complete = types == set(condition.schedule_types)
     aligned = True
     ranges_valid = True
+    expected_extended = len(condition.schedule_types) > 2
+    observed_families: set[str] = set()
+    observed_rate_classes: set[str] = set()
+    cyclic_dwell_steps: set[int] = set()
+    positive_rate = False
+    negative_rate = False
+    cyclic_return = False
     for record in dataset.records:
         series = torch.as_tensor(record.metadata.get("condition_series"), dtype=torch.float64)
         transition = int(record.metadata.get("transition_index", -1))
+        family = str(record.metadata.get("schedule_family", ""))
+        rate_class = str(record.metadata.get("rate_class", ""))
+        if family:
+            observed_families.add(family)
+        if rate_class:
+            observed_rate_classes.add(rate_class)
+        if family == "cyclic":
+            cyclic_dwell_steps.add(int(record.metadata.get("dwell_steps", 0)))
         aligned = (
             aligned
             and series.shape == (record.num_steps, 2)
             and 0 < transition < record.num_steps
         )
         if series.shape == (record.num_steps, 2):
+            increments = torch.diff(series[:, 0])
+            positive_rate = positive_rate or bool(torch.any(increments > 1.0e-6))
+            negative_rate = negative_rate or bool(torch.any(increments < -1.0e-6))
+            if family == "cyclic":
+                cyclic_return = cyclic_return or bool(
+                    torch.max(series[:, 0]) - series[0, 0] > 1.0
+                    and torch.abs(series[-1, 0] - series[0, 0]) <= 1.0e-5
+                )
             ranges_valid = ranges_valid and bool(
                 torch.all(series[:, 0] >= condition.reynolds_low - 1e-6)
                 and torch.all(series[:, 0] <= condition.reynolds_high + 1e-6)
@@ -525,6 +585,17 @@ def validate_v0_9_cylinder_wake_dataset(
         "schedule_types_complete": schedule_complete,
         "condition_alignment": aligned,
         "condition_range": ranges_valid,
+        "identifiability_schedule_families": (
+            not expected_extended or observed_families == {"up", "down", "cyclic"}
+        ),
+        "bidirectional_condition_rate": (
+            not expected_extended or (positive_rate and negative_rate)
+        ),
+        "cyclic_return": not expected_extended or cyclic_return,
+        "rate_variants_complete": not expected_extended
+        or observed_rate_classes == {"slow", "medium", "fast", "abrupt"},
+        "dwell_variants_complete": not expected_extended
+        or len({value for value in cyclic_dwell_steps if value > 0}) >= 2,
     }
     required = (
         "finite_fields",
@@ -534,6 +605,11 @@ def validate_v0_9_cylinder_wake_dataset(
         "schedule_types_complete",
         "condition_alignment",
         "condition_range",
+        "identifiability_schedule_families",
+        "bidirectional_condition_rate",
+        "cyclic_return",
+        "rate_variants_complete",
+        "dwell_variants_complete",
     )
     return {
         **base,

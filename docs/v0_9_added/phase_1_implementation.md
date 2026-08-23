@@ -5,8 +5,15 @@
 - Implementation: Phase-1 r1 complete
 - Targeted local verification: pass
 - First formal three-seed GPU evidence: workflow complete, scientific gates not supported
-- Corrected r1 formal GPU evidence: pending
-- Scientific claim: not yet assigned
+- Corrected r1 formal GPU evidence: complete (`v09-added-phase1-r1-20260823T070404Z`)
+- Scientific claim: Phase 1 materially improved observables and H80 stability, but did not
+  establish history-dependent adaptation
+
+The corrected run raised strict physical/observable passing from 4/18 to 14/18 and strict H80
+passing from 1/18 to 13/18. The latent-inferred dynamic-over-static control remained 0/9, which is
+the direct motivation for the condition/history factorization in Phase 2. Near-threshold failures
+remain failures; only numerical-resolution equality is handled with dtype-aware comparison
+tolerance.
 
 ### Phase-1 r1 revision after the first formal run
 

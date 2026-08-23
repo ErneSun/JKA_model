@@ -112,11 +112,25 @@ def evaluate_metric_gate(
         )
     if spec.direction is MetricDirection.LOWER_IS_BETTER:
         effective_limit = min(value for _, value in limits)
-        passed = candidate <= effective_limit
+        relation_scale = max(
+            abs(candidate),
+            abs(effective_limit),
+            spec.resolution_floor,
+            1.0e-12,
+        )
+        numerical_tolerance = 8.0 * 2.0**-23 * relation_scale
+        passed = candidate <= effective_limit + numerical_tolerance
         relation = "<="
     else:
         effective_limit = max(value for _, value in limits)
-        passed = candidate >= effective_limit
+        relation_scale = max(
+            abs(candidate),
+            abs(effective_limit),
+            spec.resolution_floor,
+            1.0e-12,
+        )
+        numerical_tolerance = 8.0 * 2.0**-23 * relation_scale
+        passed = candidate >= effective_limit - numerical_tolerance
         relation = ">="
     return GateResult(
         spec.name,
@@ -131,6 +145,7 @@ def evaluate_metric_gate(
             "relative_margin": spec.relative_margin,
             "absolute_margin": spec.absolute_margin,
             "resolution_floor": spec.resolution_floor,
+            "comparison_tolerance": numerical_tolerance,
         },
     )
 

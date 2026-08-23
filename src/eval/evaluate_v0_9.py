@@ -11,11 +11,16 @@ import torch
 from torch.utils.data import DataLoader
 
 from jka_model.adaptive import (
+    AdaptiveRolloutDataset,
     AdaptiveWindowDataset,
+    FactorizedAdaptiveOperator,
     adaptive_latent_rollout,
+    condition_observer_metrics,
+    condition_targets,
     latent_prediction_metrics,
     load_adaptive_cache,
     load_adaptive_checkpoint,
+    matched_history_pairs,
     observable_error_attribution,
     operator_burden,
     operator_explained_fraction,
@@ -74,10 +79,60 @@ def _normalized_condition(
     return (value.to(device).float() - mean) / std
 
 
+def _condition_value(
+    raw: dict[str, Any],
+    resolved: ProjectConfig,
+    payload: dict[str, Any],
+    mode: str,
+    device: torch.device,
+) -> torch.Tensor | None:
+    phase2 = resolved.v0_9_phase2 is not None and resolved.v0_9_phase2.enabled
+    key = "condition_target" if phase2 else "condition"
+    return _normalized_condition(raw[key], payload, mode, device)
+
+
+@torch.no_grad()
+def _condition_only_rollout(
+    model: torch.nn.Module,
+    initial_history: torch.Tensor,
+    history_dts: torch.Tensor,
+    future_dts: torch.Tensor,
+    context_parameters: torch.Tensor,
+    conditions: torch.Tensor | None,
+) -> torch.Tensor:
+    """Teacher-free rollout under A0 plus only the condition branch."""
+    adapter = model.operator_adapter
+    if not isinstance(adapter, FactorizedAdaptiveOperator):
+        raise TypeError("condition-only rollout requires the Phase-2 adapter")
+    history = initial_history.clone()
+    dt_history = history_dts.clone()
+    states: list[torch.Tensor] = []
+    for index in range(future_dts.shape[1]):
+        dt = future_dts[:, index : index + 1]
+        condition = None if conditions is None else conditions[:, index]
+        context = model.context_encoder(history, dt_history, dt, context_parameters)
+        components = adapter.phase2_components(context, condition)
+        generator = adapter.nominal_generator.unsqueeze(0) + components["static_delta"]
+        transition = torch.linalg.matrix_exp(generator.float() * dt.reshape(-1, 1, 1))
+        prediction = torch.einsum("bij,bj->bi", transition, history[:, -1].float())
+        states.append(prediction)
+        if history.shape[1] > 1:
+            history = torch.cat((history[:, 1:], prediction.unsqueeze(1)), dim=1)
+            dt_history = (
+                torch.cat((dt_history[:, 1:], dt), dim=1)
+                if history.shape[1] > 2
+                else dt
+            )
+        else:
+            history = prediction.unsqueeze(1)
+    return torch.stack(states, dim=1)
+
+
 @torch.no_grad()
 def _mean_training_delta(
     model: torch.nn.Module,
     dataset: AdaptiveWindowDataset,
+    resolved: ProjectConfig,
     payload: dict[str, Any],
     mode: str,
     device: torch.device,
@@ -88,7 +143,7 @@ def _mean_training_delta(
         history_dts = raw["history_dts"].to(device).float()
         next_dt = raw["next_dt"].to(device).float()
         parameters = raw["context_parameters"].to(device).float()
-        condition = _normalized_condition(raw["condition"], payload, mode, device)
+        condition = _condition_value(raw, resolved, payload, mode, device)
         _, _, _, delta, _ = model(history_z, history_dts, next_dt, parameters, condition)
         values.append(delta.cpu())
     return torch.cat(values).mean(dim=0)
@@ -158,18 +213,23 @@ def evaluate_v0_9(
     history = int(context_payload["history_length_steps"])
     test_dataset = AdaptiveWindowDataset(cache, "test", history)
     train_dataset = AdaptiveWindowDataset(cache, "train", history)
-    static_delta = _mean_training_delta(model, train_dataset, payload, mode, selected).to(selected)
+    static_delta = _mean_training_delta(
+        model, train_dataset, resolved, payload, mode, selected
+    ).to(selected)
     nominal_a = cache.nominal_generator.to(selected)
     one_step_rows: list[dict[str, Any]] = []
     all_nominal: list[torch.Tensor] = []
     all_remaining: list[torch.Tensor] = []
+    observer_predictions: list[torch.Tensor] = []
+    observer_targets: list[torch.Tensor] = []
+    phase2_enabled = bool(resolved.v0_9_phase2 and resolved.v0_9_phase2.enabled)
     for raw in DataLoader(test_dataset, batch_size=512, shuffle=False):
         history_z = raw["history_z"].to(selected).float()
         history_dts = raw["history_dts"].to(selected).float()
         next_dt = raw["next_dt"].to(selected).float()
         parameters = raw["context_parameters"].to(selected).float()
         truth = raw["target_next"].to(selected).float()
-        condition = _normalized_condition(raw["condition"], payload, mode, selected)
+        condition = _condition_value(raw, resolved, payload, mode, selected)
         prediction, context, eta, delta, adapted_a = model(
             history_z, history_dts, next_dt, parameters, condition
         )
@@ -178,10 +238,28 @@ def evaluate_v0_9(
             nominal_a.unsqueeze(0) * next_dt.reshape(-1, 1, 1)
         )
         nominal = torch.einsum("bij,bj->bi", nominal_transition, history_z[:, -1])
-        static_transition = torch.linalg.matrix_exp(
+        global_static_transition = torch.linalg.matrix_exp(
             (nominal_a + static_delta).unsqueeze(0) * next_dt.reshape(-1, 1, 1)
         )
-        static = torch.einsum("bij,bj->bi", static_transition, history_z[:, -1])
+        global_static = torch.einsum(
+            "bij,bj->bi", global_static_transition, history_z[:, -1]
+        )
+        static = global_static
+        if phase2_enabled:
+            if not isinstance(model.operator_adapter, FactorizedAdaptiveOperator):
+                raise RuntimeError("Phase-2 evaluation loaded the wrong adapter")
+            components = model.operator_adapter.phase2_components(context, condition)
+            condition_generator = nominal_a.unsqueeze(0) + components["static_delta"]
+            static_transition = torch.linalg.matrix_exp(
+                condition_generator.float() * next_dt.reshape(-1, 1, 1)
+            )
+            static = torch.einsum("bij,bj->bi", static_transition, history_z[:, -1])
+            target = (
+                raw["condition_target"].to(selected).float()
+                - torch.as_tensor(payload["condition_mean"], device=selected).float()
+            ) / torch.as_tensor(payload["condition_std"], device=selected).float()
+            observer_predictions.append(components["q_hat"].cpu())
+            observer_targets.append(target.cpu())
         r0, _, remaining = residual_decomposition(truth, nominal, prediction)
         all_nominal.append(r0.cpu())
         all_remaining.append(remaining.cpu())
@@ -194,6 +272,9 @@ def evaluate_v0_9(
                 nominal[index : index + 1],
             )
             static_rmse = float((static[index] - truth[index]).square().mean().sqrt())
+            global_static_rmse = float(
+                (global_static[index] - truth[index]).square().mean().sqrt()
+            )
             one_step_rows.append(
                 {
                     "trajectory_id": raw["trajectory_id"][index],
@@ -202,7 +283,14 @@ def evaluate_v0_9(
                     "schedule_type": raw["schedule_type"][index],
                     **dynamic_metrics,
                     "static_latent_rmse": static_rmse,
+                    "global_static_latent_rmse": global_static_rmse,
+                    "condition_only_latent_rmse": static_rmse,
+                    "condition_only_relative_gain": 1.0
+                    - static_rmse
+                    / max(dynamic_metrics["nominal_latent_rmse"], 1e-12),
                     "static_relative_gain": 1.0
+                    - dynamic_metrics["latent_rmse"] / max(static_rmse, 1e-12),
+                    "dynamic_over_condition_only_gain": 1.0
                     - dynamic_metrics["latent_rmse"] / max(static_rmse, 1e-12),
                     "operator_burden": float(burdens[index]),
                     "symmetric_abscissa_proxy": float(proxy[index]),
@@ -220,18 +308,53 @@ def evaluate_v0_9(
             cache, "test", history, shuffle_older_history=True, shuffle_seed=7919
         )
         errors: list[float] = []
-        for raw in DataLoader(shuffled, batch_size=512, shuffle=False):
-            condition = _normalized_condition(raw["condition"], payload, mode, selected)
-            prediction, *_ = model(
-                raw["history_z"].to(selected).float(),
-                raw["history_dts"].to(selected).float(),
-                raw["next_dt"].to(selected).float(),
-                raw["context_parameters"].to(selected).float(),
-                condition,
-            )
+        real_loader = DataLoader(test_dataset, batch_size=512, shuffle=False)
+        shuffled_loader = DataLoader(shuffled, batch_size=512, shuffle=False)
+        for real_raw, raw in zip(real_loader, shuffled_loader, strict=True):
+            condition = _condition_value(real_raw, resolved, payload, mode, selected)
+            history_z = real_raw["history_z"].to(selected).float()
+            history_dts = real_raw["history_dts"].to(selected).float()
+            next_dt = real_raw["next_dt"].to(selected).float()
+            parameters = real_raw["context_parameters"].to(selected).float()
+            if phase2_enabled:
+                adapter = model.operator_adapter
+                assert isinstance(adapter, FactorizedAdaptiveOperator)
+                real_context = model.context_encoder(
+                    history_z, history_dts, next_dt, parameters
+                )
+                shuffled_context = model.context_encoder(
+                    raw["history_z"].to(selected).float(),
+                    raw["history_dts"].to(selected).float(),
+                    next_dt,
+                    parameters,
+                )
+                real_components = adapter.phase2_components(real_context, condition)
+                shuffled_components = adapter.phase2_components(
+                    real_context,
+                    condition,
+                    dynamic_context=shuffled_context,
+                    condition_override=real_components["q_used"],
+                )
+                generator = (
+                    adapter.nominal_generator.unsqueeze(0)
+                    + real_components["static_delta"]
+                    + shuffled_components["dynamic_delta"]
+                )
+                transition = torch.linalg.matrix_exp(
+                    generator.float() * next_dt.reshape(-1, 1, 1)
+                )
+                prediction = torch.einsum("bij,bj->bi", transition, history_z[:, -1])
+            else:
+                prediction, *_ = model(
+                    raw["history_z"].to(selected).float(),
+                    raw["history_dts"].to(selected).float(),
+                    next_dt,
+                    parameters,
+                    condition,
+                )
             errors.append(
                 float(
-                    (prediction - raw["target_next"].to(selected).float())
+                    (prediction - real_raw["target_next"].to(selected).float())
                     .square()
                     .mean()
                     .sqrt()
@@ -252,8 +375,14 @@ def evaluate_v0_9(
                 continue
             conditions = None
             if mode == "known":
+                trajectory_condition = (
+                    condition_targets(trajectory.conditions, trajectory.dts)
+                    if phase2_enabled
+                    else trajectory.conditions
+                )
                 conditions = (
-                    trajectory.conditions[start : start + horizon].to(selected) - condition_mean
+                    trajectory_condition[start : start + horizon].to(selected)
+                    - condition_mean
                 ) / condition_std
                 conditions = conditions.unsqueeze(0)
             bundle = adaptive_latent_rollout(
@@ -314,8 +443,14 @@ def evaluate_v0_9(
             continue
         conditions = None
         if mode == "known":
+            trajectory_condition = (
+                condition_targets(trajectory.conditions, trajectory.dts)
+                if phase2_enabled
+                else trajectory.conditions
+            )
             conditions = (
-                trajectory.conditions[start : start + longest].to(selected) - condition_mean
+                trajectory_condition[start : start + longest].to(selected)
+                - condition_mean
             ) / condition_std
             conditions = conditions.unsqueeze(0)
         bundle = adaptive_latent_rollout(
@@ -386,6 +521,120 @@ def evaluate_v0_9(
             }
             for row in observable_error_attribution(attribution_metrics)
         )
+
+    observer_metrics: dict[str, float] | None = None
+    if phase2_enabled:
+        observer_metrics = condition_observer_metrics(
+            torch.cat(observer_predictions), torch.cat(observer_targets)
+        )
+
+    paired_rows: list[dict[str, Any]] = []
+    paired_gain: float | None = None
+    paired_count = 0
+    if phase2_enabled:
+        assert resolved.v0_9_phase2 is not None
+        paired_dataset = AdaptiveRolloutDataset(
+            cache,
+            "test",
+            history,
+            resolved.v0_9_phase2.paired_horizon,
+            stride=1,
+        )
+        pair_conditions: list[torch.Tensor] = []
+        pair_latents: list[torch.Tensor] = []
+        pair_histories: list[torch.Tensor] = []
+        pair_futures: list[torch.Tensor] = []
+        full_errors: list[torch.Tensor] = []
+        condition_errors: list[torch.Tensor] = []
+        pair_ids: list[str] = []
+        residual_scale = torch.as_tensor(
+            payload["residual_training_scale"], device=selected
+        ).float()
+        for raw in DataLoader(paired_dataset, batch_size=256, shuffle=False):
+            history_z = raw["history_z"].to(selected).float()
+            history_dts = raw["history_dts"].to(selected).float()
+            future_dts = raw["future_dts"].to(selected).float()
+            parameters = raw["context_parameters"].to(selected).float()
+            target = raw["target_latents"].to(selected).float()
+            target_conditions = raw["future_condition_targets"].to(selected).float()
+            normalized_targets = (target_conditions - condition_mean) / condition_std
+            supplied = normalized_targets if mode == "known" else None
+            full = adaptive_latent_rollout(
+                model,
+                history_z,
+                history_dts,
+                future_dts,
+                parameters,
+                supplied,
+            )["adapted"][:, 1:]
+            condition_only = _condition_only_rollout(
+                model,
+                history_z,
+                history_dts,
+                future_dts,
+                parameters,
+                supplied,
+            )
+            full_errors.append(
+                ((full[:, -1] - target[:, -1]) / residual_scale)
+                .square()
+                .mean(dim=-1)
+                .sqrt()
+                .cpu()
+            )
+            condition_errors.append(
+                ((condition_only[:, -1] - target[:, -1]) / residual_scale)
+                .square()
+                .mean(dim=-1)
+                .sqrt()
+                .cpu()
+            )
+            pair_conditions.append(normalized_targets[:, 0].cpu())
+            pair_latents.append((history_z[:, -1] / residual_scale).cpu())
+            pair_histories.append((history_z[:, :-1] / residual_scale).cpu())
+            pair_futures.append((target / residual_scale).cpu())
+            pair_ids.extend(str(value) for value in raw["trajectory_id"])
+        selected_pairs = matched_history_pairs(
+            torch.cat(pair_conditions),
+            torch.cat(pair_latents),
+            torch.cat(pair_histories),
+            torch.cat(pair_futures),
+            condition_tolerance=resolved.v0_9_phase2.matched_condition_tolerance,
+            latent_tolerance=resolved.v0_9_phase2.matched_latent_tolerance,
+            minimum_history_separation=(
+                resolved.v0_9_phase2.minimum_history_separation
+            ),
+            minimum_future_separation=(
+                resolved.v0_9_phase2.minimum_future_separation
+            ),
+            group_ids=pair_ids,
+        )
+        full_error = torch.cat(full_errors)
+        condition_error = torch.cat(condition_errors)
+        gains: list[float] = []
+        for pair_index, pair in enumerate(selected_pairs):
+            indices = torch.tensor((pair.first, pair.second), dtype=torch.long)
+            full_rmse = float(full_error.index_select(0, indices).mean())
+            condition_rmse = float(condition_error.index_select(0, indices).mean())
+            gain = 1.0 - full_rmse / max(condition_rmse, 1.0e-12)
+            gains.append(gain)
+            paired_rows.append(
+                {
+                    "pair_index": pair_index,
+                    "first_trajectory_id": pair_ids[pair.first],
+                    "second_trajectory_id": pair_ids[pair.second],
+                    "condition_distance": pair.condition_distance,
+                    "latent_distance": pair.latent_distance,
+                    "history_distance": pair.history_distance,
+                    "future_separation": pair.future_separation,
+                    "full_dynamic_rmse": full_rmse,
+                    "condition_only_rmse": condition_rmse,
+                    "dynamic_gain": gain,
+                }
+            )
+        paired_count = len(gains)
+        if paired_count >= resolved.v0_9_phase2.minimum_identifiable_pairs:
+            paired_gain = sum(gains) / paired_count
 
     horizon_summary: dict[str, dict[str, Any]] = {}
     for horizon in resolved.v0_9_evaluation.rollout_horizons:
@@ -480,6 +729,9 @@ def evaluate_v0_9(
     dynamic_over_static = sum(float(row["static_relative_gain"]) for row in one_step_rows) / len(
         one_step_rows
     )
+    condition_only_gain = sum(
+        float(row["condition_only_relative_gain"]) for row in one_step_rows
+    ) / len(one_step_rows)
     one_step_gate = evaluate_metric_gate(
         one_step_gain,
         MetricGateSpec(
@@ -504,6 +756,70 @@ def evaluate_v0_9(
             threshold=resolved.v0_9_evaluation.min_dynamic_over_static_gain,
         ),
     )
+    condition_only_gate = evaluate_metric_gate(
+        condition_only_gain,
+        MetricGateSpec(
+            "condition_only_over_nominal",
+            MetricDirection.HIGHER_IS_BETTER,
+            threshold=resolved.v0_9_evaluation.material_relative_gain,
+        ),
+    )
+    observer_gate = GateResult(
+        "condition_observer",
+        GateStatus.PASS,
+        None,
+        None,
+        "Phase 2 is disabled",
+    )
+    paired_gate = GateResult(
+        "paired_history_gain",
+        GateStatus.PASS,
+        None,
+        None,
+        "Phase 2 is disabled",
+    )
+    if phase2_enabled:
+        assert resolved.v0_9_phase2 is not None and observer_metrics is not None
+        observer_rmse_gate = evaluate_metric_gate(
+            observer_metrics["normalized_rmse"],
+            MetricGateSpec(
+                "condition_observer_rmse",
+                MetricDirection.LOWER_IS_BETTER,
+                threshold=resolved.v0_9_phase2.max_condition_observer_normalized_rmse,
+            ),
+        )
+        observer_r2_gate = evaluate_metric_gate(
+            observer_metrics["minimum_r2"],
+            MetricGateSpec(
+                "condition_observer_r2",
+                MetricDirection.HIGHER_IS_BETTER,
+                threshold=resolved.v0_9_phase2.min_condition_observer_r2,
+            ),
+        )
+        observer_gate = aggregate_gate_results(
+            "condition_observer",
+            [observer_rmse_gate, observer_r2_gate],
+            required_pass_fraction=1.0,
+            minimum_count=2,
+        )
+        if paired_gain is None:
+            paired_gate = GateResult(
+                "paired_history_gain",
+                GateStatus.INCONCLUSIVE,
+                None,
+                resolved.v0_9_phase2.min_paired_dynamic_gain,
+                f"only {paired_count} matched pairs; requires "
+                f"{resolved.v0_9_phase2.minimum_identifiable_pairs}",
+            )
+        else:
+            paired_gate = evaluate_metric_gate(
+                paired_gain,
+                MetricGateSpec(
+                    "paired_history_gain",
+                    MetricDirection.HIGHER_IS_BETTER,
+                    threshold=resolved.v0_9_phase2.min_paired_dynamic_gain,
+                ),
+            )
     if str(context_payload["residual_route"]) == "R3":
         history_gate = evaluate_metric_gate(
             float("nan") if shuffled_gain is None else shuffled_gain,
@@ -521,11 +837,14 @@ def evaluate_v0_9(
             None,
             "R2 route does not require a history-shuffle control",
         )
+    control_items = [dynamic_gate, history_gate]
+    if phase2_enabled:
+        control_items.extend((observer_gate, paired_gate))
     controls_gate = aggregate_gate_results(
         "dynamic_controls",
-        [dynamic_gate, history_gate],
+        control_items,
         required_pass_fraction=1.0,
-        minimum_count=2,
+        minimum_count=len(control_items),
     )
     controls_pass = controls_gate.passed
     scientific_gates = {
@@ -534,7 +853,10 @@ def evaluate_v0_9(
             one_step_gate,
             operator_gate,
             dynamic_gate,
+            condition_only_gate,
             history_gate,
+            observer_gate,
+            paired_gate,
             controls_gate,
             observable_gate,
             representation_gate,
@@ -550,7 +872,7 @@ def evaluate_v0_9(
         and burden_pass
     )
     decision = {
-        "schema_version": 2,
+        "schema_version": 3,
         "backbone_seed": int(payload["backbone_seed"]),
         "context_init_seed": int(payload["context_init_seed"]),
         "operator_init_seed": int(payload["operator_init_seed"]),
@@ -561,9 +883,18 @@ def evaluate_v0_9(
         "one_step_relative_gain": one_step_gain,
         "operator_explained_fraction": gamma,
         "dynamic_over_static_gain": dynamic_over_static,
+        "dynamic_over_condition_only_gain": dynamic_over_static,
+        "condition_only_over_nominal_gain": condition_only_gain,
+        "paired_history_gain": paired_gain,
+        "paired_history_pair_count": paired_count,
+        "condition_observer_metrics": observer_metrics,
         "history_over_shuffled_gain": shuffled_gain,
         "operator_explained_status": operator_gate.status.value,
         "dynamic_over_static_status": dynamic_gate.status.value,
+        "dynamic_over_condition_only_status": dynamic_gate.status.value,
+        "condition_only_status": condition_only_gate.status.value,
+        "condition_observer_status": observer_gate.status.value,
+        "paired_identifiability_status": paired_gate.status.value,
         "controls_status": "PASS" if controls_pass else "FAIL",
         "closed_loop_by_horizon": horizon_summary,
         "all_horizons_status": "PASS" if all_horizons_pass else "FAIL",
@@ -578,6 +909,19 @@ def evaluate_v0_9(
         else "OPERATOR_OPTIMIZATION_IDENTIFIABLE",
         "scientific_gates": scientific_gates,
         "adaptive_koopman": "SUPPORTED" if supported else "NOT_SUPPORTED",
+        "parameterized_koopman": (
+            "SUPPORTED" if condition_only_gate.passed else "NOT_SUPPORTED"
+        ),
+        "history_adaptation": "SUPPORTED" if controls_pass else "NOT_SUPPORTED",
+        "phase2_classification": (
+            "DYNAMIC_ADAPTIVE_KOOPMAN_SUPPORTED"
+            if controls_pass
+            else "PARAMETERIZED_KOOPMAN_SUPPORTED; HISTORY_ADAPTATION_NOT_REQUIRED"
+            if condition_only_gate.passed and observer_gate.passed
+            else "LATENT_CONDITION_NOT_IDENTIFIABLE"
+            if not observer_gate.passed
+            else "PHASE2_NOT_SUPPORTED"
+        ),
         "scientific_joint_pass": supported,
         "claims": {
             "backbone_frozen": True,
@@ -586,6 +930,9 @@ def evaluate_v0_9(
             "additive_residual_enabled": False,
             "persistent_z_R_present": False,
             "phase1_error_attribution_complete": bool(attribution_rows),
+            "phase2_factorized_operator": phase2_enabled,
+            "condition_centered_history_innovation": phase2_enabled,
+            "innovation_variance_floor": False,
         },
     }
     destination = Path(output_dir)
@@ -596,6 +943,27 @@ def evaluate_v0_9(
     _write_csv(evaluation / "physical_metrics.csv", physical_rows)
     _write_csv(evaluation / "observable_gate_results.csv", observable_gate_rows)
     _write_csv(evaluation / "error_attribution.csv", attribution_rows)
+    if phase2_enabled:
+        _write_csv(evaluation / "matched_history_pairs.csv", paired_rows)
+        (evaluation / "condition_observer_metrics.json").write_text(
+            json.dumps(observer_metrics, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (evaluation / "matched_history_pairs.json").write_text(
+            json.dumps(
+                {
+                    "pair_count": paired_count,
+                    "minimum_required": resolved.v0_9_phase2.minimum_identifiable_pairs,
+                    "paired_dynamic_gain": paired_gain,
+                    "status": paired_gate.status.value,
+                    "pairs": paired_rows,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     attribution_summary = {
         "status": "COMPLETE" if attribution_rows else "INCOMPLETE",
         "representation_blocked": representation_blocked,
