@@ -68,6 +68,10 @@ def adaptive_latent_rollout(
         prediction, eta, gate, delta, adapted = model.operator_adapter.step_with_gate(
             latent_buffer[:, -1], context, next_dt, current_condition
         )
+        if not torch.isfinite(prediction).all():
+            raise FloatingPointError(
+                f"adaptive rollout became non-finite at step {index + 1}"
+            )
         with torch.autocast(device_type=prediction.device.type, enabled=False):
             transition = torch.linalg.matrix_exp(
                 nominal.float().unsqueeze(0) * next_dt.reshape(-1, 1, 1).float()

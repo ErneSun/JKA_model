@@ -206,6 +206,8 @@ class FactorizedAdaptiveOperator(nn.Module):
         self.rank = adaptive.rank
         self.static_rank = phase2.static_rank
         self.dynamic_rank = phase2.dynamic_rank
+        self.observer_output_limit = phase2.observer_output_limit
+        self.symmetric_delta_budget = phase2.symmetric_delta_budget
         self.condition_mode = adaptive.condition_mode
         self.normalize_factors = adaptive.normalize_factors
         self.bounded_coordinates = adaptive.bounded_coordinates
@@ -284,7 +286,20 @@ class FactorizedAdaptiveOperator(nn.Module):
     def condition_prediction(self, context: Tensor) -> Tensor:
         if context.ndim != 2 or context.shape[1] != self.context_dim:
             raise ValueError("context must have shape [B,d_c]")
-        return self.condition_observer(context)
+        raw = self.condition_observer(context)
+        return self.observer_output_limit * torch.tanh(
+            raw / self.observer_output_limit
+        )
+
+    @staticmethod
+    def _limit_symmetric_growth(delta: Tensor, budget: float) -> tuple[Tensor, Tensor]:
+        """Scale a low-rank increment so its logarithmic-norm burden is bounded."""
+        symmetric = 0.5 * (delta + delta.transpose(-1, -2))
+        # Frobenius norm upper-bounds the spectral norm and has a stable,
+        # epsilon-regularized derivative at the exact zero initialization.
+        burden = symmetric.square().sum(dim=(-2, -1)).add(1.0e-12).sqrt()
+        scale = torch.clamp(budget / burden, max=1.0)
+        return delta * scale[:, None, None], scale[:, None]
 
     def phase2_components(
         self,
@@ -306,7 +321,9 @@ class FactorizedAdaptiveOperator(nn.Module):
         else:
             if condition is not None:
                 raise ValueError("latent-inferred Phase-2 mode forbids condition input")
-            q_used = q_hat
+            # Q is a supervised physical observer, not a free latent coordinate.
+            # Stop operator gradients from distorting its physical semantics.
+            q_used = q_hat.detach()
         history_context = context if dynamic_context is None else dynamic_context
         if history_context.shape != context.shape:
             raise ValueError("Phase-2 dynamic context shape mismatch")
@@ -340,6 +357,13 @@ class FactorizedAdaptiveOperator(nn.Module):
         dynamic_delta = torch.einsum(
             "ir,br,jr->bij", dynamic_left, dynamic_coordinates, dynamic_right
         )
+        branch_budget = 0.5 * self.symmetric_delta_budget
+        static_delta, static_stability_scale = self._limit_symmetric_growth(
+            static_delta, branch_budget
+        )
+        dynamic_delta, dynamic_stability_scale = self._limit_symmetric_growth(
+            dynamic_delta, branch_budget
+        )
         return {
             "q_hat": q_hat,
             "q_used": q_used,
@@ -351,6 +375,8 @@ class FactorizedAdaptiveOperator(nn.Module):
             "gate": torch.maximum(static_gate, dynamic_gate),
             "static_gate": static_gate,
             "dynamic_gate": dynamic_gate,
+            "static_stability_scale": static_stability_scale,
+            "dynamic_stability_scale": dynamic_stability_scale,
         }
 
     def adaptation_parameters(

@@ -2,7 +2,7 @@
 
 Implementation status: **PHASE 2 CONDITION/HISTORY FACTORIZATION IMPLEMENTED; FORMAL GPU SCIENCE PENDING**.
 
-Local targeted status: **PASS (58 relevant tests across V0.9 and config/workflow checks)**.
+Local targeted status: **PASS (60 relevant tests across V0.9 and config/workflow checks)**.
 
 首次完整 GPU session `v09-full-20260821T033247Z` 的 workflow 为 PASS，但 scientific mechanism 为
 `NOT_SUPPORTED`：短期改善，H32/H80 与 physics 退化，selected rank 达到旧候选上限 8。该证据不会被覆盖。

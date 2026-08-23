@@ -930,6 +930,14 @@ def train_v0_9(
                             condition_std,
                             resolved,
                         )
+                if not bool(torch.isfinite(loss)):
+                    nonfinite_terms = sorted(
+                        name for name, value in terms.items() if not bool(torch.isfinite(value))
+                    )
+                    raise FloatingPointError(
+                        "V0.9 loss became non-finite "
+                        f"at epoch={epoch + 1} batch={batch_index}; terms={nonfinite_terms}"
+                    )
                 audit_interval = resolved.v0_9_training.gradient_audit_interval
                 if (
                     stabilized
@@ -1008,7 +1016,9 @@ def train_v0_9(
                     scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), resolved.v0_9_training.gradient_clip_norm
+                    model.parameters(),
+                    resolved.v0_9_training.gradient_clip_norm,
+                    error_if_nonfinite=True,
                 )
                 scaler.step(optimizer)
                 scaler.update()

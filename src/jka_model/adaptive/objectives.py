@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor
+from torch.nn import functional as F
 
 from jka_model.adaptive.identifiability import conditional_centering_loss
 from jka_model.adaptive.models import (
@@ -148,6 +149,10 @@ def differentiable_adaptive_rollout(
         prediction, eta, gate, delta, adapted = model.operator_adapter.step_with_gate(
             latent_buffer[:, -1], context, next_dt, condition
         )
+        if not torch.isfinite(prediction).all():
+            raise FloatingPointError(
+                f"Phase-2 differentiable rollout became non-finite at step {index + 1}"
+            )
         with torch.autocast(device_type=prediction.device.type, enabled=False):
             nominal_transition = torch.linalg.matrix_exp(
                 nominal.float().unsqueeze(0) * next_dt.reshape(-1, 1, 1).float()
@@ -312,7 +317,9 @@ def adaptive_stabilization_objective(
         observer_target = (
             condition_source[:, :required_steps] - condition_mean
         ) / condition_std
-        observer_loss = (rollout["q_hat"] - observer_target).square().mean()
+        observer_loss = F.smooth_l1_loss(
+            rollout["q_hat"], observer_target, beta=1.0
+        )
         selected_indices = sorted(
             {
                 0,

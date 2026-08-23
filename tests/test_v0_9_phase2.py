@@ -5,6 +5,7 @@ import torch
 from jka_model.adaptive import (
     AdaptiveKoopmanModel,
     FactorizedAdaptiveOperator,
+    adaptive_latent_rollout,
     adaptive_stabilization_objective,
     condition_observer_metrics,
     condition_targets,
@@ -93,6 +94,29 @@ def test_condition_branch_is_invariant_to_history_after_condition_is_fixed() -> 
     second = adapter.phase2_components(torch.randn(3, 8), condition)
     assert torch.equal(first["static_coordinates"], second["static_coordinates"])
     assert torch.equal(first["static_delta"], second["static_delta"])
+
+
+def test_latent_condition_is_bounded_detached_and_generator_growth_limited() -> None:
+    adapter = _operator("latent_inferred")
+    with torch.no_grad():
+        adapter.static_coordinate_head[-1].bias.fill_(100.0)
+        adapter.dynamic_coordinate_head[-1].bias.fill_(100.0)
+    components = adapter.phase2_components(1.0e6 * torch.randn(4, 8))
+    assert torch.isfinite(components["q_hat"]).all()
+    assert (
+        float(components["q_hat"].detach().abs().max())
+        <= adapter.observer_output_limit
+    )
+    assert components["q_hat"].requires_grad
+    assert not components["q_used"].requires_grad
+    for name in ("static_delta", "dynamic_delta"):
+        delta = components[name]
+        symmetric = 0.5 * (delta + delta.transpose(-1, -2))
+        burden = torch.linalg.matrix_norm(symmetric, ord=2)
+        assert (
+            float(burden.detach().max())
+            <= 0.5 * adapter.symmetric_delta_budget + 1.0e-6
+        )
 
 
 def test_condition_rate_is_causal_and_centering_has_no_variance_floor() -> None:
@@ -196,7 +220,9 @@ def test_phase2_rollout_objective_connects_observer_and_factorized_operator() ->
         "latent_inferred",
         curriculum_state(training, 1, validation=True),
         torch.ones(4, dtype=torch.bool),
-        V09Phase2Config(static_rank=2, dynamic_rank=2, observer_width=12),
+        V09Phase2Config(
+            enabled=True, static_rank=2, dynamic_rank=2, observer_width=12
+        ),
     )
     assert torch.isfinite(result.total)
     assert set(
@@ -204,6 +230,34 @@ def test_phase2_rollout_objective_connects_observer_and_factorized_operator() ->
     ).issubset(result.terms)
     result.total.backward()
     assert model.operator_adapter.condition_observer[-1].weight.grad is not None
+
+
+def test_growth_trust_region_keeps_h80_closed_loop_finite() -> None:
+    context_config = V08ContextConfig(
+        family="history_mlp", context_dim=8, history_length=3, width=12, heads=1
+    )
+    context = build_dynamic_context_model(
+        context_config,
+        family="history_mlp",
+        latent_dim=10,
+        parameter_dim=3,
+        history=3,
+    ).context_encoder
+    adapter = _operator("latent_inferred")
+    with torch.no_grad():
+        adapter.static_coordinate_head[-1].bias.fill_(100.0)
+        adapter.dynamic_coordinate_head[-1].bias.fill_(100.0)
+    model = AdaptiveKoopmanModel(context, adapter).eval()
+    result = adaptive_latent_rollout(
+        model,
+        torch.randn(2, 3, 10),
+        torch.full((2, 2), 0.15),
+        torch.full((2, 80), 0.15),
+        torch.randn(2, 3),
+        None,
+    )
+    assert torch.isfinite(result["adapted"]).all()
+    assert float(result["adapted"].abs().max()) < 100.0
 
 
 def test_gate_accepts_float32_boundary_noise_but_not_a_material_miss() -> None:

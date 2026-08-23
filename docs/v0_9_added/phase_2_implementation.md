@@ -7,6 +7,39 @@
 - Formal three-seed GPU evidence: pending
 - Scientific claim: not assigned before the formal report
 
+### Stability revision after the first formal attempt
+
+Session `v09-added-p2-identifiable-20260823T100133Z` completed all eight rank-sweep runs and five
+formal train/evaluation pairs, then failed for backbone seed 47, latent mode, operator seed 907.
+The first reported non-finite tensor entered the frozen context encoder during validation rollout;
+the cache and earlier runs were valid. Seed 47's trajectory split places abrupt up/down schedules
+in validation while training contains smooth rates, so the normalized condition-rate observer must
+extrapolate. Joint operator gradients could then distort the observer and amplify a closed-loop
+state before the next context call.
+
+The revision applies three problem-independent corrections:
+
+1. normalized observer output is smoothly bounded and trained with Huber loss;
+2. latent `q_hat` is stop-gradient when consumed by the operator, so only its physical supervision
+   trains `Q`;
+3. each low-rank branch is scaled by a logarithmic-norm trust region, preserving its dyadic rank
+   while bounding the symmetric generator increment.
+
+The last bound uses
+
+\[
+\widetilde{\Delta A}_b=s_b\Delta A_b,\qquad
+s_b=\min\left(1,\frac{\beta/2}
+{\sqrt{\|\operatorname{sym}(\Delta A_b)\|_F^2+\epsilon}}\right),
+\quad b\in\{s,d\}.
+\]
+
+Because the Frobenius norm upper-bounds the spectral norm,
+`lambda_max(sym(Delta A_static + Delta A_dynamic)) <= beta` by the triangle inequality, without
+adding a new state residual or altering `A0`. Training also rejects non-finite losses/gradients at
+their originating epoch and rollout step rather than surfacing them later as a generic context
+error.
+
 Phase 2 addresses the remaining ambiguity in Phase 1: a time-varying operator can improve because
 it recognizes the current operating condition, even when older history carries no additional
 predictive information. The implementation therefore separates those two mechanisms without

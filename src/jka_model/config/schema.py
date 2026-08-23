@@ -2350,6 +2350,8 @@ class V09Phase2Config:
     observer_width: int = 64
     observer_depth: int = 2
     observer_warmup_fraction: float = 0.20
+    observer_output_limit: float = 16.0
+    symmetric_delta_budget: float = 0.05
     lambda_condition_observer: float = 1.0
     lambda_condition_centering: float = 0.10
     lambda_basis_cross_orthogonality: float = 0.10
@@ -2388,6 +2390,8 @@ class V09Phase2Config:
             self.lambda_condition_centering,
             self.lambda_basis_cross_orthogonality,
             self.conditional_centering_bandwidth,
+            self.observer_output_limit,
+            self.symmetric_delta_budget,
             self.max_condition_observer_normalized_rmse,
             self.matched_condition_tolerance,
             self.matched_latent_tolerance,

@@ -38,6 +38,8 @@ v0_9_phase2:
   observer_width: 64
   observer_depth: 2
   observer_warmup_fraction: 0.20
+  observer_output_limit: 16.0
+  symmetric_delta_budget: 0.05
   lambda_condition_observer: 1.0
   lambda_condition_centering: 0.10
   lambda_basis_cross_orthogonality: 0.10
