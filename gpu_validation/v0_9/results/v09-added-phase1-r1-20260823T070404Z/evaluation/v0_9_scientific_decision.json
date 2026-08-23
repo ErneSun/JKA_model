@@ -1,0 +1,326 @@
+{
+  "adaptive_mechanism_result": "NOT_SUPPORTED",
+  "claims": {
+    "A0_frozen": true,
+    "additive_residual_enabled": false,
+    "backbone_frozen": true,
+    "context_frozen": true,
+    "persistent_z_R_present": false,
+    "unseen_condition_generalization_tested": false
+  },
+  "context_family": "history_mlp",
+  "dynamic_operator_adaptation": "NOT_SUPPORTED",
+  "evidence_tier": "EXPLORATORY_CONDITIONAL",
+  "formal_run_count": 18,
+  "independent_gate_support": {
+    "dynamic_operator_adaptation": {
+      "backbone_support_fraction": 0.0,
+      "inconclusive_backbone_count": 0,
+      "nested_seed_support": {
+        "47": {
+          "joint_status": "FAIL",
+          "joint_supported": false,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 0.6666666666666666,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 0.0,
+              "status": "FAIL",
+              "supported": false
+            }
+          }
+        },
+        "53": {
+          "joint_status": "FAIL",
+          "joint_supported": false,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 0.6666666666666666,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 0.0,
+              "status": "FAIL",
+              "supported": false
+            }
+          }
+        },
+        "59": {
+          "joint_status": "FAIL",
+          "joint_supported": false,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 0.6666666666666666,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 0.0,
+              "status": "FAIL",
+              "supported": false
+            }
+          }
+        }
+      },
+      "status": "NOT_SUPPORTED"
+    },
+    "observables": {
+      "backbone_support_fraction": 0.6666666666666666,
+      "inconclusive_backbone_count": 0,
+      "nested_seed_support": {
+        "47": {
+          "joint_status": "FAIL",
+          "joint_supported": false,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 0.0,
+              "status": "FAIL",
+              "supported": false
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 0.6666666666666666,
+              "status": "PASS",
+              "supported": true
+            }
+          }
+        },
+        "53": {
+          "joint_status": "PASS",
+          "joint_supported": true,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            }
+          }
+        },
+        "59": {
+          "joint_status": "PASS",
+          "joint_supported": true,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            }
+          }
+        }
+      },
+      "status": "SUPPORTED"
+    },
+    "operator_explained_residual": {
+      "backbone_support_fraction": 1.0,
+      "inconclusive_backbone_count": 0,
+      "nested_seed_support": {
+        "47": {
+          "joint_status": "PASS",
+          "joint_supported": true,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            }
+          }
+        },
+        "53": {
+          "joint_status": "PASS",
+          "joint_supported": true,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            }
+          }
+        },
+        "59": {
+          "joint_status": "PASS",
+          "joint_supported": true,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            }
+          }
+        }
+      },
+      "status": "SUPPORTED"
+    },
+    "representation_physical_floor": {
+      "backbone_support_fraction": 1.0,
+      "inconclusive_backbone_count": 0,
+      "nested_seed_support": {
+        "47": {
+          "joint_status": "PASS",
+          "joint_supported": true,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            }
+          }
+        },
+        "53": {
+          "joint_status": "PASS",
+          "joint_supported": true,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            }
+          }
+        },
+        "59": {
+          "joint_status": "PASS",
+          "joint_supported": true,
+          "modes": {
+            "known": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            },
+            "latent_inferred": {
+              "inconclusive_count": 0,
+              "operator_init_pass_fraction": 1.0,
+              "status": "PASS",
+              "supported": true
+            }
+          }
+        }
+      },
+      "status": "SUPPORTED"
+    }
+  },
+  "known_condition_adaptation": "SUPPORTED",
+  "latent_inferred_adaptation": "NOT_SUPPORTED",
+  "long_rollout_stability": "FAIL",
+  "low_rank_operator_adaptation": "NOT_SUPPORTED",
+  "nested_seed_support": {
+    "47": {
+      "joint_supported": false,
+      "modes": {
+        "known": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        },
+        "latent_inferred": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        }
+      }
+    },
+    "53": {
+      "joint_supported": false,
+      "modes": {
+        "known": {
+          "operator_init_pass_fraction": 0.6666666666666666,
+          "supported": true
+        },
+        "latent_inferred": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        }
+      }
+    },
+    "59": {
+      "joint_supported": false,
+      "modes": {
+        "known": {
+          "operator_init_pass_fraction": 0.6666666666666666,
+          "supported": true
+        },
+        "latent_inferred": {
+          "operator_init_pass_fraction": 0.0,
+          "supported": false
+        }
+      }
+    }
+  },
+  "observable_objective": "cylinder_wake_2d_observables",
+  "observable_support": "SUPPORTED",
+  "operator_explained_residual": "SUPPORTED",
+  "phase1_diagnosis": "OPERATOR_OPTIMIZATION_IDENTIFIABLE",
+  "phase1_diagnostic_artifacts": "COMPLETE",
+  "phase1_error_attribution": "COMPLETE",
+  "physical_problem": "cylinder_wake_2d",
+  "physics_status": "FAIL",
+  "representation_physical_floor": "SUPPORTED",
+  "schema_version": 2,
+  "scientific_backbone_support_fraction": 0.0,
+  "scientific_seed_threshold": 0.6666666666666666,
+  "selected_rank": 8,
+  "v0_8_handoff_policy": "supported",
+  "v0_8_route": "R3",
+  "v0_8_strict_readiness": "NOT_READY",
+  "v1_0_readiness": "NOT_READY",
+  "v1_0_ready": false,
+  "v1_0_seed_threshold": 1.0,
+  "variable_condition_data": "PASS"
+}

@@ -1,0 +1,20 @@
+{
+  "all_required_stages_completed": true,
+  "formal_evaluation_run_count": 18,
+  "formal_training_run_count": 18,
+  "git_commit": "995d68c306aa48fda48e16f41f620e1e17237c59",
+  "output_paths": {
+    "compact_result": "/home/ai_group/Documents/files/SQ/JKA_model/gpu_validation/v0_9/results/v09-added-phase1-r1-20260823T070404Z",
+    "raw_run": "/home/ai_group/Documents/files/SQ/JKA_model/runs/v0_9/v09-added-phase1-r1-20260823T070404Z",
+    "report": "/home/ai_group/Documents/files/SQ/JKA_model/gpu_validation/v0_9/results/v09-added-phase1-r1-20260823T070404Z/report.md"
+  },
+  "rank_sweep_run_count": 8,
+  "requested_validation_id": "v09-added-phase1-r1-20260823T070404Z",
+  "resolved_validation_id": "v09-added-phase1-r1-20260823T070404Z",
+  "scientific_status": "NOT_SUPPORTED",
+  "selected_rank": 8,
+  "status": "PASS",
+  "v0_8_handoff_policy": "supported",
+  "v0_8_validation_id": "v08-final-20260820T111016Z",
+  "v1_0_readiness": "NOT_READY"
+}
