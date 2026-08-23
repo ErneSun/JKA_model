@@ -281,7 +281,6 @@ def adaptive_stabilization_objective(
             "burden": burden,
             "burden_mean": burdens.mean(),
             "burden_max": burdens.max(),
-            "burden_max": burdens.max(),
             "smoothness": smoothness,
             "stability": stability,
             "propagator_growth": growth,

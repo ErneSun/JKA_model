@@ -1973,7 +1973,11 @@ class V09TrainingConfig:
     augmented_lagrangian_max_penalty: float = 100.0
     augmented_lagrangian_improvement_ratio: float = 0.9
     augmented_lagrangian_update_interval: int = 1
+    augmented_lagrangian_dual_step_size: float = 1.0
+    augmented_lagrangian_max_multiplier: float = 100.0
     gradient_audit_interval: int = 5
+    gradient_conflict_method: str = "none"
+    gradient_conflict_start_fraction: float = 0.0
     rank_sweep_epochs: int = 40
     gradient_clip_norm: float = 1.0
     patience: int = 16
@@ -2018,6 +2022,9 @@ class V09TrainingConfig:
             self.augmented_lagrangian_penalty_growth,
             self.augmented_lagrangian_max_penalty,
             self.augmented_lagrangian_improvement_ratio,
+            self.augmented_lagrangian_dual_step_size,
+            self.augmented_lagrangian_max_multiplier,
+            self.gradient_conflict_start_fraction,
             *self.observable_component_weights,
             *self.observable_horizon_weights,
             *self.observable_horizon_probabilities,
@@ -2100,6 +2107,10 @@ class V09TrainingConfig:
             raise ValueError("V0.9 augmented-Lagrangian maximum penalty is too small")
         if not 0 < self.augmented_lagrangian_improvement_ratio <= 1:
             raise ValueError("invalid V0.9 augmented-Lagrangian improvement ratio")
+        if self.augmented_lagrangian_dual_step_size <= 0:
+            raise ValueError("invalid V0.9 augmented-Lagrangian dual step")
+        if self.augmented_lagrangian_max_multiplier <= 0:
+            raise ValueError("invalid V0.9 augmented-Lagrangian multiplier cap")
         if min(
             self.observable_scale_max_samples,
             self.force_window_stride,
@@ -2108,6 +2119,10 @@ class V09TrainingConfig:
             raise ValueError("invalid V0.9 phase-1 interval or sample count")
         if self.precision not in {"fp32", "amp_fp16", "amp_bf16"}:
             raise ValueError("invalid V0.9 precision")
+        if self.gradient_conflict_method not in {"none", "pcgrad"}:
+            raise ValueError("invalid V0.9 gradient conflict method")
+        if not 0 <= self.gradient_conflict_start_fraction <= 1:
+            raise ValueError("invalid V0.9 gradient conflict start fraction")
         if self.phase1_enabled:
             if self.lambda_physics <= 0 or not self.observable_horizons:
                 raise ValueError("phase-1 V0.9 requires physical observable training")
@@ -2178,10 +2193,12 @@ class V09TrainingConfig:
             "precision",
             "observable_scale_method",
             "phase1_enabled",
+            "gradient_conflict_method",
         }:
             values[name] = float(values[name])
         values["precision"] = str(values["precision"])
         values["observable_scale_method"] = str(values["observable_scale_method"])
+        values["gradient_conflict_method"] = str(values["gradient_conflict_method"])
         values["phase1_enabled"] = bool(values["phase1_enabled"])
         return cls(**values)
 

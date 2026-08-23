@@ -34,12 +34,13 @@ from jka_model.config import ProjectConfig, load_config, save_config
 from jka_model.constants import ARCHITECTURE_REVISION, CHECKPOINT_SCHEMA_VERSION, PROJECT_VERSION
 from jka_model.context import build_dynamic_context_model
 from jka_model.context.checkpoint import load_context_checkpoint
-from jka_model.residual.cache import file_sha256
 from jka_model.observables import RobustObservableScaleState
 from jka_model.optimization import (
     InequalityAugmentedLagrangian,
     gradient_cosine_matrix,
+    pcgrad_backward,
 )
+from jka_model.residual.cache import file_sha256
 from jka_model.training import (
     TrainStage,
     assert_optimizer_matches_trainable_params,
@@ -326,7 +327,7 @@ def _stabilized_loss_bundle(
                 component = name.removeprefix("observable_")
                 if training.phase1_enabled and component in {"divergence", "boundary"}:
                     constraint_values[component].append(
-                        weight * (value - allowed) / (baseline.abs() + floor)
+                        (value - allowed) / (baseline.abs() + floor)
                     )
                 elif training.phase1_enabled and component not in {"lift", "drag"}:
                     primary_observable = primary_observable + weight * component_weights.get(
@@ -384,13 +385,13 @@ def _stabilized_loss_bundle(
             total = total + training.lambda_physics * state.physics_scale * primary_observable
             constraints = {
                 name: (
-                    torch.stack(values).sum() / weight_sum
+                    torch.stack(values).max()
                     if values
                     else total.new_zeros(())
                 )
                 for name, values in constraint_values.items()
             }
-            constraints["burden"] = terms["burden_mean"] - training.operator_burden_target
+            constraints["burden"] = terms["burden_max"] - training.operator_burden_target
             for name, value in constraints.items():
                 terms[f"constraint_{name}"] = value
             if augmented_lagrangian is None:
@@ -398,6 +399,19 @@ def _stabilized_loss_bundle(
             augmented_penalty = augmented_lagrangian.penalty(constraints)
             total = total + state.physics_scale * augmented_penalty
             terms["observable_primary"] = primary_observable
+            terms["objective_prediction"] = (
+                terms["forecast"] + training.lambda_rollout * terms["rollout"]
+            )
+            terms["objective_regularization"] = (
+                training.lambda_operator_burden * terms["orthogonality"]
+                + training.lambda_smooth * terms["smoothness"]
+                + training.lambda_stability * terms["stability"]
+                + training.lambda_propagator_growth * terms["propagator_growth"]
+            )
+            terms["objective_observable"] = (
+                training.lambda_physics * state.physics_scale * primary_observable
+            )
+            terms["objective_constraints"] = state.physics_scale * augmented_penalty
         else:
             observable_objective = (
                 physics
@@ -474,6 +488,18 @@ def _evaluate_stabilized(
             totals[name] = totals.get(name, 0.0) + float(value) * batch_count
         count += batch_count
     return {name: value / count for name, value in totals.items()}
+
+
+def _validation_selection_score(metrics: dict[str, float]) -> float:
+    """Multiplier-invariant score used for checkpoint and rank selection."""
+    return float(
+        metrics["total"]
+        - metrics.get("augmented_lagrangian", 0.0)
+        + sum(
+            max(metrics.get(f"constraint_{name}", 0.0), 0.0) ** 2
+            for name in ("divergence", "boundary", "burden")
+        )
+    )
 
 
 def train_v0_9(
@@ -553,6 +579,12 @@ def train_v0_9(
             ),
             improvement_ratio=(
                 resolved.v0_9_training.augmented_lagrangian_improvement_ratio
+            ),
+            dual_step_size=(
+                resolved.v0_9_training.augmented_lagrangian_dual_step_size
+            ),
+            maximum_multiplier=(
+                resolved.v0_9_training.augmented_lagrangian_max_multiplier
             ),
         )
     optimizer = AdamW(
@@ -646,18 +678,21 @@ def train_v0_9(
             augmented_lagrangian.load_state_dict(
                 phase1_state["augmented_lagrangian_state"]
             )
-            best_phase1_state = dict(
-                phase1_state.get(
-                    "best_augmented_lagrangian_state",
-                    phase1_state["augmented_lagrangian_state"],
-                )
+            saved_best_phase1_state = phase1_state.get(
+                "best_augmented_lagrangian_state",
+                phase1_state["augmented_lagrangian_state"],
             )
+            if not isinstance(saved_best_phase1_state, dict):
+                raise ValueError("phase-1 V0.9 resume best dual state is invalid")
+            best_phase1_state = dict(saved_best_phase1_state)
     latest = destination / "checkpoints" / "latest.pt"
     best = destination / "checkpoints" / "best_scientific_gate.pt"
 
     def checkpoint_payload(epoch: int) -> dict[str, Any]:
         if best_state is None:
             raise RuntimeError("cannot checkpoint before validation selects a state")
+        assert resolved.v0_9_adaptive is not None
+        assert resolved.v0_9_training is not None
         return {
             "schema_version": CHECKPOINT_SCHEMA_VERSION,
             "architecture_revision": ARCHITECTURE_REVISION,
@@ -746,6 +781,8 @@ def train_v0_9(
             "train_observable_noninferiority",
             "train_force_window",
             "train_propagator_growth",
+            "train_pcgrad_conflicts",
+            "train_pcgrad_comparisons",
             "validation_total",
             "validation_selection_score",
             "validation_forecast",
@@ -791,6 +828,8 @@ def train_v0_9(
                 "constraint_divergence": 0.0,
                 "constraint_boundary": 0.0,
                 "constraint_burden": 0.0,
+                "pcgrad_conflicts": 0.0,
+                "pcgrad_comparisons": 0.0,
             }
             count = 0
             constraint_count = 0
@@ -862,7 +901,38 @@ def train_v0_9(
                         gradient_records.append(record)
                         with gradient_log_path.open("a", encoding="utf-8") as audit_stream:
                             audit_stream.write(json.dumps(record, sort_keys=True) + "\n")
-                scaler.scale(loss).backward()
+                progress = epoch / max(resolved.v0_9_training.epochs - 1, 1)
+                use_pcgrad = bool(
+                    resolved.v0_9_training.gradient_conflict_method == "pcgrad"
+                    and progress
+                    >= resolved.v0_9_training.gradient_conflict_start_fraction
+                    and all(
+                        name in terms
+                        for name in (
+                            "objective_prediction",
+                            "objective_regularization",
+                            "objective_observable",
+                            "objective_constraints",
+                        )
+                    )
+                )
+                if use_pcgrad:
+                    pcgrad = pcgrad_backward(
+                        {
+                            name: scaler.scale(terms[name])
+                            for name in (
+                                "objective_prediction",
+                                "objective_regularization",
+                                "objective_observable",
+                                "objective_constraints",
+                            )
+                        },
+                        tuple(model.operator_adapter.parameters()),
+                    )
+                    sums["pcgrad_conflicts"] += pcgrad.projected_conflicts
+                    sums["pcgrad_comparisons"] += pcgrad.compared_pairs
+                else:
+                    scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), resolved.v0_9_training.gradient_clip_norm
@@ -924,13 +994,18 @@ def train_v0_9(
             if (
                 augmented_lagrangian is not None
                 and constraint_count > 0
+                and state.physics_scale >= 1.0 - 1.0e-12
                 and (epoch + 1)
                 % resolved.v0_9_training.augmented_lagrangian_update_interval
                 == 0
             ):
                 latest_constraint_diagnostics = augmented_lagrangian.update(
                     {
-                        name: sums[f"constraint_{name}"] / constraint_count
+                        # Validation evaluates every locked observable horizon,
+                        # whereas training samples one horizon for bounded memory.
+                        # Update dual variables from the deterministic worst-horizon
+                        # contract instead of a stochastic training-horizon average.
+                        name: validation[f"constraint_{name}"]
                         for name in ("divergence", "boundary", "burden")
                     }
                 )
@@ -947,13 +1022,10 @@ def train_v0_9(
                 ),
                 "train_force_window": sums["force_window"] / count,
                 "train_propagator_growth": sums["propagator_growth"] / count,
+                "train_pcgrad_conflicts": sums["pcgrad_conflicts"],
+                "train_pcgrad_comparisons": sums["pcgrad_comparisons"],
                 "validation_total": validation["total"],
-                "validation_selection_score": validation["total"]
-                - validation.get("augmented_lagrangian", 0.0)
-                + sum(
-                    max(validation.get(f"constraint_{name}", 0.0), 0.0) ** 2
-                    for name in ("divergence", "boundary", "burden")
-                ),
+                "validation_selection_score": _validation_selection_score(validation),
                 "validation_forecast": validation["forecast"],
                 "validation_rollout": validation.get("rollout", 0.0),
                 "validation_physics": validation.get("physics", 0.0),
@@ -1035,6 +1107,7 @@ def train_v0_9(
             selected,
         )
     )
+    validation["selection_score"] = _validation_selection_score(validation)
     summary = {
         "status": "PASS",
         "condition_mode": resolved.v0_9_adaptive.condition_mode,
@@ -1053,6 +1126,10 @@ def train_v0_9(
             "trust_gate": resolved.v0_9_adaptive.trust_gate,
             "frozen_decoder_observables": resolved.v0_9_training.lambda_physics > 0,
             "phase1_constrained_optimization": resolved.v0_9_training.phase1_enabled,
+            "gradient_conflict_method": (
+                resolved.v0_9_training.gradient_conflict_method
+            ),
+            "worst_horizon_constraints": resolved.v0_9_training.phase1_enabled,
         },
         "curriculum": {
             "rollout_horizons": list(resolved.v0_9_training.rollout_horizons),
@@ -1071,6 +1148,12 @@ def train_v0_9(
             "observable_horizon_probabilities": list(
                 resolved.v0_9_training.observable_horizon_probabilities
             ),
+            "gradient_conflict_start_fraction": (
+                resolved.v0_9_training.gradient_conflict_start_fraction
+            ),
+            "constraint_aggregation": "worst_horizon"
+            if resolved.v0_9_training.phase1_enabled
+            else "legacy_weighted",
         },
         "phase1": {
             "observable_scale_state": None

@@ -41,9 +41,10 @@ def test_v09_config_and_revision_id_contract(tmp_path: Path) -> None:
     assert config.v0_9_adaptive.bounded_coordinates
     assert config.v0_9_adaptive.trust_gate
     assert config.v0_9_training is not None
-    assert config.v0_9_training.rollout_horizons == (4, 8, 16, 32)
+    assert config.v0_9_training.rollout_horizons == (4, 8, 16, 32, 80)
     assert config.v0_9_training.observable_horizons == (4, 8, 16, 32, 80)
     assert config.v0_9_training.phase1_enabled
+    assert config.v0_9_training.gradient_conflict_method == "pcgrad"
     assert sum(config.v0_9_training.observable_horizon_probabilities) == 1.0
     assert config.v0_9_training.observable_names[-2:] == ("lift", "drag")
     first = create_versioned_session(tmp_path, "v09-test")
@@ -56,8 +57,18 @@ def test_rank_selection_enforces_long_horizon_and_burden_before_parsimony() -> N
     selected = select_validation_rank(
         {
             2: [
-                {"total": 1.0, "rollout_gain_h32": 0.03, "burden_max": 0.2},
-                {"total": 1.01, "rollout_gain_h32": 0.02, "burden_max": 0.25},
+                {
+                    "total": 10.0,
+                    "selection_score": 1.0,
+                    "rollout_gain_h32": 0.03,
+                    "burden_max": 0.2,
+                },
+                {
+                    "total": 10.1,
+                    "selection_score": 1.01,
+                    "rollout_gain_h32": 0.02,
+                    "burden_max": 0.25,
+                },
             ],
             4: [
                 {"total": 0.8, "rollout_gain_h32": -0.1, "burden_max": 0.2},

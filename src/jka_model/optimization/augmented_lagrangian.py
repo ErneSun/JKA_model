@@ -20,6 +20,8 @@ class InequalityAugmentedLagrangian:
         penalty_growth: float,
         maximum_penalty: float,
         improvement_ratio: float = 0.9,
+        dual_step_size: float = 1.0,
+        maximum_multiplier: float = 100.0,
     ) -> None:
         unique = tuple(dict.fromkeys(str(name) for name in names))
         if not unique or len(unique) != len(tuple(names)):
@@ -28,6 +30,8 @@ class InequalityAugmentedLagrangian:
             raise ValueError("invalid augmented-Lagrangian penalty schedule")
         if not 0 < improvement_ratio <= 1:
             raise ValueError("invalid augmented-Lagrangian improvement ratio")
+        if dual_step_size <= 0 or maximum_multiplier <= 0:
+            raise ValueError("invalid augmented-Lagrangian bounded dual update")
         self.names = unique
         self.multipliers = {name: 0.0 for name in unique}
         self.penalties = {name: float(initial_penalty) for name in unique}
@@ -35,6 +39,8 @@ class InequalityAugmentedLagrangian:
         self.penalty_growth = float(penalty_growth)
         self.maximum_penalty = float(maximum_penalty)
         self.improvement_ratio = float(improvement_ratio)
+        self.dual_step_size = float(dual_step_size)
+        self.maximum_multiplier = float(maximum_multiplier)
         self.update_count = 0
 
     def penalty(self, constraints: Mapping[str, Tensor]) -> Tensor:
@@ -70,9 +76,13 @@ class InequalityAugmentedLagrangian:
                     self.maximum_penalty,
                     self.penalties[name] * self.penalty_growth,
                 )
-            self.multipliers[name] = max(
-                0.0,
-                self.multipliers[name] + self.penalties[name] * raw,
+            self.multipliers[name] = min(
+                self.maximum_multiplier,
+                max(
+                    0.0,
+                    self.multipliers[name]
+                    + self.dual_step_size * self.penalties[name] * raw,
+                ),
             )
             self.previous_violations[name] = violation
             diagnostics[f"constraint_{name}"] = raw
@@ -94,6 +104,8 @@ class InequalityAugmentedLagrangian:
             "penalty_growth": self.penalty_growth,
             "maximum_penalty": self.maximum_penalty,
             "improvement_ratio": self.improvement_ratio,
+            "dual_step_size": self.dual_step_size,
+            "maximum_multiplier": self.maximum_multiplier,
             "update_count": self.update_count,
         }
 
@@ -105,4 +117,15 @@ class InequalityAugmentedLagrangian:
             if set(values) != set(self.names):
                 raise ValueError(f"augmented-Lagrangian checkpoint {field} mismatch")
             setattr(self, field, values)
+        for field in (
+            "penalty_growth",
+            "maximum_penalty",
+            "improvement_ratio",
+            "dual_step_size",
+            "maximum_multiplier",
+        ):
+            if field in payload and float(payload[field]) != getattr(self, field):
+                raise ValueError(
+                    f"augmented-Lagrangian checkpoint {field} configuration mismatch"
+                )
         self.update_count = int(payload["update_count"])

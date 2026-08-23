@@ -41,9 +41,9 @@ v0_9_training:
   lambda_operator_burden: 0.01
   lambda_smooth: 0.001
   lambda_stability: 0.02
-  rollout_horizons: [4, 8, 16, 32]
-  rollout_start_fractions: [0.0, 0.2, 0.45, 0.7]
-  rollout_weights: [0.7, 0.6, 0.4, 0.25]
+  rollout_horizons: [4, 8, 16, 32, 80]
+  rollout_start_fractions: [0.0, 0.2, 0.45, 0.7, 0.8]
+  rollout_weights: [0.7, 0.6, 0.4, 0.25, 0.15]
   lambda_rollout: 1.0
   lambda_propagator_growth: 0.05
   propagator_growth_margin: 0.02
@@ -76,11 +76,15 @@ v0_9_training:
   force_spectrum_weight: 0.05
   force_window_stride: 4
   augmented_lagrangian_initial_penalty: 1.0
-  augmented_lagrangian_penalty_growth: 2.0
-  augmented_lagrangian_max_penalty: 100.0
+  augmented_lagrangian_penalty_growth: 1.5
+  augmented_lagrangian_max_penalty: 20.0
   augmented_lagrangian_improvement_ratio: 0.9
-  augmented_lagrangian_update_interval: 1
+  augmented_lagrangian_update_interval: 2
+  augmented_lagrangian_dual_step_size: 0.25
+  augmented_lagrangian_max_multiplier: 20.0
   gradient_audit_interval: 5
+  gradient_conflict_method: pcgrad
+  gradient_conflict_start_fraction: 0.6
   rank_sweep_epochs: 40
   gradient_clip_norm: 1.0
   patience: 16

@@ -16,9 +16,9 @@ from jka_model.adaptive import (
     latent_prediction_metrics,
     load_adaptive_cache,
     load_adaptive_checkpoint,
+    observable_error_attribution,
     operator_burden,
     operator_explained_fraction,
-    observable_error_attribution,
     residual_decomposition,
     symmetric_abscissa_proxy,
 )
@@ -47,6 +47,18 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _absolute_representation_spec(spec: MetricGateSpec) -> MetricGateSpec:
+    """Use declared absolute physics tolerances for reconstruction-floor diagnosis."""
+    if spec.threshold is None:
+        raise ValueError("representation physical-floor metrics require an absolute threshold")
+    return MetricGateSpec(
+        spec.name,
+        spec.direction,
+        threshold=spec.threshold,
+        resolution_floor=spec.resolution_floor,
+    )
 
 
 def _normalized_condition(
@@ -440,8 +452,7 @@ def evaluate_v0_9(
         metric_results = [
             evaluate_metric_gate(
                 float(levels["reconstruction"][name]),
-                spec,
-                baseline=float(levels["data"][name]),
+                _absolute_representation_spec(spec),
             )
             for name, spec in observable_specs.items()
             if name in {"divergence_rms", "boundary_no_slip_mse"}

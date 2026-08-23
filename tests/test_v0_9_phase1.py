@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from eval.evaluate_v0_9 import _absolute_representation_spec
 from jka_model.adaptive import (
     AdaptiveKoopmanModel,
     LowRankAdaptiveOperator,
@@ -17,12 +18,17 @@ from jka_model.config import (
     load_config,
 )
 from jka_model.context import build_dynamic_context_model
+from jka_model.evaluation import MetricDirection, MetricGateSpec, evaluate_metric_gate
 from jka_model.observables import (
     ObservableLossResult,
     fit_robust_observable_scales,
     standardized_huber,
 )
-from jka_model.optimization import InequalityAugmentedLagrangian, gradient_cosine_matrix
+from jka_model.optimization import (
+    InequalityAugmentedLagrangian,
+    gradient_cosine_matrix,
+    pcgrad_backward,
+)
 from train.train_v0_9 import _stabilized_loss_bundle
 
 
@@ -99,6 +105,21 @@ def test_augmented_lagrangian_updates_only_positive_inequality_pressure() -> Non
     assert restored.state_dict() == manager.state_dict()
 
 
+def test_bounded_damped_dual_update_cannot_explode() -> None:
+    manager = InequalityAugmentedLagrangian(
+        ("divergence",),
+        initial_penalty=1.0,
+        penalty_growth=2.0,
+        maximum_penalty=4.0,
+        dual_step_size=0.25,
+        maximum_multiplier=1.0,
+    )
+    for _ in range(8):
+        manager.update({"divergence": 100.0})
+    assert manager.multipliers["divergence"] == 1.0
+    assert manager.penalties["divergence"] == 4.0
+
+
 def test_gradient_geometry_detects_opposite_objectives_without_mutating_grads() -> None:
     parameter = torch.nn.Parameter(torch.tensor([1.0, -2.0]))
     geometry = gradient_cosine_matrix(
@@ -108,6 +129,33 @@ def test_gradient_geometry_detects_opposite_objectives_without_mutating_grads() 
     assert geometry.cosine[0, 1] < -0.999
     assert geometry.minimum_off_diagonal_cosine < -0.999
     assert parameter.grad is None
+
+
+def test_pcgrad_projects_conflicting_tasks_and_populates_finite_gradient() -> None:
+    torch.manual_seed(17)
+    parameter = torch.nn.Parameter(torch.tensor([1.0, 2.0]))
+    result = pcgrad_backward(
+        {
+            "forecast": parameter[0],
+            "divergence": -parameter[0] + parameter[1],
+        },
+        (parameter,),
+    )
+    assert result.projected_conflicts >= 1
+    assert result.compared_pairs == 2
+    assert parameter.grad is not None and torch.isfinite(parameter.grad).all()
+    assert not torch.allclose(parameter.grad, torch.tensor([0.0, 1.0]))
+
+
+def test_representation_floor_uses_absolute_tolerance_for_zero_data_baseline() -> None:
+    source = MetricGateSpec(
+        "boundary_no_slip_mse",
+        MetricDirection.LOWER_IS_BETTER,
+        threshold=0.05,
+        relative_margin=0.1,
+    )
+    result = evaluate_metric_gate(3.0e-4, _absolute_representation_spec(source))
+    assert result.passed and result.limit == 0.05
 
 
 def test_phase1_curriculum_samples_one_training_horizon_and_all_validation_horizons() -> None:
@@ -159,10 +207,14 @@ def test_phase1_bundle_exposes_differentiable_constraints() -> None:
 
     class FakePhysical:
         def target_batch(self, trajectory_ids, target_indices, horizon, limit):
-            return torch.zeros(limit, 6), {}
+            return torch.zeros(limit, 6), {"horizon": horizon}
 
         def loss(self, predicted, target, metadata):
-            base = (predicted - target).square().mean()
+            if torch.is_grad_enabled():
+                level = 0.5 if metadata["horizon"] == 2 else 2.0
+            else:
+                level = 1.0
+            base = predicted.sum() * 0.0 + level
             return ObservableLossResult(
                 base,
                 {
@@ -202,6 +254,22 @@ def test_phase1_bundle_exposes_differentiable_constraints() -> None:
         validation=True,
     )
     assert all(f"constraint_{name}" in terms for name in manager.names)
+    # The fake divergence term is one half of the aggregate observable loss.
+    # At H=4 this gives adapted=1.0 and nominal=0.5.
+    expected_worst = (1.0 - 0.551) / 0.501
+    assert float(terms["constraint_divergence"].detach()) == pytest.approx(
+        expected_worst
+    )
+    objectives = [
+        terms[name]
+        for name in (
+            "objective_prediction",
+            "objective_regularization",
+            "objective_observable",
+            "objective_constraints",
+        )
+    ]
+    assert torch.allclose(total, torch.stack(objectives).sum(), atol=1.0e-6)
     assert torch.isfinite(total)
     total.backward()
 

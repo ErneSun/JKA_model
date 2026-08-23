@@ -2,10 +2,28 @@
 
 ## Status
 
-- Implementation: complete
+- Implementation: Phase-1 r1 complete
 - Targeted local verification: pass
-- Formal three-seed GPU evidence: pending
+- First formal three-seed GPU evidence: workflow complete, scientific gates not supported
+- Corrected r1 formal GPU evidence: pending
 - Scientific claim: not yet assigned
+
+### Phase-1 r1 revision after the first formal run
+
+The first formal result `v09-added-phase1-20260822T034843Z` completed correctly but exposed five
+issues: a zero-baseline representation gate, severe physical/rollout gradient conflict, missing
+H80 latent supervision, cross-horizon constraint cancellation and excessive dual growth on the
+hardest seed. Phase-1 r1 therefore adds the following evidence-driven corrections:
+
+- reconstruction-floor divergence and boundary checks use their declared absolute tolerances;
+- PCGrad starts only after the physical curriculum reaches full strength;
+- H80 is part of latent rollout training and validation-rank selection;
+- divergence and boundary constraints use the worst active horizon rather than a weighted mean;
+- operator burden uses its maximum rollout value;
+- dual ascent is delayed until the physics ramp is mature, damped, and bounded;
+- penalty growth is slower and capped.
+
+These changes retain the frozen V0.8 representation and nominal generator contract.
 
 Passing software tests establishes implementation consistency only. It does not establish that
 observable quality or physical non-inferiority improves on the locked cylinder-wake problem.
@@ -69,14 +87,17 @@ Optimization uses
 +\sum_k\lambda_k[g_k]_+
 +\frac{\rho_k}{2}[g_k]_+^2,
 \qquad
-\lambda_k\leftarrow[\lambda_k+\rho_k g_k]_+.
+\lambda_k\leftarrow\min\{\lambda_{\max},
+[\lambda_k+\tau_\lambda\rho_k g_k]_+\}.
 \]
 
 Multipliers, penalties, violations and their exact-resume state are logged. Penalties grow only
-when positive violations fail to improve. Checkpoint selection uses a fixed, multiplier-invariant
-score so changing Lagrange multipliers cannot make epochs incomparable.
+when positive violations fail to improve. Dual updates start only after the physical curriculum
+has reached full strength and use the deterministic locked-validation worst-horizon constraints,
+not the sampled training horizon. Checkpoint selection uses a fixed, multiplier-invariant score
+so changing Lagrange multipliers cannot make epochs incomparable.
 
-### Stochastic H4–H80 observable curriculum
+### Matched H4–H80 latent and observable curriculum
 
 Training samples one horizon from
 
@@ -85,10 +106,11 @@ Training samples one horizon from
 \]
 
 and applies the importance-corrected weight `alpha_h / p(h)`. Locked validation evaluates all
-five horizons. The rollout dataset therefore owns at least 80 future steps even though the latent
-rollout curriculum remains H4–H32.
+five horizons. The latent rollout curriculum also includes H80, introduced late with a small
+weight, so long-horizon physical acceptance is no longer paired with an H32-only latent objective.
+Rank selection uses the multiplier-invariant validation score and H80 gain.
 
-### Gradient geometry
+### Gradient geometry and conflict projection
 
 At the declared interval, the trainer measures
 
@@ -98,8 +120,12 @@ G_{ij}=\frac{\langle\nabla_\omega\mathcal L_i,
 {\|\nabla_\omega\mathcal L_i\|\,\|\nabla_\omega\mathcal L_j\|+\epsilon}
 \]
 
-for forecast, rollout and available observable objectives. This is diagnostic only: Phase 1 does
-not silently enable PCGrad or CAGrad before measured conflict justifies it.
+for forecast, rollout and available observable objectives. The first formal run measured strongly
+negative physical-versus-rollout cosine values. Phase-1 r1 therefore applies PCGrad after the
+physical curriculum is fully active, over four explicit objectives: prediction, structural
+regularization, primary observables and physical constraints. Before that point, ordinary summed
+backpropagation is retained. Projection order is driven by the checkpointed PyTorch RNG state, so
+resume remains reproducible.
 
 ### Four-level error attribution
 
@@ -155,7 +181,7 @@ No outcome is converted into support merely because the workflow completed.
 ## Canonical GPU validation
 
 ```bash
-python gpu_validation/v0_9/scripts/gpu_validate_all.py --validation-id v09-added-phase1-$(date -u +%Y%m%dT%H%M%SZ) --v0-8-handoff-policy supported --seeds 47 53 59
+python gpu_validation/v0_9/scripts/gpu_validate_all.py --validation-id v09-added-phase1-r1-$(date -u +%Y%m%dT%H%M%SZ) --v0-8-handoff-policy supported --seeds 47 53 59
 ```
 
 Occupied validation IDs are resolved by the existing `-r1`, `-r2`, ... policy.

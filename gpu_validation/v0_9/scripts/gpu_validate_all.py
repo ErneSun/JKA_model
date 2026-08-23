@@ -9,6 +9,7 @@ import math
 import subprocess
 import sys
 import traceback
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,7 +53,7 @@ class _Tee:
             stream.flush()
 
 
-def _stage(label: str, action):
+def _stage(label: str, action: Callable[..., Any]) -> Any:
     print(f"[V0.9][validation] {label}: START", flush=True)
     result = action()
     print(f"[V0.9][validation] {label}: PASS", flush=True)
@@ -163,11 +164,16 @@ def select_validation_rank(
         if rank < 1 or not values:
             raise ValueError("each V0.9 rank requires validation records")
         for value in values:
-            required = (value.get("total"), value.get(gain_key), value.get("burden_max"))
+            required = (
+                value.get("selection_score", value.get("total")),
+                value.get(gain_key),
+                value.get("burden_max"),
+            )
             if any(item is None or not math.isfinite(float(item)) for item in required):
                 raise ValueError("V0.9 rank selection received incomplete/non-finite metrics")
     mean_scores = {
-        rank: sum(item["total"] for item in values) / len(values)
+        rank: sum(item.get("selection_score", item["total"]) for item in values)
+        / len(values)
         for rank, values in sweep_metrics.items()
     }
     mean_long_gains = {
@@ -396,6 +402,8 @@ def main() -> None:
             ROOT / "gpu_validation" / "v0_9" / "configs" / "gpu_adaptive_koopman.yaml"
         )
         assert template.cylinder_wake_2d and template.v0_9_condition
+        cylinder_config = template.cylinder_wake_2d
+        condition_config = template.v0_9_condition
         artifacts: dict[int, dict[str, Path]] = {}
         current_stage = "controlled_physical_data"
         for item in handoff.seeds:
@@ -404,19 +412,19 @@ def main() -> None:
             data = _stage(
                 f"G2 controlled cylinder data seed={seed}",
                 lambda seed=seed: generate_v0_9_cylinder_wake_trajectories(
-                    template.cylinder_wake_2d,
-                    template.v0_9_condition,
+                    cylinder_config,
+                    condition_config,
                     seed=seed,
                     device="cuda",
                 ),
             )
             acceptance = validate_v0_9_cylinder_wake_dataset(
-                data, template.cylinder_wake_2d, template.v0_9_condition
+                data, cylinder_config, condition_config
             )
             if acceptance["status"] != "PASS":
                 raise RuntimeError(f"V0.9 physical acceptance failed for seed {seed}")
             dataset_path = raw / "data" / f"controlled_cylinder_seed_{seed}.pt"
-            save_cylinder_wake_dataset(data, template.cylinder_wake_2d, dataset_path)
+            save_cylinder_wake_dataset(data, cylinder_config, dataset_path)
             (raw / "data" / f"physical_acceptance_seed_{seed}.json").write_text(
                 json.dumps(acceptance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
