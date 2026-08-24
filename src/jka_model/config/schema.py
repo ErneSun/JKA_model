@@ -2357,6 +2357,7 @@ class V09Phase2Config:
     intermediate_symmetric_delta_budget: float = 0.10
     symmetric_delta_budget: float = 0.15
     lambda_condition_observer: float = 1.0
+    lambda_context_residualization: float = 0.10
     lambda_condition_centering: float = 0.10
     lambda_basis_cross_orthogonality: float = 0.10
     conditional_centering_bandwidth: float = 1.0
@@ -2393,6 +2394,7 @@ class V09Phase2Config:
             raise ValueError("V0.9 Phase-2 stage boundaries must satisfy 0 < static < dynamic < 1")
         positive = (
             self.lambda_condition_observer,
+            self.lambda_context_residualization,
             self.lambda_condition_centering,
             self.lambda_basis_cross_orthogonality,
             self.conditional_centering_bandwidth,

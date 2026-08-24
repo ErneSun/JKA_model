@@ -2,8 +2,8 @@
 
 ## Status and scientific scope
 
-- Implementation: continuous three-stage revision complete locally
-- Targeted verification: 45 relevant tests pass
+- Implementation: pre-Phase-3 physics-feasible/identifiable revision complete locally
+- Targeted verification: 49 relevant tests pass
 - Formal three-seed GPU evidence: pending
 - Scientific claim: not assigned before the formal report
 
@@ -59,7 +59,7 @@ Phase 2 now uses one continuous run with auditable mechanism states:
 1. `static_oracle`: train only `Delta A_s(q)` from true train/validation condition labels;
 2. `dynamic_residual_oracle`: detach the identified static branch and fit `Delta A_d(h,q)` to its
    remaining forecast error;
-3. `observer_calibration`: train `Q(h)` alone; latent joint refinement is activated only after
+3. `observer_calibration`: continue training `Q(c,o)` alone; latent joint refinement is activated only after
    validation NRMSE and R2 pass their predeclared gates.
 
 Oracle conditions are privileged training information only. Locked latent evaluation remains
@@ -94,6 +94,63 @@ sampling and 45% of physical-horizon weight. PCGrad begins with the physical cur
 separate `NUMERICAL STABILITY` (finite and burden-bounded) from `LONG-ROLLOUT SKILL` (material
 predictive gain).
 
+### Pre-Phase-3 correction after `v09-added-p2-continuous-20260823T133237Z`
+
+The continuous run established a real known-condition long-horizon signal: mean H80 gain rose to
+2.09% and mean operator-explained fraction to 5.54%. It did not establish all-horizon or dynamic-
+history support. H8/H16/H32 mean gains remained below 1%, the observer remained below readiness,
+and only 7/18 runs passed physical non-inferiority. Rank 8 was selected although its validation
+boundary constraint was positive, because the previous selector placed H80 gain before physics.
+
+The corrected selector is
+
+\[
+\text{physical feasibility}\;\prec\;\text{burden feasibility}\;\prec\;
+\text{H80 gain}\;\prec\;\text{validation objective}\;\prec\;\text{rank}.
+\]
+
+Checkpoint selection follows the same lexicographic rule. If no rank is physically feasible, the
+workflow first minimizes the maximum positive boundary/divergence violation and only then uses
+gain. A checkpoint trained before the physical ramp reaches one cannot outrank a mature checkpoint.
+Every mechanism stage restores the preceding stage's selected state and resets optimizer moments;
+it does not inherit an arbitrary final SGD iterate. Validation constraint and burden maxima are
+aggregated by worst batch/horizon rather than averaged away. No physics threshold is relaxed.
+
+The observer now uses the causal feature map
+
+\[
+o_t=\left[z_t,\;\frac1H\sum_{j=0}^{H-1}z_{t-j},\;
+\frac{z_t-z_{t-H+1}}{\sum_{j=1}^{H-1}\Delta t_{t-j}}\right],
+\qquad \hat q_t=Q(c_t,o_t).
+\]
+
+It is supervised during static-oracle and dynamic-residual-oracle training, but its prediction is
+not consumed by those oracle operator branches. Observer gradients therefore cannot change the
+oracle condition or contaminate mechanism identification, while all supervised epochs are used.
+
+Dynamic history is residualized before operator coordinates are produced:
+
+\[
+\hat h(q_t)=M_\theta(q_t),\qquad h_t^\perp=h_t-\hat h(q_t),\qquad
+\xi_t=H_\psi(h_t^\perp).
+\]
+
+`M_theta` is trained by a smooth conditional-context reconstruction loss, while the existing
+kernel penalty still enforces `E[xi|q] approximately 0`. The dynamic head has no direct `q` input;
+condition-only effects must remain in the static branch.
+
+Finally, every rollout endpoint uses a dimensionless nominal-relative training error
+
+\[
+\mathcal L_h=
+\frac{\|z_{t+h}^{adapt}-z_{t+h}^{true}\|^2}
+{\operatorname{stopgrad}(\|z_{t+h}^{nom}-z_{t+h}^{true}\|^2)+\epsilon}.
+\]
+
+This aligns optimization with the declared relative-gain gates and prevents the largest absolute-
+error horizon from dominating merely because of scale. The known oracle report excludes the
+observer gate; the latent route and overall deployable claim still require it.
+
 ## Mathematical contract
 
 The adaptive generator is
@@ -117,7 +174,8 @@ q_t=(Re_t,U_{\infty,t},\dot{Re}_t),
 \]
 
 where the rate uses a causal backward difference. In the known-condition control, `q_t` is
-supplied. In the latent route, `Q(h_t)` estimates it solely from the frozen context representation;
+supplied. In the latent route, `Q(c_t,o_t)` estimates it from frozen context plus causal latent
+state/mean/trend features;
 condition labels are used as held-out targets but are never passed into latent inference.
 
 Identifiability is enforced by
@@ -134,12 +192,11 @@ variance floor is imposed on `xi`: the mathematically valid answer may be that m
 required.
 
 All coordinate heads are zero-initialized, hence `A_t=A0` exactly at initialization. Static and
-dynamic trust gates are separate: the static gate reads only `q`, while the dynamic gate may read
-history and `q`; this prevents hidden history leakage into the condition-only control. Training
-first identifies the static branch, then fits the dynamic residual with the static branch detached,
-and only then calibrates the observer. Latent joint refinement is unavailable until the validation
-observer gate passes. This prevents an initially meaningless inferred condition from being
-absorbed into either operator branch.
+dynamic trust gates are separate: the static gate reads only `q`, while the dynamic gate reads only
+the condition-residualized history context. Training first identifies the static branch and then
+fits the dynamic residual with the static branch detached. The observer is supervised in parallel
+but cannot control either oracle branch; its dedicated calibration stage follows. Latent joint
+refinement is unavailable until the validation observer gate passes.
 
 ## Problem-independent controls
 

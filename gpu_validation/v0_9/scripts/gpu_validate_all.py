@@ -153,9 +153,16 @@ def select_validation_rank(
     material_gain: float = 0.02,
     near_optimal_tolerance: float = 0.02,
     gain_equivalence_tolerance: float | None = None,
+    physics_constraint_tolerance: float = 0.0,
 ) -> dict[str, Any]:
-    """Apply feasibility -> long-horizon skill -> objective -> parsimony."""
-    if not sweep_metrics or burden_limit <= 0 or material_gain < 0 or near_optimal_tolerance < 0:
+    """Apply physical feasibility -> long-horizon skill -> objective -> parsimony."""
+    if (
+        not sweep_metrics
+        or burden_limit <= 0
+        or material_gain < 0
+        or near_optimal_tolerance < 0
+        or physics_constraint_tolerance < 0
+    ):
         raise ValueError("invalid V0.9 rank-selection inputs")
     gain_tolerance = (
         max(0.05 * material_gain, 1.0e-4)
@@ -173,6 +180,8 @@ def select_validation_rank(
                 value.get("selection_score", value.get("total")),
                 value.get(gain_key),
                 value.get("burden_max"),
+                value.get("constraint_boundary"),
+                value.get("constraint_divergence"),
             )
             if any(item is None or not math.isfinite(float(item)) for item in required):
                 raise ValueError("V0.9 rank selection received incomplete/non-finite metrics")
@@ -191,15 +200,47 @@ def select_validation_rank(
     maximum_burdens = {
         rank: max(item["burden_max"] for item in values) for rank, values in sweep_metrics.items()
     }
-    constraint_eligible = [
+    maximum_physics_violations = {
+        rank: max(
+            max(
+                0.0,
+                float(item["constraint_boundary"]),
+                float(item["constraint_divergence"]),
+            )
+            for item in values
+        )
+        for rank, values in sweep_metrics.items()
+    }
+    physics_eligible = [
         rank
         for rank in sorted(sweep_metrics)
-        if mean_long_gains[rank] >= material_gain and maximum_burdens[rank] <= burden_limit
+        if maximum_physics_violations[rank] <= physics_constraint_tolerance
+    ]
+    feasible = [
+        rank
+        for rank in physics_eligible
+        if maximum_burdens[rank] <= burden_limit
+    ]
+    constraint_eligible = [
+        rank
+        for rank in feasible
+        if mean_long_gains[rank] >= material_gain
     ]
     burden_eligible = [
         rank for rank in sorted(sweep_metrics) if maximum_burdens[rank] <= burden_limit
     ]
-    selection_pool = constraint_eligible or burden_eligible or sorted(sweep_metrics)
+    if constraint_eligible:
+        selection_pool = constraint_eligible
+    elif feasible:
+        selection_pool = feasible
+    else:
+        fallback_pool = burden_eligible or sorted(sweep_metrics)
+        minimum_violation = min(maximum_physics_violations[rank] for rank in fallback_pool)
+        selection_pool = [
+            rank
+            for rank in fallback_pool
+            if maximum_physics_violations[rank] <= minimum_violation + 1.0e-12
+        ]
     best_gain = max(mean_long_gains[rank] for rank in selection_pool)
     gain_equivalent = [
         rank for rank in selection_pool if mean_long_gains[rank] >= best_gain - gain_tolerance
@@ -217,6 +258,10 @@ def select_validation_rank(
         "longest_curriculum_horizon": longest_horizon,
         "mean_long_horizon_gains": mean_long_gains,
         "maximum_operator_burdens": maximum_burdens,
+        "maximum_physics_constraint_violations": maximum_physics_violations,
+        "physics_constraint_tolerance": physics_constraint_tolerance,
+        "physics_eligible_ranks": physics_eligible,
+        "feasible_ranks": feasible,
         "burden_limit": burden_limit,
         "material_long_horizon_gain": material_gain,
         "gain_equivalence_tolerance": gain_tolerance,
@@ -227,11 +272,12 @@ def select_validation_rank(
         "near_optimal_tolerance": near_optimal_tolerance,
         "selected_rank": min(near_optimal),
         "selection_rule": (
-            "require bounded burden and material longest-horizon gain; maximize "
+            "require non-positive boundary/divergence violation and bounded burden, then "
+            "require material longest-horizon gain; maximize "
             "longest-horizon gain up to a declared equivalence tolerance, then minimize "
             "validation objective and use rank parsimony only as the final tie-break; "
-            "if no rank reaches material gain, retain the same ordering over burden-feasible "
-            "ranks and report constraints_satisfied=false"
+            "if no physically feasible rank exists, minimize physical violation before gain; "
+            "report constraints_satisfied=false whenever the full contract is unmet"
         ),
     }
 

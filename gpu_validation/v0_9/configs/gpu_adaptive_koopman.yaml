@@ -45,6 +45,7 @@ v0_9_phase2:
   intermediate_symmetric_delta_budget: 0.10
   symmetric_delta_budget: 0.15
   lambda_condition_observer: 1.0
+  lambda_context_residualization: 0.10
   lambda_condition_centering: 0.10
   lambda_basis_cross_orthogonality: 0.10
   conditional_centering_bandwidth: 1.0
@@ -69,7 +70,9 @@ v0_9_training:
   lambda_stability: 0.02
   rollout_horizons: [4, 8, 16, 32, 80]
   rollout_start_fractions: [0.0, 0.10, 0.25, 0.40, 0.55]
-  rollout_weights: [0.7, 0.6, 0.4, 0.25, 0.15]
+  # Relative-to-nominal endpoint losses make these weights dimensionless.
+  # Mid/long horizons receive comparable influence so H80 cannot dominate by scale.
+  rollout_weights: [0.5, 0.6, 0.8, 1.0, 1.0]
   lambda_rollout: 1.0
   lambda_propagator_growth: 0.05
   propagator_growth_margin: 0.02

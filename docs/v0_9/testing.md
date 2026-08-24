@@ -14,7 +14,9 @@ inconclusive 行为、condition visibility、residual decomposition、teacher-fr
 Phase 2 还覆盖 exact `A0` initialization、known/latent label isolation、causal condition rate、
 zero-variance-valid conditional centering、static/dynamic basis orthogonality、matched-history selection、
 observer metrics、扩展 schedule families、总算子稳定投影、static/dynamic/observer 连续状态机、
-oracle 标签训练边界、动态阶段静态分支冻结、增益优先 rank 选择和 factorized rollout gradient。
+oracle 标签训练边界、动态阶段静态分支冻结、因果 state/mean/trend observer features、
+condition-context residualization、nominal-relative 多 horizon 目标、物理可行性优先的 checkpoint/rank
+选择和 factorized rollout gradient。
 
 完整旧 suite 不在每次修改后重复；仅在 cross-cutting/release gate 时执行。正式 RTX 5080 workflow 会先运行上述
 targeted tests。每个 major stage 输出 START/PASS/FAIL；正式训练只打印开始和最终摘要，完整 epoch 指标保存在日志。

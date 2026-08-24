@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from jka_model.adaptive.models import AdaptiveKoopmanModel
+from jka_model.adaptive.models import AdaptiveKoopmanModel, causal_observer_features
 
 
 @torch.no_grad()
@@ -51,6 +51,9 @@ def adaptive_latent_rollout(
             "dynamic_coordinates",
             "static_delta",
             "dynamic_delta",
+            "history_context",
+            "condition_context_prediction",
+            "innovation_context",
         )
     }
     nominal = model.operator_adapter.nominal_generator
@@ -60,13 +63,24 @@ def adaptive_latent_rollout(
         context = model.context_encoder(
             latent_buffer, dt_buffer, next_dt, context_parameters
         )
+        observer_features = causal_observer_features(latent_buffer, dt_buffer)
         phase2_provider = getattr(model.operator_adapter, "phase2_components", None)
         if phase2_provider is not None:
-            components = phase2_provider(context, current_condition)
+            components = phase2_provider(
+                context, current_condition, observer_features=observer_features
+            )
             for name in phase2_values:
                 phase2_values[name].append(components[name])
         prediction, eta, gate, delta, adapted = model.operator_adapter.step_with_gate(
-            latent_buffer[:, -1], context, next_dt, current_condition
+            latent_buffer[:, -1],
+            context,
+            next_dt,
+            current_condition,
+            **(
+                {"observer_features": observer_features}
+                if phase2_provider is not None
+                else {}
+            ),
         )
         if not torch.isfinite(prediction).all():
             raise FloatingPointError(

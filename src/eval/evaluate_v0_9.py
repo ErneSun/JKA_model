@@ -15,6 +15,7 @@ from jka_model.adaptive import (
     AdaptiveWindowDataset,
     FactorizedAdaptiveOperator,
     adaptive_latent_rollout,
+    causal_observer_features,
     condition_observer_metrics,
     condition_targets,
     latent_prediction_metrics,
@@ -66,6 +67,18 @@ def _absolute_representation_spec(spec: MetricGateSpec) -> MetricGateSpec:
     )
 
 
+def phase2_required_control_names(mode: str, *, phase2_enabled: bool) -> tuple[str, ...]:
+    """Return mechanism controls without coupling the known oracle to Q(history)."""
+    if mode not in {"known", "latent_inferred"}:
+        raise ValueError("invalid V0.9 condition mode")
+    names = ["dynamic_over_static", "history_over_shuffled"]
+    if phase2_enabled:
+        if mode == "latent_inferred":
+            names.append("condition_observer")
+        names.append("paired_history_gain")
+    return tuple(names)
+
+
 def _normalized_condition(
     value: torch.Tensor,
     payload: dict[str, Any],
@@ -111,7 +124,12 @@ def _condition_only_rollout(
         dt = future_dts[:, index : index + 1]
         condition = None if conditions is None else conditions[:, index]
         context = model.context_encoder(history, dt_history, dt, context_parameters)
-        components = adapter.phase2_components(context, condition, active_components="static")
+        components = adapter.phase2_components(
+            context,
+            condition,
+            observer_features=causal_observer_features(history, dt_history),
+            active_components="static",
+        )
         generator = adapter.nominal_generator.unsqueeze(0) + components["static_delta"]
         transition = torch.linalg.matrix_exp(generator.float() * dt.reshape(-1, 1, 1))
         prediction = torch.einsum("bij,bj->bi", transition, history[:, -1].float())
@@ -242,9 +260,16 @@ def evaluate_v0_9(
         if phase2_enabled:
             if not isinstance(model.operator_adapter, FactorizedAdaptiveOperator):
                 raise RuntimeError("Phase-2 evaluation loaded the wrong adapter")
-            components = model.operator_adapter.phase2_components(context, condition)
+            observer_features = causal_observer_features(history_z, history_dts)
+            components = model.operator_adapter.phase2_components(
+                context, condition, observer_features=observer_features
+            )
+            gate = components["gate"]
             static_components = model.operator_adapter.phase2_components(
-                context, condition, active_components="static"
+                context,
+                condition,
+                observer_features=observer_features,
+                active_components="static",
             )
             condition_generator = nominal_a.unsqueeze(0) + static_components["static_delta"]
             static_transition = torch.linalg.matrix_exp(
@@ -312,17 +337,23 @@ def evaluate_v0_9(
                 adapter = model.operator_adapter
                 assert isinstance(adapter, FactorizedAdaptiveOperator)
                 real_context = model.context_encoder(history_z, history_dts, next_dt, parameters)
+                real_observer_features = causal_observer_features(history_z, history_dts)
                 shuffled_context = model.context_encoder(
                     raw["history_z"].to(selected).float(),
                     raw["history_dts"].to(selected).float(),
                     next_dt,
                     parameters,
                 )
-                real_components = adapter.phase2_components(real_context, condition)
+                real_components = adapter.phase2_components(
+                    real_context,
+                    condition,
+                    observer_features=real_observer_features,
+                )
                 shuffled_components = adapter.phase2_components(
                     real_context,
                     condition,
                     dynamic_context=shuffled_context,
+                    observer_features=real_observer_features,
                     condition_override=real_components["q_used"],
                 )
                 generator = adapter.nominal_generator.unsqueeze(0) + shuffled_components["delta"]
@@ -809,9 +840,16 @@ def evaluate_v0_9(
             None,
             "R2 route does not require a history-shuffle control",
         )
-    control_items = [dynamic_gate, history_gate]
-    if phase2_enabled:
-        control_items.extend((observer_gate, paired_gate))
+    control_lookup = {
+        "dynamic_over_static": dynamic_gate,
+        "history_over_shuffled": history_gate,
+        "condition_observer": observer_gate,
+        "paired_history_gain": paired_gate,
+    }
+    control_items = [
+        control_lookup[name]
+        for name in phase2_required_control_names(mode, phase2_enabled=phase2_enabled)
+    ]
     controls_gate = aggregate_gate_results(
         "dynamic_controls",
         control_items,
@@ -844,7 +882,7 @@ def evaluate_v0_9(
         and burden_pass
     )
     decision = {
-        "schema_version": 4,
+        "schema_version": 5,
         "backbone_seed": int(payload["backbone_seed"]),
         "context_init_seed": int(payload["context_init_seed"]),
         "operator_init_seed": int(payload["operator_init_seed"]),
@@ -891,9 +929,9 @@ def evaluate_v0_9(
             "DYNAMIC_ADAPTIVE_KOOPMAN_SUPPORTED"
             if controls_pass
             else "PARAMETERIZED_KOOPMAN_SUPPORTED; HISTORY_ADAPTATION_NOT_REQUIRED"
-            if condition_only_gate.passed and observer_gate.passed
+            if condition_only_gate.passed and (mode == "known" or observer_gate.passed)
             else "LATENT_CONDITION_NOT_IDENTIFIABLE"
-            if not observer_gate.passed
+            if mode == "latent_inferred" and not observer_gate.passed
             else "PHASE2_NOT_SUPPORTED"
         ),
         "scientific_joint_pass": supported,
@@ -908,6 +946,9 @@ def evaluate_v0_9(
             "condition_centered_history_innovation": phase2_enabled,
             "oracle_condition_curriculum_train_only": phase2_enabled,
             "locked_latent_evaluation_is_teacher_free": mode == "latent_inferred",
+            "known_oracle_excludes_observer_gate": mode == "known",
+            "causal_observer_uses_state_mean_trend": phase2_enabled,
+            "dynamic_context_is_condition_residualized": phase2_enabled,
             "long_rollout_stability_is_numerical": True,
             "innovation_variance_floor": False,
         },

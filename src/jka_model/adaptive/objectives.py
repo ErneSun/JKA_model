@@ -11,6 +11,7 @@ from torch.nn import functional as F
 from jka_model.adaptive.identifiability import conditional_centering_loss
 from jka_model.adaptive.models import (
     AdaptiveKoopmanModel,
+    causal_observer_features,
     operator_burden,
     symmetric_abscissa_proxy,
 )
@@ -74,7 +75,7 @@ def phase2_training_state(
             condition_mode == "latent_inferred",
             False,
             False,
-            0.0,
+            1.0,
             budget,
         )
     if progress < phase2.dynamic_stage_end_fraction:
@@ -91,7 +92,7 @@ def phase2_training_state(
             condition_mode == "latent_inferred",
             True,
             False,
-            0.0,
+            1.0,
             budget,
         )
     if condition_mode == "latent_inferred" and not observer_ready:
@@ -223,6 +224,9 @@ def differentiable_adaptive_rollout(
             "dynamic_coordinates",
             "static_delta",
             "dynamic_delta",
+            "history_context",
+            "condition_context_prediction",
+            "innovation_context",
         )
     }
     nominal = model.operator_adapter.nominal_generator
@@ -234,12 +238,14 @@ def differentiable_adaptive_rollout(
         # predicted history must remain in the graph.  Otherwise multi-step
         # training degenerates into detached one-step corrections.
         context = model.context_encoder(latent_buffer, dt_buffer, next_dt, context_parameters)
+        observer_features = causal_observer_features(latent_buffer, dt_buffer)
         phase2_provider = getattr(model.operator_adapter, "phase2_components", None)
         if phase2_provider is not None:
             components = phase2_provider(
                 context,
                 condition,
                 condition_override=condition_override,
+                observer_features=observer_features,
                 active_components=(
                     "full" if phase2_state is None else phase2_state.active_components
                 ),
@@ -252,6 +258,7 @@ def differentiable_adaptive_rollout(
         if phase2_provider is not None:
             step_kwargs = {
                 "condition_override": condition_override,
+                "observer_features": observer_features,
                 "active_components": (
                     "full" if phase2_state is None else phase2_state.active_components
                 ),
@@ -376,8 +383,16 @@ def adaptive_stabilization_objective(
             .square()
             .mean()
         )
-        rollout_loss = rollout_loss + weight * endpoint
+        nominal_endpoint = (
+            ((rollout["nominal"][:, horizon - 1] - truth[:, horizon - 1]) / residual_scale)
+            .square()
+            .mean()
+            .detach()
+        )
+        relative_endpoint = endpoint / nominal_endpoint.clamp_min(1.0e-6)
+        rollout_loss = rollout_loss + weight * relative_endpoint
         terms[f"rollout_h{horizon}"] = endpoint
+        terms[f"rollout_relative_h{horizon}"] = relative_endpoint
         adaptive_rmse = (
             (rollout["adapted"][:, horizon - 1] - truth[:, horizon - 1]).square().mean().sqrt()
         )
@@ -428,6 +443,7 @@ def adaptive_stabilization_objective(
         else orthogonality_provider()
     )
     observer_loss = one_step.new_zeros(())
+    context_residualization = one_step.new_zeros(())
     centering = one_step.new_zeros(())
     cross_orthogonality = one_step.new_zeros(())
     if phase2 is not None and phase2.enabled:
@@ -449,7 +465,18 @@ def adaptive_stabilization_objective(
         )
         innovations = rollout["dynamic_coordinates"].index_select(1, index).flatten(0, 1)
         observed_conditions = rollout["q_used"].index_select(1, index).flatten(0, 1)
+        predicted_condition_context = (
+            rollout["condition_context_prediction"].index_select(1, index).flatten(0, 1)
+        )
+        observed_history_context = (
+            rollout["history_context"].index_select(1, index).flatten(0, 1).detach()
+        )
         if phase2_state is None or phase2_state.active_components == "full":
+            context_residualization = F.smooth_l1_loss(
+                predicted_condition_context,
+                observed_history_context,
+                beta=1.0,
+            )
             centering = conditional_centering_loss(
                 innovations,
                 observed_conditions,
@@ -476,6 +503,9 @@ def adaptive_stabilization_objective(
         + (0.0 if phase2 is None else phase2.lambda_condition_observer)
         * observer_weight
         * observer_loss
+        + (0.0 if phase2 is None else phase2.lambda_context_residualization)
+        * centering_weight
+        * context_residualization
         + (0.0 if phase2 is None else phase2.lambda_condition_centering)
         * centering_weight
         * centering
@@ -493,6 +523,7 @@ def adaptive_stabilization_objective(
             "orthogonality": orthogonality,
             "gate_mean": rollout["gate"].mean(),
             "condition_observer": observer_loss,
+            "context_residualization": context_residualization,
             "condition_centering": centering,
             "basis_cross_orthogonality": cross_orthogonality,
             "phase2_delta_budget": one_step.new_tensor(

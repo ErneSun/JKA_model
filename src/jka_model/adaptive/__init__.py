@@ -33,6 +33,7 @@ from jka_model.adaptive.models import (
     AdaptiveKoopmanModel,
     FactorizedAdaptiveOperator,
     LowRankAdaptiveOperator,
+    causal_observer_features,
     operator_burden,
     symmetric_abscissa_proxy,
 )
@@ -79,6 +80,7 @@ __all__ = [
     "symmetric_abscissa_proxy",
     "adaptive_training_scales",
     "condition_observer_metrics",
+    "causal_observer_features",
     "condition_targets",
     "conditional_centering_loss",
     "adaptive_stabilization_objective",

@@ -2,6 +2,12 @@
 
 ## 0.9.0 — Context-conditioned low-rank adaptive Koopman dynamics
 
+- Added a pre-Phase-3 correction after the continuous run: physical feasibility now precedes
+  H80 gain in checkpoint/rank selection, and the known oracle no longer depends on observer gates.
+- Replaced context-only condition observation with causal state/mean/trend features and supervised
+  the isolated observer throughout oracle stages.
+- Residualized dynamic history as `h_perp = h - E[h|q]` before the dynamic operator head and
+  normalized every horizon loss by its frozen nominal error.
 - Revised Phase 2 after the complete stable GPU run showed over-constrained adaptation: added one
   continuous static-oracle, dynamic-residual and observer-gated latent curriculum.
 - Replaced branch-wise half budgets with a single logarithmic-norm projection of the combined

@@ -4,6 +4,7 @@ import csv
 import json
 from pathlib import Path
 
+from eval.evaluate_v0_9 import phase2_required_control_names
 from gpu_validation.v0_9.scripts.gpu_validate_all import (
     dirty_source_paths,
     select_validation_rank,
@@ -20,6 +21,7 @@ from jka_model.evaluation import (
     evaluate_metric_gate,
 )
 from jka_model.utils import create_versioned_session
+from train.train_v0_9 import _validation_checkpoint_key
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
@@ -51,6 +53,8 @@ def test_v09_config_and_revision_id_contract(tmp_path: Path) -> None:
     assert config.v0_9_phase2.static_stage_end_fraction == 0.30
     assert config.v0_9_phase2.dynamic_stage_end_fraction == 0.70
     assert config.v0_9_phase2.symmetric_delta_budget == 0.15
+    assert config.v0_9_phase2.lambda_context_residualization == 0.10
+    assert config.v0_9_training.rollout_weights[-2:] == (1.0, 1.0)
     assert (
         config.v0_9_training.rollout_start_fractions[-1]
         < config.v0_9_phase2.dynamic_stage_end_fraction
@@ -71,21 +75,49 @@ def test_rank_selection_enforces_long_horizon_and_burden_before_parsimony() -> N
                     "selection_score": 1.0,
                     "rollout_gain_h32": 0.03,
                     "burden_max": 0.2,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
                 },
                 {
                     "total": 10.1,
                     "selection_score": 1.01,
                     "rollout_gain_h32": 0.02,
                     "burden_max": 0.25,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
                 },
             ],
             4: [
-                {"total": 0.8, "rollout_gain_h32": -0.1, "burden_max": 0.2},
-                {"total": 0.81, "rollout_gain_h32": -0.08, "burden_max": 0.2},
+                {
+                    "total": 0.8,
+                    "rollout_gain_h32": -0.1,
+                    "burden_max": 0.2,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
+                },
+                {
+                    "total": 0.81,
+                    "rollout_gain_h32": -0.08,
+                    "burden_max": 0.2,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
+                },
             ],
             8: [
-                {"total": 0.7, "rollout_gain_h32": 0.1, "burden_max": 0.6},
-                {"total": 0.71, "rollout_gain_h32": 0.1, "burden_max": 0.55},
+                {
+                    "total": 0.7,
+                    "rollout_gain_h32": 0.1,
+                    "burden_max": 0.6,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
+                },
+                {
+                    "total": 0.71,
+                    "rollout_gain_h32": 0.1,
+                    "burden_max": 0.55,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
+                },
             ],
         },
         longest_horizon=32,
@@ -97,8 +129,24 @@ def test_rank_selection_enforces_long_horizon_and_burden_before_parsimony() -> N
 
     fallback = select_validation_rank(
         {
-            2: [{"total": 1.0, "rollout_gain_h32": -0.1, "burden_max": 0.2}],
-            4: [{"total": 0.9, "rollout_gain_h32": -0.1, "burden_max": 0.2}],
+            2: [
+                {
+                    "total": 1.0,
+                    "rollout_gain_h32": -0.1,
+                    "burden_max": 0.2,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
+                }
+            ],
+            4: [
+                {
+                    "total": 0.9,
+                    "rollout_gain_h32": -0.1,
+                    "burden_max": 0.2,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
+                }
+            ],
         },
         longest_horizon=32,
         burden_limit=0.35,
@@ -113,6 +161,8 @@ def test_rank_selection_enforces_long_horizon_and_burden_before_parsimony() -> N
                     "selection_score": 22.99,
                     "rollout_gain_h80": 0.0012,
                     "burden_max": 0.011,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
                 }
             ],
             4: [
@@ -120,13 +170,17 @@ def test_rank_selection_enforces_long_horizon_and_burden_before_parsimony() -> N
                     "selection_score": 22.94,
                     "rollout_gain_h80": 0.0027,
                     "burden_max": 0.011,
+                    "constraint_boundary": -0.1,
+                    "constraint_divergence": -0.1,
                 }
             ],
             8: [
                 {
                     "selection_score": 22.90,
-                    "rollout_gain_h80": -0.0024,
+                    "rollout_gain_h80": 0.08,
                     "burden_max": 0.011,
+                    "constraint_boundary": 0.2,
+                    "constraint_divergence": -0.1,
                 }
             ],
         },
@@ -137,6 +191,35 @@ def test_rank_selection_enforces_long_horizon_and_burden_before_parsimony() -> N
     assert gain_driven["selected_rank"] == 4
     assert not gain_driven["constraints_satisfied"]
     assert gain_driven["gain_equivalent_ranks"] == [4]
+    assert gain_driven["physics_eligible_ranks"] == [2, 4]
+
+
+def test_checkpoint_selection_is_lexicographically_physics_first() -> None:
+    feasible = {
+        "total": 2.0,
+        "augmented_lagrangian": 0.0,
+        "constraint_boundary": -0.01,
+        "constraint_divergence": -0.01,
+        "constraint_burden": -0.01,
+    }
+    lower_loss_but_infeasible = {
+        **feasible,
+        "total": 1.0,
+        "constraint_boundary": 0.02,
+    }
+    assert _validation_checkpoint_key(feasible) < _validation_checkpoint_key(
+        lower_loss_but_infeasible
+    )
+    immature = {**feasible, "total": 0.1, "physics_scale": 0.5}
+    assert _validation_checkpoint_key(feasible) < _validation_checkpoint_key(immature)
+
+
+def test_known_oracle_controls_do_not_depend_on_latent_observer() -> None:
+    known = phase2_required_control_names("known", phase2_enabled=True)
+    latent = phase2_required_control_names("latent_inferred", phase2_enabled=True)
+    assert "condition_observer" not in known
+    assert "condition_observer" in latent
+    assert "paired_history_gain" in known and "paired_history_gain" in latent
 
 
 def test_generic_metric_gates_handle_resolution_zero_baselines_and_inconclusive() -> None:

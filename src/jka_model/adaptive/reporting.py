@@ -142,11 +142,15 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         status_field: str,
         *,
         fallback: Callable[[dict[str, Any]], str],
+        evaluated_modes: set[str] | None = None,
     ) -> dict[str, Any]:
+        selected_modes = modes if evaluated_modes is None else modes & evaluated_modes
+        if not selected_modes:
+            raise ValueError("V0.9 nested support selected no condition modes")
         per_seed: dict[str, Any] = {}
         for seed in sorted(seeds):
             modes_for_seed: dict[str, Any] = {}
-            for mode in sorted(modes):
+            for mode in sorted(selected_modes):
                 rows = grouped[(seed, mode)]
                 statuses = [
                     str(row[status_field]) if status_field in row else fallback(row) for row in rows
@@ -215,7 +219,9 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "condition_only_status", fallback=lambda row: "INCONCLUSIVE"
     )
     condition_observer_support = nested_gate_support(
-        "condition_observer_status", fallback=lambda row: "INCONCLUSIVE"
+        "condition_observer_status",
+        fallback=lambda row: "INCONCLUSIVE",
+        evaluated_modes={"latent_inferred"},
     )
     paired_history_support = nested_gate_support(
         "paired_identifiability_status", fallback=lambda row: "INCONCLUSIVE"
@@ -315,7 +321,7 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         and phase1_artifacts_complete
     )
     decision = {
-        "schema_version": 4,
+        "schema_version": 5,
         "physical_problem": next(iter(problem_names)),
         "observable_objective": next(iter(observable_objectives)),
         "v0_8_strict_readiness": "PASS" if strict_handoff else "NOT_READY",
@@ -396,6 +402,15 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         "scientific_seed_threshold": 2.0 / 3.0,
         "v1_0_seed_threshold": 1.0,
         "selected_rank": int(rank_selection["selected_rank"]),
+        "rank_physics_feasibility": (
+            "PASS"
+            if int(rank_selection["selected_rank"])
+            in {int(value) for value in rank_selection.get("physics_eligible_ranks", [])}
+            else "FAIL"
+        ),
+        "rank_selection_contract": (
+            "PASS" if bool(rank_selection.get("constraints_satisfied")) else "FAIL"
+        ),
         "formal_run_count": len(records),
         "nested_seed_support": per_backbone,
         "independent_gate_support": {
@@ -416,6 +431,12 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
             "phase2_factorized_operator": phase2_enabled,
             "oracle_condition_curriculum_train_only": phase2_enabled,
             "locked_latent_evaluation_is_teacher_free": phase2_enabled,
+            "known_oracle_excludes_observer_gate": phase2_enabled,
+            "causal_observer_uses_state_mean_trend": phase2_enabled,
+            "dynamic_context_is_condition_residualized": phase2_enabled,
+            "physics_feasible_rank_selection": bool(
+                rank_selection.get("physics_eligible_ranks") is not None
+            ),
             "innovation_variance_floor": False,
             "unseen_condition_generalization_tested": False,
         },
@@ -588,6 +609,8 @@ def aggregate_v0_9_results(session_dir: str | Path, output_dir: str | Path) -> d
         f"NUMERICAL STABILITY: {decision['numerical_stability']}  \n"
         f"LONG-ROLLOUT SKILL: {decision['long_rollout_skill']}  \n"
         f"PHYSICS STATUS: {decision['physics_status']}  \n"
+        f"SELECTED-RANK PHYSICS FEASIBILITY: {decision['rank_physics_feasibility']}  \n"
+        f"RANK-SELECTION FULL CONTRACT: {decision['rank_selection_contract']}  \n"
         f"STRICT ALL-RUN STATUS: "
         f"numerical={decision['strict_all_run_status']['numerical_stability_pass_count']}/"
         f"{decision['strict_all_run_status']['formal_run_count']}, "

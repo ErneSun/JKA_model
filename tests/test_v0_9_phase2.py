@@ -7,6 +7,7 @@ from jka_model.adaptive import (
     FactorizedAdaptiveOperator,
     adaptive_latent_rollout,
     adaptive_stabilization_objective,
+    causal_observer_features,
     condition_observer_metrics,
     condition_targets,
     conditional_centering_loss,
@@ -150,8 +151,9 @@ def test_phase2_continuous_stage_contract_and_oracle_boundary() -> None:
         observer_ready=True,
     )
     assert static.name == "static_oracle" and static.active_components == "static"
-    assert static.use_oracle_condition and static.observer_weight == 0.0
+    assert static.use_oracle_condition and static.observer_weight == 1.0
     assert dynamic.name == "dynamic_residual_oracle" and dynamic.detach_static
+    assert dynamic.observer_weight == 1.0
     assert observer.name == "observer_calibration" and observer.observer_only
     assert joint.name == "latent_joint_refinement" and not joint.use_oracle_condition
     assert (
@@ -193,6 +195,30 @@ def test_condition_rate_is_causal_and_centering_has_no_variance_floor() -> None:
     assert float(loss.detach()) == 0.0
     loss.backward()
     assert zero.grad is not None
+
+
+def test_causal_observer_features_expose_present_mean_and_trend_without_labels() -> None:
+    history = torch.tensor([[[1.0, 2.0], [2.0, 4.0], [4.0, 8.0]]])
+    features = causal_observer_features(history, torch.tensor([[0.5, 1.5]]))
+    current, mean, trend = features.chunk(3, dim=-1)
+    assert torch.equal(current, torch.tensor([[4.0, 8.0]]))
+    assert torch.allclose(mean, torch.tensor([[7.0 / 3.0, 14.0 / 3.0]]))
+    assert torch.allclose(trend, torch.tensor([[1.5, 3.0]]))
+
+
+def test_dynamic_context_is_explicitly_residualized_against_condition() -> None:
+    adapter = _operator("known")
+    context = torch.randn(4, 8)
+    condition = torch.randn(4, 3)
+    with torch.no_grad():
+        adapter.dynamic_context_mean_head[-1].bias.fill_(0.25)
+    components = adapter.phase2_components(context, condition)
+    assert torch.allclose(
+        components["innovation_context"],
+        components["history_context"] - components["condition_context_prediction"],
+    )
+    components["innovation_context"].square().mean().backward()
+    assert adapter.dynamic_context_mean_head[-1].bias.grad is not None
 
 
 def test_matched_pair_audit_requires_same_present_and_different_history() -> None:
@@ -288,9 +314,15 @@ def test_phase2_rollout_objective_connects_observer_and_factorized_operator() ->
         V09Phase2Config(enabled=True, static_rank=2, dynamic_rank=2, observer_width=12),
     )
     assert torch.isfinite(result.total)
-    assert set(("condition_observer", "condition_centering", "basis_cross_orthogonality")).issubset(
-        result.terms
-    )
+    assert set(
+        (
+            "condition_observer",
+            "context_residualization",
+            "condition_centering",
+            "basis_cross_orthogonality",
+            "rollout_relative_h4",
+        )
+    ).issubset(result.terms)
     result.total.backward()
     assert model.operator_adapter.condition_observer[-1].weight.grad is not None
 

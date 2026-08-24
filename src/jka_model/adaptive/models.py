@@ -13,6 +13,31 @@ from jka_model.config import V09AdaptiveConfig, V09Phase2Config
 from jka_model.context.models import BaseContextEncoder
 
 
+def causal_observer_features(history_z: Tensor, history_dts: Tensor) -> Tensor:
+    """Causal state, history mean, and finite-time trend for condition observation.
+
+    The frozen V0.8 context is optimized for residual prediction rather than physical
+    parameter recovery.  Keeping these three summaries separate gives the observer
+    direct access to the present state, its recent operating point, and its causal
+    change rate without exposing any condition label.
+    """
+    if history_z.ndim != 3:
+        raise ValueError("observer history must have shape [B,H,d_K]")
+    batch, history, _ = history_z.shape
+    if history_dts.shape != (batch, max(history - 1, 0)):
+        raise ValueError("observer history/dt alignment mismatch")
+    if not torch.isfinite(history_z).all() or not torch.isfinite(history_dts).all():
+        raise ValueError("observer history inputs must be finite")
+    current = history_z[:, -1]
+    mean = history_z.mean(dim=1)
+    if history > 1:
+        elapsed = history_dts.sum(dim=1, keepdim=True).clamp_min(1.0e-12)
+        trend = (history_z[:, -1] - history_z[:, 0]) / elapsed
+    else:
+        trend = torch.zeros_like(current)
+    return torch.cat((current, mean, trend), dim=-1)
+
+
 class LowRankAdaptiveOperator(nn.Module):
     """Map a validated context to ``A0 + U diag(eta) V^T``.
 
@@ -225,8 +250,10 @@ class FactorizedAdaptiveOperator(nn.Module):
         self.dynamic_left_factor = nn.Parameter(left[:, split:].clone())
         self.dynamic_right_factor = nn.Parameter(right[:, split:].clone())
 
-        observer_layers: list[nn.Module] = []
-        width_in = context_dim
+        observer_layers: list[nn.Module] = [
+            nn.LayerNorm(context_dim + 3 * latent_dim)
+        ]
+        width_in = context_dim + 3 * latent_dim
         for _ in range(phase2.observer_depth):
             observer_layers.extend((nn.Linear(width_in, phase2.observer_width), nn.SiLU()))
             width_in = phase2.observer_width
@@ -236,12 +263,16 @@ class FactorizedAdaptiveOperator(nn.Module):
         self.static_coordinate_head = self._zero_head(
             self.condition_dim, adaptive.width, self.static_rank
         )
-        dynamic_input = context_dim + self.condition_dim
+        # The dynamic branch receives only the part of history context that
+        # cannot be predicted from the current condition.  This implements the
+        # factorization h = E[h|q] + h_perp explicitly instead of relying on a
+        # subtractive coordinate head that can retain direct condition leakage.
+        self.dynamic_context_mean_head = self._zero_head(
+            self.condition_dim, adaptive.width, context_dim
+        )
+        dynamic_input = context_dim
         self.dynamic_coordinate_head = self._zero_head(
             dynamic_input, adaptive.width, self.dynamic_rank
-        )
-        self.dynamic_condition_mean_head = self._zero_head(
-            self.condition_dim, adaptive.width, self.dynamic_rank
         )
         if adaptive.trust_gate:
             static_gate = nn.Linear(self.condition_dim, 1)
@@ -278,10 +309,16 @@ class FactorizedAdaptiveOperator(nn.Module):
         dynamic = self._factor_pair("dynamic")
         return torch.cat((static[0], dynamic[0]), dim=1), torch.cat((static[1], dynamic[1]), dim=1)
 
-    def condition_prediction(self, context: Tensor) -> Tensor:
+    def condition_prediction(
+        self, context: Tensor, observer_features: Tensor | None = None
+    ) -> Tensor:
         if context.ndim != 2 or context.shape[1] != self.context_dim:
             raise ValueError("context must have shape [B,d_c]")
-        raw = self.condition_observer(context)
+        if observer_features is None:
+            observer_features = context.new_zeros((context.shape[0], 3 * self.latent_dim))
+        if observer_features.shape != (context.shape[0], 3 * self.latent_dim):
+            raise ValueError("observer features must have shape [B,3*d_K]")
+        raw = self.condition_observer(torch.cat((context, observer_features), dim=-1))
         return self.observer_output_limit * torch.tanh(raw / self.observer_output_limit)
 
     @staticmethod
@@ -300,6 +337,7 @@ class FactorizedAdaptiveOperator(nn.Module):
         condition: Tensor | None = None,
         *,
         dynamic_context: Tensor | None = None,
+        observer_features: Tensor | None = None,
         condition_override: Tensor | None = None,
         active_components: str = "full",
         detach_static: bool = False,
@@ -310,7 +348,7 @@ class FactorizedAdaptiveOperator(nn.Module):
         budget = self.symmetric_delta_budget if delta_budget is None else delta_budget
         if not math.isfinite(float(budget)) or budget <= 0:
             raise ValueError("Phase-2 total delta budget must be finite and positive")
-        q_hat = self.condition_prediction(context)
+        q_hat = self.condition_prediction(context, observer_features)
         if condition_override is not None:
             if condition_override.shape != q_hat.shape:
                 raise ValueError("Phase-2 condition override shape mismatch")
@@ -329,15 +367,15 @@ class FactorizedAdaptiveOperator(nn.Module):
         if history_context.shape != context.shape:
             raise ValueError("Phase-2 dynamic context shape mismatch")
         static_raw = self.static_coordinate_head(q_used)
-        dynamic_raw = self.dynamic_coordinate_head(
-            torch.cat((history_context, q_used), dim=-1)
-        ) - self.dynamic_condition_mean_head(q_used)
+        condition_context = self.dynamic_context_mean_head(q_used)
+        innovation_context = history_context - condition_context
+        dynamic_raw = self.dynamic_coordinate_head(innovation_context)
         if self.bounded_coordinates:
             static_coordinates = self.eta_max * torch.tanh(static_raw)
             dynamic_coordinates = self.eta_max * torch.tanh(dynamic_raw)
         else:
             static_coordinates, dynamic_coordinates = static_raw, dynamic_raw
-        dynamic_gate_inputs = torch.cat((history_context, q_used), dim=-1)
+        dynamic_gate_inputs = innovation_context
         static_gate = (
             torch.sigmoid(self.static_trust_gate_head(q_used))
             if self.static_trust_gate_head is not None
@@ -375,6 +413,9 @@ class FactorizedAdaptiveOperator(nn.Module):
             "q_used": q_used,
             "static_coordinates": static_coordinates,
             "dynamic_coordinates": dynamic_coordinates,
+            "history_context": history_context,
+            "condition_context_prediction": condition_context,
+            "innovation_context": innovation_context,
             "static_delta": static_delta,
             "dynamic_delta": dynamic_delta,
             "delta": delta,
@@ -408,6 +449,7 @@ class FactorizedAdaptiveOperator(nn.Module):
         condition: Tensor | None = None,
         *,
         condition_override: Tensor | None = None,
+        observer_features: Tensor | None = None,
         active_components: str = "full",
         detach_static: bool = False,
         delta_budget: float | None = None,
@@ -416,6 +458,7 @@ class FactorizedAdaptiveOperator(nn.Module):
             context,
             condition,
             condition_override=condition_override,
+            observer_features=observer_features,
             active_components=active_components,
             detach_static=detach_static,
             delta_budget=delta_budget,
@@ -455,6 +498,7 @@ class FactorizedAdaptiveOperator(nn.Module):
         condition: Tensor | None = None,
         *,
         condition_override: Tensor | None = None,
+        observer_features: Tensor | None = None,
         active_components: str = "full",
         detach_static: bool = False,
         delta_budget: float | None = None,
@@ -467,6 +511,7 @@ class FactorizedAdaptiveOperator(nn.Module):
             context,
             condition,
             condition_override=condition_override,
+            observer_features=observer_features,
             active_components=active_components,
             detach_static=detach_static,
             delta_budget=delta_budget,
@@ -538,9 +583,18 @@ class AdaptiveKoopmanModel(nn.Module):
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         with torch.no_grad():
             context = self.context_encoder(history_z, history_dts, next_dt, context_parameters)
-        prediction, eta, delta, adapted = self.operator_adapter.step(
-            history_z[:, -1], context, next_dt, condition
-        )
+        if isinstance(self.operator_adapter, FactorizedAdaptiveOperator):
+            prediction, eta, _, delta, adapted = self.operator_adapter.step_with_gate(
+                history_z[:, -1],
+                context,
+                next_dt,
+                condition,
+                observer_features=causal_observer_features(history_z, history_dts),
+            )
+        else:
+            prediction, eta, delta, adapted = self.operator_adapter.step(
+                history_z[:, -1], context, next_dt, condition
+            )
         return prediction, context, eta, delta, adapted
 
 

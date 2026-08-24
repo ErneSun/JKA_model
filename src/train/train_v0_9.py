@@ -24,6 +24,7 @@ from jka_model.adaptive import (
     LowRankAdaptiveOperator,
     adaptive_stabilization_objective,
     adaptive_training_scales,
+    causal_observer_features,
     condition_observer_metrics,
     curriculum_state,
     load_adaptive_cache,
@@ -462,6 +463,8 @@ def _stabilized_loss_bundle(
             if phase2 is not None and phase2.enabled:
                 terms["objective_regularization"] = (
                     terms["objective_regularization"]
+                    + phase2.lambda_context_residualization
+                    * terms["context_residualization"]
                     + phase2.lambda_condition_centering * terms["condition_centering"]
                     + phase2.lambda_basis_cross_orthogonality * terms["basis_cross_orthogonality"]
                 )
@@ -526,6 +529,12 @@ def _evaluate_stabilized(
     assert config.v0_9_training
     model.eval()
     totals: dict[str, float] = {}
+    maximum_fields = {
+        "burden_max",
+        "constraint_divergence",
+        "constraint_boundary",
+        "constraint_burden",
+    }
     count = 0
     for raw in loader:
         batch = _move_rollout(raw, device)
@@ -544,9 +553,15 @@ def _evaluate_stabilized(
         )
         batch_count = batch["target_latents"].shape[0]
         for name, value in {"total": total, **terms}.items():
-            totals[name] = totals.get(name, 0.0) + float(value) * batch_count
+            if name in maximum_fields:
+                totals[name] = max(totals.get(name, float("-inf")), float(value))
+            else:
+                totals[name] = totals.get(name, 0.0) + float(value) * batch_count
         count += batch_count
-    return {name: value / count for name, value in totals.items()}
+    return {
+        name: value if name in maximum_fields else value / count
+        for name, value in totals.items()
+    }
 
 
 @torch.no_grad()
@@ -572,7 +587,12 @@ def _observer_validation_metrics(
             batch["future_dts"][:, :1],
             batch["context_parameters"],
         )
-        predictions.append(adapter.condition_prediction(context).cpu())
+        predictions.append(
+            adapter.condition_prediction(
+                context,
+                causal_observer_features(batch["history_z"], batch["history_dts"]),
+            ).cpu()
+        )
         targets.append(
             ((batch["future_condition_targets"][:, 0] - condition_mean) / condition_std).cpu()
         )
@@ -590,6 +610,24 @@ def _validation_selection_score(metrics: dict[str, float]) -> float:
             max(metrics.get(f"constraint_{name}", 0.0), 0.0) ** 2
             for name in ("divergence", "boundary", "burden")
         )
+    )
+
+
+def _validation_checkpoint_key(metrics: dict[str, float]) -> tuple[float, float, float, float]:
+    """Prefer a mature physical curriculum and feasibility before prediction."""
+    maturity_gap = max(0.0, 1.0 - float(metrics.get("physics_scale", 1.0)))
+    violation = max(
+        0.0,
+        *(
+            float(metrics.get(f"constraint_{name}", 0.0))
+            for name in ("divergence", "boundary", "burden")
+        ),
+    )
+    return (
+        maturity_gap,
+        1.0 if violation > 0.0 else 0.0,
+        violation,
+        _validation_selection_score(metrics),
     )
 
 
@@ -717,6 +755,7 @@ def train_v0_9(
     condition_std = condition_std_cpu.to(selected)
     start_epoch = global_step = optimizer_update_step = 0
     best_score = float("inf")
+    best_key = (float("inf"),) * 4
     best_state: dict[str, Any] | None = None
     best_phase1_state: dict[str, Any] | None = None
     stale = 0
@@ -738,6 +777,10 @@ def train_v0_9(
         global_step = int(saved["global_step"])
         optimizer_update_step = int(saved["optimizer_update_step"])
         best_score = float(saved["best_validation_score"])
+        best_key = tuple(
+            float(value)
+            for value in saved.get("best_validation_key", (0.0, 0.0, 0.0, best_score))
+        )
         best_state = dict(saved["best_adaptive_state"])
         stale = int(saved["epochs_without_improvement"])
         observer_ready = bool(saved.get("phase2_observer_ready", False))
@@ -800,6 +843,7 @@ def train_v0_9(
             "condition_mean": condition_mean_cpu,
             "condition_std": condition_std_cpu,
             "best_validation_score": best_score,
+            "best_validation_key": list(best_key),
             "epochs_without_improvement": stale,
             "phase2_observer_ready": observer_ready,
             "phase2_training_stage": active_phase2_stage,
@@ -859,6 +903,7 @@ def train_v0_9(
             "train_force_window",
             "train_propagator_growth",
             "train_condition_observer",
+            "train_context_residualization",
             "train_condition_centering",
             "train_basis_cross_orthogonality",
             "train_pcgrad_conflicts",
@@ -876,6 +921,7 @@ def train_v0_9(
             "validation_propagator_growth",
             "validation_gate_mean",
             "validation_condition_observer",
+            "validation_context_residualization",
             "validation_condition_observer_nrmse",
             "validation_condition_observer_min_r2",
             "validation_condition_centering",
@@ -913,13 +959,25 @@ def train_v0_9(
             )
             if active_phase2_stage != current_stage_name:
                 # Checkpoints from an earlier mechanism stage must never win
-                # selection after the next stage becomes active.
+                # selection after the next stage becomes active.  The next
+                # mechanism starts from the selected state, not the final SGD
+                # iterate, and receives fresh optimizer moments.
+                if best_state is not None:
+                    model.operator_adapter.load_state_dict(best_state, strict=True)
+                    if augmented_lagrangian is not None and best_phase1_state is not None:
+                        augmented_lagrangian.load_state_dict(best_phase1_state)
+                optimizer = AdamW(
+                    (parameter for parameter in model.parameters() if parameter.requires_grad),
+                    lr=resolved.v0_9_training.learning_rate,
+                    weight_decay=resolved.v0_9_training.weight_decay,
+                )
+                assert_optimizer_matches_trainable_params(model, optimizer)
                 active_phase2_stage = current_stage_name
                 best_score = float("inf")
+                best_key = (float("inf"),) * 4
                 best_state = None
+                best_phase1_state = None
                 stale = 0
-                for group in optimizer.param_groups:
-                    group["lr"] = resolved.v0_9_training.learning_rate
                 scheduler = StepLR(
                     optimizer,
                     step_size=max(1, (resolved.v0_9_training.epochs - epoch) // 2),
@@ -929,6 +987,10 @@ def train_v0_9(
                 # Earlier scores use the same full validation contract, but the
                 # optimizer has not yet seen the final horizon.  Give that stage
                 # its own complete patience budget.
+                best_score = float("inf")
+                best_key = (float("inf"),) * 4
+                best_state = None
+                best_phase1_state = None
                 stale = 0
             sums = {
                 "total": 0.0,
@@ -939,6 +1001,7 @@ def train_v0_9(
                 "force_window": 0.0,
                 "propagator_growth": 0.0,
                 "condition_observer": 0.0,
+                "context_residualization": 0.0,
                 "condition_centering": 0.0,
                 "basis_cross_orthogonality": 0.0,
                 "constraint_divergence": 0.0,
@@ -1002,6 +1065,7 @@ def train_v0_9(
                             gradient_objectives[name] = terms[name]
                     for name in (
                         "condition_observer",
+                        "context_residualization",
                         "condition_centering",
                         "basis_cross_orthogonality",
                     ):
@@ -1097,6 +1161,7 @@ def train_v0_9(
                     "force_window",
                     "propagator_growth",
                     "condition_observer",
+                    "context_residualization",
                     "condition_centering",
                     "basis_cross_orthogonality",
                 ):
@@ -1193,6 +1258,7 @@ def train_v0_9(
                 "train_force_window": sums["force_window"] / count,
                 "train_propagator_growth": sums["propagator_growth"] / count,
                 "train_condition_observer": sums["condition_observer"] / count,
+                "train_context_residualization": sums["context_residualization"] / count,
                 "train_condition_centering": sums["condition_centering"] / count,
                 "train_basis_cross_orthogonality": (sums["basis_cross_orthogonality"] / count),
                 "train_pcgrad_conflicts": sums["pcgrad_conflicts"],
@@ -1212,6 +1278,9 @@ def train_v0_9(
                 "validation_propagator_growth": validation.get("propagator_growth", 0.0),
                 "validation_gate_mean": validation.get("gate_mean", 1.0),
                 "validation_condition_observer": validation.get("condition_observer", 0.0),
+                "validation_context_residualization": validation.get(
+                    "context_residualization", 0.0
+                ),
                 "validation_condition_observer_nrmse": observer_validation.get(
                     "normalized_rmse", 0.0
                 ),
@@ -1249,7 +1318,13 @@ def train_v0_9(
                 if current_phase2_state is not None and current_phase2_state.observer_only
                 else float(row["validation_selection_score"])
             )
-            if score < best_score:
+            candidate_key = (
+                (0.0, 0.0, 0.0, score)
+                if current_phase2_state is not None and current_phase2_state.observer_only
+                else _validation_checkpoint_key(validation)
+            )
+            if candidate_key < best_key:
+                best_key = candidate_key
                 best_score = score
                 best_state = {
                     key: value.detach().cpu().clone()
@@ -1345,6 +1420,13 @@ def train_v0_9(
             "phase2_oracle_labels_are_train_only": bool(
                 resolved.v0_9_phase2 is not None and resolved.v0_9_phase2.enabled
             ),
+            "phase2_observer_is_causal_state_mean_trend": bool(
+                resolved.v0_9_phase2 is not None and resolved.v0_9_phase2.enabled
+            ),
+            "phase2_dynamic_context_is_condition_residualized": bool(
+                resolved.v0_9_phase2 is not None and resolved.v0_9_phase2.enabled
+            ),
+            "relative_to_nominal_rollout_objective": stabilized,
         },
         "curriculum": {
             "rollout_horizons": list(resolved.v0_9_training.rollout_horizons),
@@ -1401,6 +1483,10 @@ def train_v0_9(
             "observer_ready": final_observer_ready,
             "observer_validation": final_observer_validation,
             "conditional_centering_has_variance_floor": False,
+            "observer_supervised_during_oracle_stages": True,
+            "lambda_context_residualization": (
+                resolved.v0_9_phase2.lambda_context_residualization
+            ),
         },
     }
     (destination / "evaluation" / "gradient_geometry_summary.json").write_text(
