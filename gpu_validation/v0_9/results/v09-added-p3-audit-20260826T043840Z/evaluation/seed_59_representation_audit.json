@@ -1,0 +1,19 @@
+{
+  "backbone_seed": 59,
+  "boundary_degradation": 0.010320124216377735,
+  "data_boundary_no_slip_mse": 0.0,
+  "data_divergence_rms": 0.07249623537063599,
+  "divergence_degradation": -0.5321407318115234,
+  "nominal_tangent_boundary": 0.0004809990059584379,
+  "nominal_tangent_divergence": 0.006822869181632996,
+  "nominal_tangent_outer_boundary": 0.0030335094779729843,
+  "reconstruction_boundary_no_slip_mse": 0.0005160061991773546,
+  "reconstruction_divergence_rms": 0.03391803428530693,
+  "reconstruction_outer_boundary_mse": 0.019270092248916626,
+  "reconstruction_physics_status": "FAIL",
+  "reconstruction_relative_l2": 0.29086974263191223,
+  "roundtrip_nrmse": 0.5309803485870361,
+  "roundtrip_status": "FAIL",
+  "sample_count": 12,
+  "tangent_status": "PASS"
+}

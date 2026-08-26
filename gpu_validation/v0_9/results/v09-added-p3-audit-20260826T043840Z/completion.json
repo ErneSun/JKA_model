@@ -1,0 +1,12 @@
+{
+  "audit_seed_count": 3,
+  "git_commit": "a47b28b3370f20a5c94451431ab09457bd202b72",
+  "matched_route_training_status": "PENDING",
+  "next_candidate": "PHYSICAL_MANIFOLD_DECODER",
+  "phase2_retraining_performed": false,
+  "requested_validation_id": "v09-added-p3-audit-20260826T043840Z",
+  "resolved_validation_id": "v09-added-p3-audit-20260826T043840Z",
+  "scientific_status": "AUDIT_COMPLETE_TRAINING_PENDING",
+  "source_phase2_result": "v09-added-p2-physical-20260824T105209Z",
+  "status": "PASS"
+}
