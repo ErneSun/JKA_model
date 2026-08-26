@@ -2465,6 +2465,91 @@ class V09Phase2Config:
 
 
 @dataclass(frozen=True, slots=True)
+class V09Phase3Config:
+    """Physical-manifold and representation-sufficiency audit before matched retraining."""
+
+    enabled: bool = False
+    source_phase2_result: str = ""
+    routes: tuple[str, ...] = ("frozen", "joint", "from_scratch")
+    primary_decoder_candidate: str = "streamfunction"
+    joint_backbone_allowlist: tuple[str, ...] = (
+        "online_encoder.projection",
+        "training_decoder.refine.2",
+    )
+    audit_samples_per_trajectory: int = 4
+    tangent_epsilon: float = 1.0e-3
+    max_roundtrip_nrmse: float = 0.25
+    max_reconstruction_physics_degradation: float = 0.10
+    max_tangent_divergence: float = 0.10
+    representation_learning_rate: float = 5.0e-5
+    operator_learning_rate: float = 5.0e-4
+    lambda_roundtrip: float = 0.20
+    lambda_jepa_consistency: float = 0.20
+    lambda_physical_manifold: float = 1.0
+    max_normalized_representation_drift: float = 0.10
+
+    def __post_init__(self) -> None:
+        if self.enabled and not self.source_phase2_result.strip():
+            raise ValueError("V0.9 Phase-3 requires an explicit Phase-2 source result")
+        if self.routes != ("frozen", "joint", "from_scratch"):
+            raise ValueError("V0.9 Phase-3 routes must be frozen/joint/from_scratch")
+        if self.primary_decoder_candidate not in {"streamfunction", "hodge"}:
+            raise ValueError("invalid V0.9 Phase-3 physical decoder candidate")
+        if not self.joint_backbone_allowlist or any(
+            not value.strip() for value in self.joint_backbone_allowlist
+        ):
+            raise ValueError("V0.9 Phase-3 joint route requires a parameter allow-list")
+        if self.audit_samples_per_trajectory < 1:
+            raise ValueError("V0.9 Phase-3 audit requires positive sample count")
+        positive = (
+            self.tangent_epsilon,
+            self.max_roundtrip_nrmse,
+            self.max_reconstruction_physics_degradation,
+            self.max_tangent_divergence,
+            self.representation_learning_rate,
+            self.operator_learning_rate,
+            self.lambda_roundtrip,
+            self.lambda_jepa_consistency,
+            self.lambda_physical_manifold,
+            self.max_normalized_representation_drift,
+        )
+        if any(not math.isfinite(value) or value <= 0 for value in positive):
+            raise ValueError("V0.9 Phase-3 scales and tolerances must be finite and positive")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            name: list(value) if isinstance(value, tuple) else value
+            for name in self.__dataclass_fields__
+            for value in (getattr(self, name),)
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> V09Phase3Config:
+        defaults = cls()
+        allowed = set(defaults.__dataclass_fields__)
+        _reject_unknown(data, allowed, "V0.9 Phase-3 config")
+        values = {name: data.get(name, getattr(defaults, name)) for name in allowed}
+        values["enabled"] = bool(values["enabled"])
+        values["source_phase2_result"] = str(values["source_phase2_result"])
+        values["routes"] = tuple(str(value) for value in values["routes"])
+        values["joint_backbone_allowlist"] = tuple(
+            str(value) for value in values["joint_backbone_allowlist"]
+        )
+        values["primary_decoder_candidate"] = str(values["primary_decoder_candidate"])
+        values["audit_samples_per_trajectory"] = int(values["audit_samples_per_trajectory"])
+        for name in allowed - {
+            "enabled",
+            "source_phase2_result",
+            "routes",
+            "joint_backbone_allowlist",
+            "primary_decoder_candidate",
+            "audit_samples_per_trajectory",
+        }:
+            values[name] = float(values[name])
+        return cls(**values)
+
+
+@dataclass(frozen=True, slots=True)
 class DataConfig:
     """Static data expectations shared by V0.2+ pipelines."""
 
@@ -2607,6 +2692,7 @@ class ProjectConfig:
     v0_9_training: V09TrainingConfig | None = None
     v0_9_evaluation: V09EvaluationConfig | None = None
     v0_9_phase2: V09Phase2Config | None = None
+    v0_9_phase3: V09Phase3Config | None = None
     project_version: str = PROJECT_VERSION
     tags: tuple[str, ...] = field(default_factory=tuple)
 
@@ -2777,6 +2863,9 @@ class ProjectConfig:
                     )
                 if self.v0_9_phase2.paired_horizon > self.v0_9_training.rollout_horizons[-1]:
                     raise ValueError("V0.9 Phase-2 paired horizon exceeds training rollout")
+            if self.v0_9_phase3 is not None and self.v0_9_phase3.enabled:
+                if self.v0_9_phase2 is None or not self.v0_9_phase2.enabled:
+                    raise ValueError("V0.9 Phase-3 requires the Phase-2 diagnostic contract")
         elif self.cylinder_wake_2d is not None and self.cylinder_wake_2d.time_varying_boundary:
             raise ValueError("time-varying cylinder boundaries require the complete V0.9 contract")
         if (
@@ -2935,6 +3024,7 @@ class ProjectConfig:
             if self.v0_9_evaluation is None
             else self.v0_9_evaluation.to_dict(),
             "v0_9_phase2": None if self.v0_9_phase2 is None else self.v0_9_phase2.to_dict(),
+            "v0_9_phase3": None if self.v0_9_phase3 is None else self.v0_9_phase3.to_dict(),
             "project_version": self.project_version,
             "tags": list(self.tags),
         }
@@ -2979,6 +3069,7 @@ class ProjectConfig:
                 "v0_9_training",
                 "v0_9_evaluation",
                 "v0_9_phase2",
+                "v0_9_phase3",
                 "project_version",
                 "tags",
             },
@@ -3214,6 +3305,13 @@ class ProjectConfig:
                 if data.get("v0_9_phase2") is None
                 else V09Phase2Config.from_dict(
                     _ensure_mapping(data["v0_9_phase2"], "V0.9 Phase-2 config")
+                )
+            ),
+            v0_9_phase3=(
+                None
+                if data.get("v0_9_phase3") is None
+                else V09Phase3Config.from_dict(
+                    _ensure_mapping(data["v0_9_phase3"], "V0.9 Phase-3 config")
                 )
             ),
             project_version=str(data.get("project_version", PROJECT_VERSION)),

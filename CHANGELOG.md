@@ -2,6 +2,10 @@
 
 ## 0.9.0 — Context-conditioned low-rank adaptive Koopman dynamics
 
+- Closed Phase 2 after the physics-first formal run improved constraint compliance but eliminated
+  material adaptive skill; added a Phase-3 raw-field representation, round-trip and tangent audit.
+- Added a stream-function physical-decoder candidate and explicit frozen/joint/from-scratch route
+  contracts; joint and from-scratch routes reject stale frozen latent caches.
 - Added a pre-Phase-3 correction after the continuous run: physical feasibility now precedes
   H80 gain in checkpoint/rank selection, and the known oracle no longer depends on observer gates.
 - Replaced context-only condition observation with causal state/mean/trend features and supervised

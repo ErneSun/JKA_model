@@ -2,11 +2,23 @@
 
 从项目根目录运行：
 
+Phase 3 entry audit（不重复 Phase 2 训练）：
+
+```bash
+.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_phase3.py --validation-id v09-added-p3-audit-$(date -u +%Y%m%dT%H%M%SZ) --phase2-id v09-added-p2-physical-20260824T105209Z --seeds 47 53 59
+```
+
+该命令冻结已有 Phase-2 negative result，在原始场上审计 reconstruction、latent round-trip 与
+nominal-generator tangent consistency，随后决定进入 physical-manifold decoder、joint Markov
+representation 或 history-not-required control。它不会重新训练 Phase 2。
+
+历史 Phase 2 完整训练命令：
+
 ```bash
 .venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_all.py --validation-id v09-added-p2-physical-$(date -u +%Y%m%dT%H%M%SZ) --v0-8-id v08-final-20260820T111016Z --v0-8-handoff-policy supported --seeds 47 53 59
 ```
 
-该命令对应当前已知的 V0.8 supported handoff，并运行 G0 targeted tests；不要加
+历史命令对应当前已知的 V0.8 supported handoff，并运行 G0 targeted tests；不要加
 `--skip-software-tests`。若未来出现 3/3 strict-ready V0.8 结果，再改用默认 strict policy。
 
 命令自动寻找最近的、同时具有 raw run 与 compact result 的严格 `V0.9_READY` V0.8 handoff。需要指定时增加

@@ -58,6 +58,23 @@ v0_9_phase2:
   minimum_future_separation: 0.05
   minimum_identifiable_pairs: 8
   min_paired_dynamic_gain: 0.02
+v0_9_phase3:
+  enabled: true
+  source_phase2_result: v09-added-p2-physical-20260824T105209Z
+  routes: [frozen, joint, from_scratch]
+  primary_decoder_candidate: streamfunction
+  joint_backbone_allowlist: [online_encoder.projection, training_decoder.refine.2]
+  audit_samples_per_trajectory: 4
+  tangent_epsilon: 0.001
+  max_roundtrip_nrmse: 0.25
+  max_reconstruction_physics_degradation: 0.10
+  max_tangent_divergence: 0.10
+  representation_learning_rate: 0.00005
+  operator_learning_rate: 0.0005
+  lambda_roundtrip: 0.20
+  lambda_jepa_consistency: 0.20
+  lambda_physical_manifold: 1.0
+  max_normalized_representation_drift: 0.10
 v0_9_training:
   epochs: 80
   batch_size: 256
