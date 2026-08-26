@@ -4,15 +4,20 @@
 
 - Phase 2 is frozen; no Phase-2 retraining or further hyperparameter repair is allowed.
 - Phase 3.0 evidence freeze: implemented.
-- Phase 3.1 raw-field reconstruction/round-trip/tangent audit: implemented locally.
+- Phase 3.1 raw-field reconstruction/round-trip/tangent audit: formal audit returned and reviewed.
 - Phase 3.2 physical decoder interface: stream-function candidate implemented and unit-tested.
-- Matched `frozen/joint/from_scratch` training: pending the Phase-3 entry audit result.
-- Local Phase-3 targeted tests: 5 passed.
-- Formal RTX-5080 audit: pending.
+- Phase 3.3 matched `joint` training/locked-test workflow: implemented locally; GPU evidence pending.
+- Matched `from_scratch` control and final aggregation: pending the joint result.
+- Formal RTX-5080 audit: completed as `v09-added-p3-audit-20260826T043840Z`.
 
 The current entry audit is deliberately not called scientific support. Its output status is
 `AUDIT_COMPLETE_TRAINING_PENDING` and it selects the mathematically appropriate Phase-3 training
 candidate.
+
+The returned audit initially selected `PHYSICAL_MANIFOLD_DECODER`, but that classification used an
+RMS/MSE-inconsistent divergence comparison. The original evidence is preserved; the corrected
+review is recorded in `phase_3_audit_review_20260826.md`. Reconstruction physics passes and the
+correct next route is `JOINT_MARKOV_REPRESENTATION`.
 
 ## Why Phase 3 begins with an audit
 
@@ -143,3 +148,9 @@ The initial joint backbone allow-list is restricted to `online_encoder.projectio
 This command does not retrain Phase 2. It produces raw artifacts under
 `runs/v0_9/<resolved-id>/` and a compact report under
 `gpu_validation/v0_9/results/<resolved-id>/`.
+
+## One-line RTX-5080 Phase-3.3 joint study
+
+```bash
+.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_phase3_joint.py --validation-id v09-added-p3-joint-$(date -u +%Y%m%dT%H%M%SZ) --phase2-id v09-added-p2-physical-20260824T105209Z --audit-id v09-added-p3-audit-20260826T043840Z --seeds 47 53 59 --operator-seeds 701 809 907 --condition-modes known latent_inferred
+```

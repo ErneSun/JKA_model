@@ -2483,9 +2483,13 @@ class V09Phase3Config:
     max_tangent_divergence: float = 0.10
     representation_learning_rate: float = 5.0e-5
     operator_learning_rate: float = 5.0e-4
+    raw_field_batch_size: int = 1
+    raw_field_rollout_stride: int = 8
     lambda_roundtrip: float = 0.20
+    lambda_reconstruction: float = 1.0
     lambda_jepa_consistency: float = 0.20
     lambda_physical_manifold: float = 1.0
+    lambda_representation_drift: float = 1.0
     max_normalized_representation_drift: float = 0.10
 
     def __post_init__(self) -> None:
@@ -2501,6 +2505,8 @@ class V09Phase3Config:
             raise ValueError("V0.9 Phase-3 joint route requires a parameter allow-list")
         if self.audit_samples_per_trajectory < 1:
             raise ValueError("V0.9 Phase-3 audit requires positive sample count")
+        if self.raw_field_batch_size < 1 or self.raw_field_rollout_stride < 1:
+            raise ValueError("V0.9 Phase-3 raw-field batch/stride must be positive")
         positive = (
             self.tangent_epsilon,
             self.max_roundtrip_nrmse,
@@ -2509,8 +2515,10 @@ class V09Phase3Config:
             self.representation_learning_rate,
             self.operator_learning_rate,
             self.lambda_roundtrip,
+            self.lambda_reconstruction,
             self.lambda_jepa_consistency,
             self.lambda_physical_manifold,
+            self.lambda_representation_drift,
             self.max_normalized_representation_drift,
         )
         if any(not math.isfinite(value) or value <= 0 for value in positive):
@@ -2537,6 +2545,8 @@ class V09Phase3Config:
         )
         values["primary_decoder_candidate"] = str(values["primary_decoder_candidate"])
         values["audit_samples_per_trajectory"] = int(values["audit_samples_per_trajectory"])
+        values["raw_field_batch_size"] = int(values["raw_field_batch_size"])
+        values["raw_field_rollout_stride"] = int(values["raw_field_rollout_stride"])
         for name in allowed - {
             "enabled",
             "source_phase2_result",
@@ -2544,6 +2554,8 @@ class V09Phase3Config:
             "joint_backbone_allowlist",
             "primary_decoder_candidate",
             "audit_samples_per_trajectory",
+            "raw_field_batch_size",
+            "raw_field_rollout_stride",
         }:
             values[name] = float(values[name])
         return cls(**values)

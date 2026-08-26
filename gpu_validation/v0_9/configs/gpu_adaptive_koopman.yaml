@@ -71,9 +71,13 @@ v0_9_phase3:
   max_tangent_divergence: 0.10
   representation_learning_rate: 0.00005
   operator_learning_rate: 0.0005
+  raw_field_batch_size: 1
+  raw_field_rollout_stride: 8
   lambda_roundtrip: 0.20
+  lambda_reconstruction: 1.0
   lambda_jepa_consistency: 0.20
   lambda_physical_manifold: 1.0
+  lambda_representation_drift: 1.0
   max_normalized_representation_drift: 0.10
 v0_9_training:
   epochs: 80

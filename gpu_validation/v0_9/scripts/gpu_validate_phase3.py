@@ -22,7 +22,10 @@ for import_root in (ROOT, ROOT / "src"):
 
 from jka_model.adaptive import load_adaptive_cache  # noqa: E402
 from jka_model.config import ProjectConfig, load_config, save_config  # noqa: E402
-from jka_model.manifold import audit_representation_checkpoint  # noqa: E402
+from jka_model.manifold import (  # noqa: E402
+    audit_representation_checkpoint,
+    classify_phase3_route,
+)
 from jka_model.utils import create_versioned_session, get_git_commit  # noqa: E402
 
 
@@ -220,21 +223,8 @@ def main() -> None:
             audits.append(audit.to_dict())
 
         current_stage = "phase3_route_decision"
-        reconstruction_pass = all(
-            row["reconstruction_physics_status"] == "PASS" for row in audits
-        )
-        roundtrip_pass = all(row["roundtrip_status"] == "PASS" for row in audits)
-        tangent_pass = all(row["tangent_status"] == "PASS" for row in audits)
-        observer_supported = phase2_summary.get("condition_observer") == "SUPPORTED"
-        dynamic_supported = phase2_summary.get("dynamic_operator_adaptation") == "SUPPORTED"
-        if not reconstruction_pass:
-            next_candidate = "PHYSICAL_MANIFOLD_DECODER"
-        elif not roundtrip_pass or not tangent_pass or not observer_supported:
-            next_candidate = "JOINT_MARKOV_REPRESENTATION"
-        elif not dynamic_supported:
-            next_candidate = "HISTORY_NOT_REQUIRED_CONTROL"
-        else:
-            next_candidate = "FROZEN_REPRESENTATION_ADEQUATE"
+        route_status = classify_phase3_route(audits, phase2_summary)
+        next_candidate = route_status["next_candidate"]
         decision = {
             "schema_version": 1,
             "phase": "V0.9_PHASE3_ENTRY_AUDIT",
@@ -243,9 +233,7 @@ def main() -> None:
             "phase2_retraining_performed": False,
             "raw_field_online_reencoding_required_for_trainable_routes": True,
             "seed_count": len(audits),
-            "reconstruction_physics_status": "PASS" if reconstruction_pass else "FAIL",
-            "roundtrip_status": "PASS" if roundtrip_pass else "FAIL",
-            "nominal_tangent_status": "PASS" if tangent_pass else "FAIL",
+            **route_status,
             "phase2_observer_status": phase2_summary.get("condition_observer"),
             "phase2_dynamic_status": phase2_summary.get("dynamic_operator_adaptation"),
             "next_candidate": next_candidate,

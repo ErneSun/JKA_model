@@ -3,6 +3,14 @@
 from jka_model.manifold.audit import (
     Phase3RepresentationAudit,
     audit_representation_checkpoint,
+    classify_phase3_metrics,
+    classify_phase3_route,
+)
+from jka_model.manifold.joint import (
+    JointMarkovObjectiveResult,
+    RawFieldAdaptiveRolloutDataset,
+    joint_markov_objective,
+    move_raw_field_batch,
 )
 from jka_model.manifold.physical import (
     StreamFunctionPhysicalDecoder2D,
@@ -19,11 +27,17 @@ from jka_model.manifold.routes import (
 __all__ = [
     "PHASE3_ROUTES",
     "MatchedRouteContract",
+    "JointMarkovObjectiveResult",
     "Phase3RepresentationAudit",
+    "RawFieldAdaptiveRolloutDataset",
     "StreamFunctionPhysicalDecoder2D",
     "assert_online_reencoding_required",
     "audit_representation_checkpoint",
+    "classify_phase3_metrics",
+    "classify_phase3_route",
     "central_difference_2d",
     "configure_phase3_route",
+    "joint_markov_objective",
+    "move_raw_field_batch",
     "physical_manifold_metrics",
 ]

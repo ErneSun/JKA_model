@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import torch
 from torch import nn
 
+from jka_model.adaptive import AdaptiveCache, AdaptiveTrajectory
 from jka_model.config import ProjectConfig, V09Phase3Config, load_config
+from jka_model.data import TrajectoryDataset, TrajectoryRecord
 from jka_model.manifold import (
     MatchedRouteContract,
     StreamFunctionPhysicalDecoder2D,
     assert_online_reencoding_required,
     central_difference_2d,
+    classify_phase3_metrics,
+    classify_phase3_route,
     configure_phase3_route,
     physical_manifold_metrics,
 )
@@ -95,3 +102,125 @@ def test_phase3_route_ownership_and_matched_contract() -> None:
         assert "matched" in str(error)
     else:  # pragma: no cover
         raise AssertionError("mismatched operator seed was accepted")
+
+
+def test_phase3_route_classification_prefers_joint_when_physics_passes() -> None:
+    audits = [
+        {
+            "reconstruction_physics_status": "PASS",
+            "roundtrip_status": "FAIL",
+            "tangent_status": "PASS",
+        }
+        for _ in range(3)
+    ]
+    decision = classify_phase3_route(
+        audits,
+        {
+            "condition_observer": "NOT_SUPPORTED",
+            "dynamic_operator_adaptation": "NOT_SUPPORTED",
+        },
+    )
+    assert decision == {
+        "reconstruction_physics_status": "PASS",
+        "roundtrip_status": "FAIL",
+        "nominal_tangent_status": "PASS",
+        "next_candidate": "JOINT_MARKOV_REPRESENTATION",
+    }
+
+
+def test_phase3_divergence_rms_is_compared_to_sqrt_mse_threshold() -> None:
+    # Representative values from the returned three-seed audit.  0.049 RMS is
+    # below sqrt(0.02), even though it is above the MSE value 0.02 itself.
+    status = classify_phase3_metrics(
+        divergence_degradation=-0.239,
+        boundary_degradation=0.043,
+        reconstruction_divergence_rms=0.04946,
+        reconstruction_boundary_mse=0.00216,
+        reconstruction_outer_boundary_mse=0.02003,
+        roundtrip_nrmse=0.4006,
+        nominal_tangent_divergence=0.0281,
+        max_divergence_mse=0.02,
+        max_boundary_mse=0.05,
+        max_reconstruction_physics_degradation=0.10,
+        max_roundtrip_nrmse=0.25,
+        max_tangent_divergence=0.10,
+    )
+    assert status == {
+        "reconstruction_physics_status": "PASS",
+        "roundtrip_status": "FAIL",
+        "tangent_status": "PASS",
+    }
+
+
+def test_phase3_raw_field_windows_reencode_original_states() -> None:
+    from jka_model.manifold import RawFieldAdaptiveRolloutDataset
+
+    states = torch.arange(6 * 3 * 4 * 4, dtype=torch.float32).reshape(6, 3, 4, 4)
+    dts = torch.full((5,), 0.1)
+    record = TrajectoryRecord(
+        "trajectory-a",
+        states,
+        dts,
+        mu_static=torch.tensor([1.0]),
+        valid_mask=torch.ones(4, 4, dtype=torch.bool),
+    )
+    trajectory = AdaptiveTrajectory(
+        trajectory_id="trajectory-a",
+        split="train",
+        schedule_type="smooth_ramp",
+        transition_index=2,
+        latents=torch.zeros(6, 2),
+        dts=dts,
+        context_parameters=torch.tensor([1.0]),
+        conditions=torch.stack((torch.arange(5), torch.ones(5)), dim=-1).float(),
+        nominal_residuals=torch.zeros(5, 2),
+    )
+    cache = AdaptiveCache(
+        trajectories=(trajectory,),
+        backbone_checkpoint_sha256="backbone",
+        backbone_config_hash="config",
+        context_checkpoint_sha256="context",
+        data_fingerprint="data",
+        split_manifest={"train": ["trajectory-a"], "validation": [], "test": []},
+        normalizer_state={},
+        nominal_generator=torch.zeros(2, 2),
+    )
+    dataset = RawFieldAdaptiveRolloutDataset(
+        cache,
+        TrajectoryDataset([record]),
+        "train",
+        history=2,
+        horizon=2,
+        stride=1,
+    )
+    assert len(dataset) == 3
+    first = dataset[0]
+    assert torch.equal(first["history_raw"], states[:2])
+    assert torch.equal(first["target_raw"], states[2:4])
+    assert first["future_condition_targets"].shape == (2, 3)
+
+
+def test_returned_phase3_audit_reassesses_to_joint_route() -> None:
+    from gpu_validation.v0_9.scripts.gpu_validate_phase3_joint import _corrected_audit
+
+    root = Path("gpu_validation/v0_9/results/v09-added-p3-audit-20260826T043840Z")
+    decision = json.loads(
+        (root / "evaluation/phase3_route_decision.json").read_text(encoding="utf-8")
+    )
+    phase2_summary = json.loads(
+        Path(
+            "gpu_validation/v0_9/results/"
+            "v09-added-p2-physical-20260824T105209Z/summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    config = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml")
+    reassessed = _corrected_audit(decision, phase2_summary, config)
+    assert all(
+        row["reconstruction_physics_status"] == "PASS" for row in reassessed["seeds"]
+    )
+    assert reassessed["corrected"] == {
+        "reconstruction_physics_status": "PASS",
+        "roundtrip_status": "FAIL",
+        "nominal_tangent_status": "PASS",
+        "next_candidate": "JOINT_MARKOV_REPRESENTATION",
+    }

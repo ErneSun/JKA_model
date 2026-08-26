@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -39,6 +40,73 @@ class Phase3RepresentationAudit:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def classify_phase3_route(
+    audits: list[Mapping[str, Any]], phase2_summary: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Select the next Phase-3 route from already classified seed audits.
+
+    This function deliberately keeps the route decision separate from metric
+    calculation so a corrected metric contract can be regression-tested without
+    rerunning Phase-2 or GPU inference.
+    """
+    if not audits:
+        raise ValueError("Phase-3 route classification requires seed audits")
+    reconstruction_pass = all(
+        row.get("reconstruction_physics_status") == "PASS" for row in audits
+    )
+    roundtrip_pass = all(row.get("roundtrip_status") == "PASS" for row in audits)
+    tangent_pass = all(row.get("tangent_status") == "PASS" for row in audits)
+    observer_supported = phase2_summary.get("condition_observer") == "SUPPORTED"
+    dynamic_supported = phase2_summary.get("dynamic_operator_adaptation") == "SUPPORTED"
+    if not reconstruction_pass:
+        next_candidate = "PHYSICAL_MANIFOLD_DECODER"
+    elif not roundtrip_pass or not tangent_pass or not observer_supported:
+        next_candidate = "JOINT_MARKOV_REPRESENTATION"
+    elif not dynamic_supported:
+        next_candidate = "HISTORY_NOT_REQUIRED_CONTROL"
+    else:
+        next_candidate = "FROZEN_REPRESENTATION_ADEQUATE"
+    return {
+        "reconstruction_physics_status": "PASS" if reconstruction_pass else "FAIL",
+        "roundtrip_status": "PASS" if roundtrip_pass else "FAIL",
+        "nominal_tangent_status": "PASS" if tangent_pass else "FAIL",
+        "next_candidate": next_candidate,
+    }
+
+
+def classify_phase3_metrics(
+    *,
+    divergence_degradation: float,
+    boundary_degradation: float,
+    reconstruction_divergence_rms: float,
+    reconstruction_boundary_mse: float,
+    reconstruction_outer_boundary_mse: float,
+    roundtrip_nrmse: float,
+    nominal_tangent_divergence: float,
+    max_divergence_mse: float,
+    max_boundary_mse: float,
+    max_reconstruction_physics_degradation: float,
+    max_roundtrip_nrmse: float,
+    max_tangent_divergence: float,
+) -> dict[str, str]:
+    """Classify audit metrics while preserving RMS/MSE dimensional consistency."""
+    divergence_rms_limit = math.sqrt(max_divergence_mse)
+    reconstruction_pass = (
+        divergence_degradation <= max_reconstruction_physics_degradation
+        and boundary_degradation <= max_reconstruction_physics_degradation
+        and reconstruction_divergence_rms <= divergence_rms_limit
+        and reconstruction_boundary_mse <= max_boundary_mse
+        and reconstruction_outer_boundary_mse <= max_boundary_mse
+    )
+    return {
+        "reconstruction_physics_status": "PASS" if reconstruction_pass else "FAIL",
+        "roundtrip_status": "PASS" if roundtrip_nrmse <= max_roundtrip_nrmse else "FAIL",
+        "tangent_status": (
+            "PASS" if nominal_tangent_divergence <= max_tangent_divergence else "FAIL"
+        ),
+    }
 
 
 def _relative_degradation(candidate: Tensor, reference: Tensor, floor: float = 1.0e-12) -> Tensor:
@@ -178,10 +246,15 @@ def audit_representation_checkpoint(
     reconstruction_boundary_mse = mean(reconstruction_boundary)
     reconstruction_outer_boundary_mse = mean(reconstruction_outer_boundary)
     assert config.v0_9_evaluation is not None
+    # `max_divergence_mse` is a mean-square threshold, while the audit reports
+    # the square root (RMS).  The official cylinder observable gate uses the
+    # same square-root conversion; comparing RMS directly to MSE is dimensionally
+    # inconsistent and produces false failures.
+    divergence_rms_limit = math.sqrt(config.v0_9_evaluation.max_divergence_mse)
     divergence_degradation = _relative_degradation(
         reconstruction_divergence_rms,
         data_divergence_rms,
-        floor=config.v0_9_evaluation.max_divergence_mse,
+        floor=divergence_rms_limit,
     )
     boundary_degradation = _relative_degradation(
         reconstruction_boundary_mse,
@@ -191,15 +264,20 @@ def audit_representation_checkpoint(
     nominal_tangent_divergence = mean(tangent_divergence)
     nominal_tangent_boundary = mean(tangent_boundary)
     nominal_tangent_outer_boundary = mean(tangent_outer_boundary)
-    reconstruction_pass = bool(
-        divergence_degradation <= phase3.max_reconstruction_physics_degradation
-        and boundary_degradation <= phase3.max_reconstruction_physics_degradation
-        and reconstruction_divergence_rms <= config.v0_9_evaluation.max_divergence_mse
-        and reconstruction_boundary_mse <= config.v0_9_evaluation.max_boundary_mse
-        and reconstruction_outer_boundary_mse <= config.v0_9_evaluation.max_boundary_mse
+    statuses = classify_phase3_metrics(
+        divergence_degradation=float(divergence_degradation),
+        boundary_degradation=float(boundary_degradation),
+        reconstruction_divergence_rms=float(reconstruction_divergence_rms),
+        reconstruction_boundary_mse=float(reconstruction_boundary_mse),
+        reconstruction_outer_boundary_mse=float(reconstruction_outer_boundary_mse),
+        roundtrip_nrmse=float(roundtrip_nrmse),
+        nominal_tangent_divergence=float(nominal_tangent_divergence),
+        max_divergence_mse=config.v0_9_evaluation.max_divergence_mse,
+        max_boundary_mse=config.v0_9_evaluation.max_boundary_mse,
+        max_reconstruction_physics_degradation=phase3.max_reconstruction_physics_degradation,
+        max_roundtrip_nrmse=phase3.max_roundtrip_nrmse,
+        max_tangent_divergence=phase3.max_tangent_divergence,
     )
-    roundtrip_pass = bool(roundtrip_nrmse <= phase3.max_roundtrip_nrmse)
-    tangent_pass = bool(nominal_tangent_divergence <= phase3.max_tangent_divergence)
     result = Phase3RepresentationAudit(
         backbone_seed=config.training.seed,
         sample_count=sample_count,
@@ -215,9 +293,9 @@ def audit_representation_checkpoint(
         nominal_tangent_divergence=float(nominal_tangent_divergence),
         nominal_tangent_boundary=float(nominal_tangent_boundary),
         nominal_tangent_outer_boundary=float(nominal_tangent_outer_boundary),
-        reconstruction_physics_status="PASS" if reconstruction_pass else "FAIL",
-        roundtrip_status="PASS" if roundtrip_pass else "FAIL",
-        tangent_status="PASS" if tangent_pass else "FAIL",
+        reconstruction_physics_status=statuses["reconstruction_physics_status"],
+        roundtrip_status=statuses["roundtrip_status"],
+        tangent_status=statuses["tangent_status"],
     )
     if output_path is not None:
         destination = Path(output_path)
