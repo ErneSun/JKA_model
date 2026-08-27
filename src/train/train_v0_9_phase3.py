@@ -20,6 +20,7 @@ from jka_model.adaptive import (
     AdaptiveKoopmanModel,
     FactorizedAdaptiveOperator,
     adaptive_training_scales,
+    condition_observer_metrics,
     load_adaptive_cache,
     phase2_condition_scales,
 )
@@ -28,11 +29,13 @@ from jka_model.context import build_dynamic_context_model
 from jka_model.context.checkpoint import load_context_checkpoint
 from jka_model.data import ChannelStandardizer, load_cylinder_wake_dataset
 from jka_model.manifold import (
+    MatureCheckpointTracker,
     RawFieldAdaptiveRolloutDataset,
     assert_online_reencoding_required,
     configure_phase3_route,
     joint_markov_objective,
     move_raw_field_batch,
+    phase3_checkpoint_key,
 )
 from jka_model.models import FieldJEPAKoopmanModel
 from jka_model.residual.cache import file_sha256
@@ -44,6 +47,7 @@ class Phase3JointTrainingResult:
     run_dir: Path
     checkpoint: Path
     completed_epochs: int
+    best_epoch: int
     trainable_parameters: int
     validation_metrics: dict[str, float]
     locked_test_metrics: dict[str, float]
@@ -177,6 +181,8 @@ def _evaluate(
     totals: dict[str, float] = {}
     count = 0
     maximum = {"representation_drift", "physical_manifold_violation", "burden_max"}
+    observer_predictions: list[torch.Tensor] = []
+    observer_targets: list[torch.Tensor] = []
     for raw in loader:
         batch = move_raw_field_batch(raw, device)
         objective = joint_markov_objective(
@@ -195,16 +201,43 @@ def _evaluate(
         batch_size = batch["history_raw"].shape[0]
         for name, value in {"total": objective.total, **objective.terms}.items():
             scalar = float(value)
-            if name in maximum:
+            is_maximum = name in maximum or name.startswith(
+                ("decoded_divergence", "decoded_boundary", "decoded_outer_boundary")
+            )
+            if is_maximum:
                 totals[name] = max(totals.get(name, float("-inf")), scalar)
             else:
                 totals[name] = totals.get(name, 0.0) + scalar * batch_size
+        q_hat = objective.adaptive.rollout.get("q_hat")
+        if q_hat is not None:
+            steps = q_hat.shape[1]
+            normalized_target = (
+                batch["future_condition_targets"][:, :steps] - condition_mean
+            ) / condition_std
+            observer_predictions.append(q_hat.reshape(-1, q_hat.shape[-1]).cpu())
+            observer_targets.append(
+                normalized_target.reshape(-1, normalized_target.shape[-1]).cpu()
+            )
         count += batch_size
     if count == 0:
         raise RuntimeError("Phase-3 validation dataset is empty")
-    return {
-        name: value if name in maximum else value / count for name, value in totals.items()
+    result = {
+        name: (
+            value
+            if name in maximum
+            or name.startswith(
+                ("decoded_divergence", "decoded_boundary", "decoded_outer_boundary")
+            )
+            else value / count
+        )
+        for name, value in totals.items()
     }
+    if observer_predictions:
+        observer = condition_observer_metrics(
+            torch.cat(observer_predictions), torch.cat(observer_targets)
+        )
+        result.update({f"observer_{name}": value for name, value in observer.items()})
+    return result
 
 
 def train_v0_9_phase3_joint(
@@ -220,10 +253,15 @@ def train_v0_9_phase3_joint(
 ) -> Phase3JointTrainingResult:
     resolved = load_config(config) if isinstance(config, (str, Path)) else config
     phase3 = resolved.v0_9_phase3
+    phase2 = resolved.v0_9_phase2
     training = resolved.v0_9_training
+    evaluation = resolved.v0_9_evaluation
+    adaptive_config = resolved.v0_9_adaptive
     cylinder = resolved.cylinder_wake_2d
-    if phase3 is None or training is None or cylinder is None or not phase3.enabled:
+    required = (phase3, phase2, training, evaluation, adaptive_config, cylinder)
+    if any(value is None for value in required) or not phase3.enabled:
         raise ValueError("Phase-3 joint training requires enabled complete configuration")
+    assert phase3 and phase2 and training and evaluation and adaptive_config and cylinder
     selected = torch.device(device)
     if selected.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
@@ -338,10 +376,8 @@ def train_v0_9_phase3_joint(
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled and amp_dtype is torch.float16)
     nominal_core = backbone.koopman_core.A.detach().clone()
     nominal_adapter = adaptive_model.operator_adapter.nominal_generator.detach().clone()
-    best_key = (float("inf"), float("inf"), float("inf"))
     best_states: tuple[dict[str, Any], dict[str, Any]] | None = None
     best_metrics: dict[str, float] = {}
-    stale = 0
     completed = 0
     history_rows: list[dict[str, Any]] = []
     maturity_fraction = max(
@@ -349,6 +385,10 @@ def train_v0_9_phase3_joint(
         training.physics_start_fraction + training.physics_ramp_duration_fraction,
     )
     earliest_stop_epoch = math.ceil(maturity_fraction * max(training.epochs - 1, 1)) + 1
+    checkpoint_tracker = MatureCheckpointTracker(
+        earliest_epoch=earliest_stop_epoch,
+        patience=training.patience,
+    )
     for epoch in range(training.epochs):
         backbone.train()
         adaptive_model.train()
@@ -400,31 +440,27 @@ def train_v0_9_phase3_joint(
             selected,
             epoch,
         )
-        drift_violation = max(
-            metrics["representation_drift"] - phase3.max_normalized_representation_drift,
-            0.0,
-        )
-        key = (
-            1.0 if drift_violation > 0 else 0.0,
-            metrics["physical_manifold_violation"] + drift_violation,
-            metrics["total"],
+        key = phase3_checkpoint_key(
+            metrics,
+            phase3,
+            evaluation,
+            phase2,
+            condition_mode=adaptive_config.condition_mode,
         )
         history_rows.append({"epoch": epoch + 1, **metrics})
-        if key < best_key:
-            best_key = key
+        completed = epoch + 1
+        selected_checkpoint, should_stop = checkpoint_tracker.consider(completed, key)
+        if selected_checkpoint:
             best_states = (
                 copy.deepcopy(backbone.state_dict()),
                 copy.deepcopy(adaptive_model.state_dict()),
             )
             best_metrics = dict(metrics)
-            stale = 0
-        else:
-            stale += 1
-        completed = epoch + 1
-        if completed >= earliest_stop_epoch and stale >= training.patience:
+        if should_stop:
             break
-    if best_states is None:
-        raise RuntimeError("Phase-3 joint training selected no finite checkpoint")
+    if best_states is None or checkpoint_tracker.best_epoch is None:
+        raise RuntimeError("Phase-3 joint training selected no mature finite checkpoint")
+    best_epoch = checkpoint_tracker.best_epoch
     backbone.load_state_dict(best_states[0], strict=True)
     adaptive_model.load_state_dict(best_states[1], strict=True)
     locked_test_metrics = _evaluate(
@@ -438,7 +474,7 @@ def train_v0_9_phase3_joint(
         condition_std,
         resolved,
         selected,
-        max(completed - 1, 0),
+        best_epoch - 1,
     )
     (destination / "logs" / "history.json").write_text(
         json.dumps(history_rows, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -449,7 +485,7 @@ def train_v0_9_phase3_joint(
     checkpoint = destination / "checkpoints" / "best_joint_markov.pt"
     _save_payload(
         {
-            "schema_version": "v0.9-phase3-joint-1",
+            "schema_version": "v0.9-phase3-joint-2",
             "route": "joint",
             "config": resolved.to_dict(),
             "config_hash": resolved.stable_hash,
@@ -471,6 +507,8 @@ def train_v0_9_phase3_joint(
             "condition_std": condition_std_cpu,
             "residual_scale": residual_scale_cpu,
             "completed_epochs": completed,
+            "best_epoch": best_epoch,
+            "checkpoint_eligible_from_epoch": earliest_stop_epoch,
             "trainable_parameters": trainable_count,
             "best_validation_metrics": best_metrics,
             "locked_test_metrics": locked_test_metrics,
@@ -487,7 +525,7 @@ def train_v0_9_phase3_joint(
     )
     print(
         f"[V0.9][phase3:joint:{resolved.v0_9_adaptive.condition_mode}] PASS "
-        f"epochs={completed} val_total={best_metrics['total']:.6g} "
+        f"epochs={completed} best_epoch={best_epoch} val_total={best_metrics['total']:.6g} "
         f"drift={best_metrics['representation_drift']:.6g}",
         flush=True,
     )
@@ -495,6 +533,7 @@ def train_v0_9_phase3_joint(
         destination,
         checkpoint,
         completed,
+        best_epoch,
         trainable_count,
         best_metrics,
         locked_test_metrics,

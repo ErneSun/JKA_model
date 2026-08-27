@@ -6,8 +6,10 @@
 - Phase 3.0 evidence freeze: implemented.
 - Phase 3.1 raw-field reconstruction/round-trip/tangent audit: formal audit returned and reviewed.
 - Phase 3.2 physical decoder interface: stream-function candidate implemented and unit-tested.
-- Phase 3.3 matched `joint` training/locked-test workflow: implemented locally; GPU evidence pending.
-- Matched `from_scratch` control and final aggregation: pending the joint result.
+- Phase 3.3 initial matched `joint` matrix: 18/18 workflow-complete as
+  `v09-added-p3-joint-20260826T053347Z`, but scientifically unsupported after complete-gate review.
+- Phase 3.3 r1 correction: implemented and targeted-software-tested; corrected GPU evidence pending.
+- Matched `from_scratch` control and final aggregation: deferred until the corrected joint result.
 - Formal RTX-5080 audit: completed as `v09-added-p3-audit-20260826T043840Z`.
 
 The current entry audit is deliberately not called scientific support. Its output status is
@@ -18,6 +20,18 @@ The returned audit initially selected `PHYSICAL_MANIFOLD_DECODER`, but that clas
 RMS/MSE-inconsistent divergence comparison. The original evidence is preserved; the corrected
 review is recorded in `phase_3_audit_review_20260826.md`. Reconstruction physics passes and the
 correct next route is `JOINT_MARKOV_REPRESENTATION`.
+
+The first joint matrix also exposed a training-contract defect: every run stopped at epoch 49
+because early-stopping patience had accumulated before the curriculum became mature. Its reported
+`0.444` feasibility fraction counted only physical and representation-drift gates. Complete-gate
+reassessment gives 4/18 representation-feasible runs, 0/18 predictive passes and 0/18 strict joint
+passes. The immutable result is annotated in
+`gpu_validation/v0_9/results/v09-added-p3-joint-20260826T053347Z/review_addendum.md`.
+
+The r1 correction starts patience and checkpoint selection only after curriculum maturity, ranks
+checkpoints by physical, drift, round-trip, observer and all-horizon predictive feasibility, and
+adds decoded field/velocity/vorticity/divergence/boundary evidence. This is a correction of the
+training and reporting contract; no scientific threshold was relaxed.
 
 ## Why Phase 3 begins with an audit
 
@@ -152,5 +166,8 @@ This command does not retrain Phase 2. It produces raw artifacts under
 ## One-line RTX-5080 Phase-3.3 joint study
 
 ```bash
-.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_phase3_joint.py --validation-id v09-added-p3-joint-$(date -u +%Y%m%dT%H%M%SZ) --phase2-id v09-added-p2-physical-20260824T105209Z --audit-id v09-added-p3-audit-20260826T043840Z --seeds 47 53 59 --operator-seeds 701 809 907 --condition-modes known latent_inferred
+.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_phase3_joint.py --validation-id v09-added-p3-joint-r1-$(date -u +%Y%m%dT%H%M%SZ) --phase2-id v09-added-p2-physical-20260824T105209Z --audit-id v09-added-p3-audit-20260826T043840Z --seeds 47 53 59 --operator-seeds 701 809 907 --condition-modes known latent_inferred
 ```
+
+This reruns only Phase-3.3 joint training and locked testing. It does not retrain Phase 2 or repeat
+the Phase-3 entry audit, and it does not yet run the `from_scratch` control.

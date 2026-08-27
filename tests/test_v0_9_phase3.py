@@ -11,12 +11,15 @@ from jka_model.config import ProjectConfig, V09Phase3Config, load_config
 from jka_model.data import TrajectoryDataset, TrajectoryRecord
 from jka_model.manifold import (
     MatchedRouteContract,
+    MatureCheckpointTracker,
     StreamFunctionPhysicalDecoder2D,
     assert_online_reencoding_required,
     central_difference_2d,
+    classify_phase3_joint_run,
     classify_phase3_metrics,
     classify_phase3_route,
     configure_phase3_route,
+    phase3_checkpoint_key,
     physical_manifold_metrics,
 )
 
@@ -224,3 +227,95 @@ def test_returned_phase3_audit_reassesses_to_joint_route() -> None:
         "nominal_tangent_status": "PASS",
         "next_candidate": "JOINT_MARKOV_REPRESENTATION",
     }
+
+
+def test_phase3_early_stopping_patience_starts_after_curriculum_maturity() -> None:
+    tracker = MatureCheckpointTracker(earliest_epoch=49, patience=16)
+    for epoch in range(1, 49):
+        selected, stop = tracker.consider(epoch, (float(epoch),))
+        assert not selected and not stop
+        assert tracker.stale_epochs == 0
+    selected, stop = tracker.consider(49, (1.0,))
+    assert selected and not stop and tracker.best_epoch == 49
+    for epoch in range(50, 65):
+        selected, stop = tracker.consider(epoch, (2.0,))
+        assert not selected and not stop
+    selected, stop = tracker.consider(65, (2.0,))
+    assert not selected and stop
+
+
+def test_phase3_checkpoint_selection_and_report_use_all_declared_gates() -> None:
+    config = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml")
+    assert config.v0_9_phase3 and config.v0_9_phase2 and config.v0_9_evaluation
+    passing = {
+        "total": 10.0,
+        "physical_manifold_violation": 0.0,
+        "representation_drift": 0.09,
+        "roundtrip": 0.24,
+        "observer_normalized_rmse": 0.40,
+        "observer_minimum_r2": 0.30,
+        "rollout_gain_h8": 0.021,
+        "rollout_gain_h16": 0.022,
+        "rollout_gain_h32": 0.023,
+        "rollout_gain_h80": 0.024,
+    }
+    drifting = {**passing, "total": 1.0, "representation_drift": 0.11}
+    passing_key = phase3_checkpoint_key(
+        passing,
+        config.v0_9_phase3,
+        config.v0_9_evaluation,
+        config.v0_9_phase2,
+        condition_mode="latent_inferred",
+    )
+    drifting_key = phase3_checkpoint_key(
+        drifting,
+        config.v0_9_phase3,
+        config.v0_9_evaluation,
+        config.v0_9_phase2,
+        condition_mode="latent_inferred",
+    )
+    assert passing_key < drifting_key
+    gate = classify_phase3_joint_run(
+        passing,
+        config.v0_9_phase3,
+        config.v0_9_evaluation,
+        config.v0_9_phase2,
+        condition_mode="latent_inferred",
+    )
+    assert all(gate.values())
+    no_long_skill = {**passing, "rollout_gain_h80": -0.001}
+    failed = classify_phase3_joint_run(
+        no_long_skill,
+        config.v0_9_phase3,
+        config.v0_9_evaluation,
+        config.v0_9_phase2,
+        condition_mode="latent_inferred",
+    )
+    assert not failed["predictive"] and not failed["strict_joint"]
+
+
+def test_returned_joint_result_has_zero_strict_passes_under_complete_contract() -> None:
+    config = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml")
+    assert config.v0_9_phase3 and config.v0_9_phase2 and config.v0_9_evaluation
+    result = json.loads(
+        Path(
+            "gpu_validation/v0_9/results/"
+            "v09-added-p3-joint-20260826T053347Z/evaluation/joint_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    gates = [
+        classify_phase3_joint_run(
+            row["locked_test"],
+            config.v0_9_phase3,
+            config.v0_9_evaluation,
+            config.v0_9_phase2,
+            condition_mode=row["condition_mode"],
+        )
+        for row in result["runs"]
+    ]
+    assert sum(gate["physics"] for gate in gates) == 18
+    assert sum(gate["representation_drift"] for gate in gates) == 8
+    assert sum(gate["roundtrip"] for gate in gates) == 12
+    assert sum(gate["representation_feasible"] for gate in gates) == 4
+    assert sum(gate["predictive"] for gate in gates) == 0
+    assert sum(gate["strict_joint"] for gate in gates) == 0

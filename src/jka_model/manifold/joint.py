@@ -20,10 +20,10 @@ from jka_model.adaptive.objectives import (
     adaptive_stabilization_objective,
     curriculum_state,
 )
-from jka_model.config import ProjectConfig
+from jka_model.config import ProjectConfig, V09EvaluationConfig, V09Phase2Config, V09Phase3Config
 from jka_model.data import ChannelStandardizer
 from jka_model.data.datasets import TrajectoryDataset
-from jka_model.manifold.physical import physical_manifold_metrics
+from jka_model.manifold.physical import central_difference_2d, physical_manifold_metrics
 from jka_model.models import FieldJEPAKoopmanModel
 
 
@@ -108,6 +108,136 @@ class JointMarkovObjectiveResult:
     adaptive: AdaptiveObjectiveResult
 
 
+@dataclass(slots=True)
+class MatureCheckpointTracker:
+    """Early stopping whose patience begins only after the full curriculum is active."""
+
+    earliest_epoch: int
+    patience: int
+    best_key: tuple[float, ...] | None = None
+    best_epoch: int | None = None
+    stale_epochs: int = 0
+    last_epoch: int = 0
+
+    def __post_init__(self) -> None:
+        if min(self.earliest_epoch, self.patience) < 1:
+            raise ValueError("Phase-3 mature checkpoint epochs/patience must be positive")
+
+    def consider(self, completed_epoch: int, key: tuple[float, ...]) -> tuple[bool, bool]:
+        if completed_epoch <= self.last_epoch or not key or not all(math.isfinite(v) for v in key):
+            raise ValueError("invalid Phase-3 checkpoint update")
+        self.last_epoch = completed_epoch
+        if completed_epoch < self.earliest_epoch:
+            return False, False
+        selected = self.best_key is None or key < self.best_key
+        if selected:
+            self.best_key = key
+            self.best_epoch = completed_epoch
+            self.stale_epochs = 0
+        else:
+            self.stale_epochs += 1
+        return selected, self.stale_epochs >= self.patience
+
+
+def phase3_checkpoint_key(
+    metrics: Mapping[str, float],
+    phase3: V09Phase3Config,
+    evaluation: V09EvaluationConfig,
+    phase2: V09Phase2Config,
+    *,
+    condition_mode: str,
+) -> tuple[float, ...]:
+    """Rank mature checkpoints by feasibility before matched predictive skill."""
+    if condition_mode not in {"known", "latent_inferred"}:
+        raise ValueError("invalid Phase-3 condition mode")
+    physical = max(float(metrics["physical_manifold_violation"]) / 1.0e-8 - 1.0, 0.0)
+    drift = max(
+        float(metrics["representation_drift"])
+        / phase3.max_normalized_representation_drift
+        - 1.0,
+        0.0,
+    )
+    roundtrip = max(float(metrics["roundtrip"]) / phase3.max_roundtrip_nrmse - 1.0, 0.0)
+    observer_rmse = (
+        max(
+            float(metrics.get("observer_normalized_rmse", float("inf")))
+            / phase2.max_condition_observer_normalized_rmse
+            - 1.0,
+            0.0,
+        )
+        if condition_mode == "latent_inferred"
+        else 0.0
+    )
+    observer_r2 = (
+        max(
+            (
+                phase2.min_condition_observer_r2
+                - float(metrics.get("observer_minimum_r2", float("-inf")))
+            )
+            / max(abs(phase2.min_condition_observer_r2), 1.0e-12),
+            0.0,
+        )
+        if condition_mode == "latent_inferred"
+        else 0.0
+    )
+    feasibility = (physical, drift, roundtrip, observer_rmse, observer_r2)
+    feasibility_count = sum(value > 0 for value in feasibility)
+    gains = [float(metrics[f"rollout_gain_h{horizon}"]) for horizon in evaluation.rollout_horizons]
+    predictive_shortfall = sum(
+        max(evaluation.material_relative_gain - gain, 0.0)
+        / evaluation.material_relative_gain
+        for gain in gains
+    )
+    return (
+        float(feasibility_count),
+        sum(feasibility),
+        predictive_shortfall,
+        -min(gains) / evaluation.material_relative_gain,
+        float(metrics["total"]),
+    )
+
+
+def classify_phase3_joint_run(
+    metrics: Mapping[str, float],
+    phase3: V09Phase3Config,
+    evaluation: V09EvaluationConfig,
+    phase2: V09Phase2Config,
+    *,
+    condition_mode: str,
+) -> dict[str, bool]:
+    """Apply every declared joint-route gate; no partial fraction is called success."""
+    finite = all(math.isfinite(float(value)) for value in metrics.values())
+    physics = finite and float(metrics["physical_manifold_violation"]) <= 1.0e-8
+    drift = finite and (
+        float(metrics["representation_drift"])
+        <= phase3.max_normalized_representation_drift
+    )
+    roundtrip = finite and float(metrics["roundtrip"]) <= phase3.max_roundtrip_nrmse
+    predictive = finite and all(
+        float(metrics[f"rollout_gain_h{horizon}"]) >= evaluation.material_relative_gain
+        for horizon in evaluation.rollout_horizons
+    )
+    observer = True
+    if condition_mode == "latent_inferred":
+        observer = finite and (
+            float(metrics.get("observer_normalized_rmse", float("inf")))
+            <= phase2.max_condition_observer_normalized_rmse
+            and float(metrics.get("observer_minimum_r2", float("-inf")))
+            >= phase2.min_condition_observer_r2
+        )
+    representation = physics and drift and roundtrip
+    return {
+        "finite": finite,
+        "physics": physics,
+        "representation_drift": drift,
+        "roundtrip": roundtrip,
+        "representation_feasible": representation,
+        "predictive": predictive,
+        "observer": observer,
+        "strict_joint": representation and predictive and observer,
+    }
+
+
 def move_raw_field_batch(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
     result = dict(batch)
     for name in (
@@ -128,6 +258,17 @@ def move_raw_field_batch(batch: dict[str, Any], device: torch.device) -> dict[st
 
 def _relative_mse(candidate: Tensor, reference: Tensor, floor: float = 1.0e-6) -> Tensor:
     return (candidate - reference).square().mean() / reference.square().mean().clamp_min(floor)
+
+
+def _mean_relative_l2(
+    candidate: Tensor, reference: Tensor, floor: float = 1.0e-12
+) -> Tensor:
+    if candidate.shape != reference.shape or candidate.ndim < 2:
+        raise ValueError("relative L2 requires aligned tensors with an explicit batch axis")
+    dimensions = tuple(range(1, candidate.ndim))
+    numerator = (candidate - reference).square().sum(dim=dimensions).sqrt()
+    denominator = reference.square().sum(dim=dimensions).sqrt().clamp_min(floor)
+    return (numerator / denominator).mean()
 
 
 def joint_markov_objective(
@@ -226,6 +367,7 @@ def joint_markov_objective(
     ).square()
 
     physics = current.new_zeros(())
+    decoded_terms: dict[str, Tensor] = {}
     divergence_limit = math.sqrt(evaluation.max_divergence_mse)
     selected_horizons = curriculum.observable_horizons or curriculum.active_horizons or (1,)
     for horizon in selected_horizons:
@@ -251,6 +393,36 @@ def joint_markov_objective(
             torch.relu(metrics["outer_boundary_mse"] - evaluation.max_boundary_mse)
             / evaluation.max_boundary_mse
         ).square()
+        if validation:
+            predicted_vorticity = central_difference_2d(
+                predicted_raw[:, 1], cylinder.dx, -2
+            ) - central_difference_2d(predicted_raw[:, 0], cylinder.dy, -1)
+            target_vorticity = central_difference_2d(
+                target_raw[:, 1], cylinder.dx, -2
+            ) - central_difference_2d(target_raw[:, 0], cylinder.dy, -1)
+            fluid = batch["valid_mask"]
+            predicted_vorticity = predicted_vorticity.masked_fill(~fluid, 0.0)
+            target_vorticity = target_vorticity.masked_fill(~fluid, 0.0)
+            decoded_terms.update(
+                {
+                    f"decoded_field_relative_l2_h{horizon}": _mean_relative_l2(
+                        predicted_raw, target_raw
+                    ),
+                    f"decoded_velocity_relative_l2_h{horizon}": _mean_relative_l2(
+                        predicted_raw[:, :2], target_raw[:, :2]
+                    ),
+                    f"decoded_vorticity_relative_l2_h{horizon}": _mean_relative_l2(
+                        predicted_vorticity, target_vorticity
+                    ),
+                    f"decoded_divergence_rms_h{horizon}": metrics["divergence_rms"],
+                    f"decoded_boundary_mse_h{horizon}": metrics[
+                        "boundary_no_slip_mse"
+                    ],
+                    f"decoded_outer_boundary_mse_h{horizon}": metrics[
+                        "outer_boundary_mse"
+                    ],
+                }
+            )
     physics = physics / len(selected_horizons)
 
     total = (
@@ -269,6 +441,7 @@ def joint_markov_objective(
         "representation_drift": representation_drift,
         "representation_drift_excess": drift_excess,
         "physical_manifold_violation": physics,
+        **decoded_terms,
     }
     if not torch.isfinite(total):
         raise FloatingPointError("Phase-3 joint objective became non-finite")

@@ -24,6 +24,7 @@ for import_root in (ROOT, ROOT / "src"):
 
 from jka_model.config import ProjectConfig, load_config, save_config  # noqa: E402
 from jka_model.manifold import (  # noqa: E402
+    classify_phase3_joint_run,
     classify_phase3_metrics,
     classify_phase3_route,
 )
@@ -330,6 +331,7 @@ def main() -> None:
                         {
                             **current_run,
                             "completed_epochs": trained.completed_epochs,
+                            "best_epoch": trained.best_epoch,
                             "trainable_parameters": trained.trainable_parameters,
                             "validation": trained.validation_metrics,
                             "locked_test": trained.locked_test_metrics,
@@ -347,14 +349,29 @@ def main() -> None:
             name: statistics.mean(float(row["locked_test"][name]) for row in rows)
             for name in metric_names
         }
-        per_run_gate = [
-            row["locked_test"]["physical_manifold_violation"] <= 1.0e-8
-            and row["locked_test"]["representation_drift"]
-            <= template.v0_9_phase3.max_normalized_representation_drift
+        phase3 = template.v0_9_phase3
+        phase2 = template.v0_9_phase2
+        evaluation = template.v0_9_evaluation
+        if phase3 is None or phase2 is None or evaluation is None:
+            raise RuntimeError("Phase-3 aggregation thresholds are missing")
+        run_gates = [
+            classify_phase3_joint_run(
+                row["locked_test"],
+                phase3,
+                evaluation,
+                phase2,
+                condition_mode=row["condition_mode"],
+            )
             for row in rows
         ]
+        for row, gate in zip(rows, run_gates, strict=True):
+            row["gates"] = gate
+
+        def pass_fraction(name: str) -> float:
+            return sum(bool(gate[name]) for gate in run_gates) / len(run_gates)
+
         summary = {
-            "schema_version": 1,
+            "schema_version": 2,
             "phase": "V0.9_PHASE3_JOINT",
             "source_phase2_result": args.phase2_id,
             "source_phase3_audit": args.audit_id,
@@ -364,12 +381,30 @@ def main() -> None:
             "raw_field_online_reencoding": True,
             "nominal_generator_frozen": True,
             "formal_run_count": completed_runs,
+            "completed_epoch_range": [
+                min(int(row["completed_epochs"]) for row in rows),
+                max(int(row["completed_epochs"]) for row in rows),
+            ],
+            "best_epoch_range": [
+                min(int(row["best_epoch"]) for row in rows),
+                max(int(row["best_epoch"]) for row in rows),
+            ],
             "matched_matrix": "3 backbone seeds x 3 operator seeds x 2 condition modes",
-            "joint_feasibility_pass_fraction": sum(per_run_gate) / len(per_run_gate),
+            "physics_pass_fraction": pass_fraction("physics"),
+            "representation_drift_pass_fraction": pass_fraction(
+                "representation_drift"
+            ),
+            "roundtrip_pass_fraction": pass_fraction("roundtrip"),
+            "representation_feasible_pass_fraction": pass_fraction(
+                "representation_feasible"
+            ),
+            "predictive_pass_fraction": pass_fraction("predictive"),
+            "observer_pass_fraction": pass_fraction("observer"),
+            "strict_joint_pass_fraction": pass_fraction("strict_joint"),
             "aggregate_locked_test": aggregate,
             "runs": rows,
-            "scientific_status": "JOINT_EVIDENCE_COMPLETE_PHASE3_PENDING",
-            "next_stage": "FROM_SCRATCH_CONTROL_AND_MATCHED_AGGREGATION",
+            "scientific_status": "JOINT_R1_EVIDENCE_COMPLETE_REVIEW_REQUIRED",
+            "next_stage": "REVIEW_BEFORE_FROM_SCRATCH_CONTROL",
         }
         for destination in (
             raw / "evaluation" / "joint_summary.json",
@@ -384,12 +419,17 @@ def main() -> None:
             "- Corrected reconstruction physics: `PASS`\n"
             "- Corrected next route: `JOINT_MARKOV_REPRESENTATION`\n"
             f"- Formal train/locked-test runs: `{completed_runs}/{expected}`\n"
+            f"- Completed epoch range: `{summary['completed_epoch_range']}`\n"
+            f"- Selected best-epoch range: `{summary['best_epoch_range']}`\n"
             "- Raw-field online re-encoding: `YES`\n"
             "- Frozen nominal generator A0: `YES`\n"
-            "- Joint feasibility pass fraction: "
-            f"`{summary['joint_feasibility_pass_fraction']:.3f}`\n"
-            "- Scientific status: `JOINT_EVIDENCE_COMPLETE_PHASE3_PENDING`\n"
-            "- Next: matched from-scratch control and final Phase-3 aggregation\n"
+            f"- Physics pass fraction: `{summary['physics_pass_fraction']:.3f}`\n"
+            "- Representation-feasible pass fraction: "
+            f"`{summary['representation_feasible_pass_fraction']:.3f}`\n"
+            f"- Predictive pass fraction: `{summary['predictive_pass_fraction']:.3f}`\n"
+            f"- Strict joint pass fraction: `{summary['strict_joint_pass_fraction']:.3f}`\n"
+            "- Scientific status: `JOINT_R1_EVIDENCE_COMPLETE_REVIEW_REQUIRED`\n"
+            "- Next: review corrected joint evidence before from-scratch control\n"
         )
         (compact / "report.md").write_text(report, encoding="utf-8")
         completion = {
@@ -401,8 +441,8 @@ def main() -> None:
             "git_commit": get_git_commit(ROOT),
             "formal_training_run_count": completed_runs,
             "formal_locked_test_run_count": completed_runs,
-            "scientific_status": "JOINT_EVIDENCE_COMPLETE_PHASE3_PENDING",
-            "next_stage": "FROM_SCRATCH_CONTROL_AND_MATCHED_AGGREGATION",
+            "scientific_status": "JOINT_R1_EVIDENCE_COMPLETE_REVIEW_REQUIRED",
+            "next_stage": "REVIEW_BEFORE_FROM_SCRATCH_CONTROL",
         }
         (compact / "completion.json").write_text(
             json.dumps(completion, indent=2, sort_keys=True) + "\n", encoding="utf-8"
