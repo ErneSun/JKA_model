@@ -1,0 +1,12 @@
+{
+  "formal_locked_test_run_count": 18,
+  "formal_training_run_count": 18,
+  "git_commit": "37214382ea0612fa44e3f20891e865b528b082ab",
+  "next_stage": "REVIEW_BEFORE_FROM_SCRATCH_CONTROL",
+  "requested_validation_id": "v09-added-p3-joint-r1-20260827T070153Z",
+  "resolved_validation_id": "v09-added-p3-joint-r1-20260827T070153Z",
+  "scientific_status": "JOINT_R1_EVIDENCE_COMPLETE_REVIEW_REQUIRED",
+  "source_phase2_result": "v09-added-p2-physical-20260824T105209Z",
+  "source_phase3_audit": "v09-added-p3-audit-20260826T043840Z",
+  "status": "PASS"
+}
