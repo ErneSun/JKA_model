@@ -212,6 +212,8 @@ class FactorizedAdaptiveOperator(nn.Module):
         context_dim: int,
         adaptive: V09AdaptiveConfig,
         phase2: V09Phase2Config,
+        *,
+        trainable_nominal: bool = False,
     ) -> None:
         super().__init__()
         if nominal_generator.ndim != 2 or nominal_generator.shape[0] != nominal_generator.shape[1]:
@@ -235,7 +237,11 @@ class FactorizedAdaptiveOperator(nn.Module):
         self.bounded_coordinates = adaptive.bounded_coordinates
         self.eta_max = adaptive.eta_max
         self.trust_gate_enabled = adaptive.trust_gate
-        self.register_buffer("nominal_generator", nominal_generator.detach().float().clone())
+        nominal = nominal_generator.detach().float().clone()
+        if trainable_nominal:
+            self.nominal_generator = nn.Parameter(nominal)
+        else:
+            self.register_buffer("nominal_generator", nominal)
 
         generator = torch.Generator(device="cpu").manual_seed(2718 + adaptive.rank)
         left = torch.linalg.qr(
@@ -285,6 +291,26 @@ class FactorizedAdaptiveOperator(nn.Module):
         else:
             self.static_trust_gate_head = None
             self.dynamic_trust_gate_head = None
+
+    @torch.no_grad()
+    def project_trainable_nominal_stability_(self, maximum_abscissa: float = 0.0) -> float:
+        """Projected-gradient safeguard for a trainable non-expansive nominal generator."""
+        if not math.isfinite(maximum_abscissa):
+            raise ValueError("nominal stability ceiling must be finite")
+        if not isinstance(self.nominal_generator, nn.Parameter):
+            raise RuntimeError("nominal stability projection requires a trainable generator")
+        symmetric = 0.5 * (
+            self.nominal_generator + self.nominal_generator.transpose(-1, -2)
+        )
+        abscissa = torch.linalg.eigvalsh(symmetric)[-1]
+        excess = torch.clamp(abscissa - maximum_abscissa, min=0.0)
+        identity = torch.eye(
+            self.latent_dim,
+            device=self.nominal_generator.device,
+            dtype=self.nominal_generator.dtype,
+        )
+        self.nominal_generator.sub_(excess * identity)
+        return float(abscissa - excess)
 
     @staticmethod
     def _zero_head(input_dim: int, width: int, output_dim: int) -> nn.Sequential:

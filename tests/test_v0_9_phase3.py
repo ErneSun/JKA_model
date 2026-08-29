@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from torch import nn
 
-from jka_model.adaptive import AdaptiveCache, AdaptiveTrajectory
+from jka_model.adaptive import AdaptiveCache, AdaptiveTrajectory, FactorizedAdaptiveOperator
 from jka_model.config import ProjectConfig, V09Phase3Config, load_config
 from jka_model.data import TrajectoryDataset, TrajectoryRecord
 from jka_model.manifold import (
@@ -14,13 +15,18 @@ from jka_model.manifold import (
     MatureCheckpointTracker,
     StreamFunctionPhysicalDecoder2D,
     assert_online_reencoding_required,
+    centered_linear_cka,
     central_difference_2d,
+    classify_matched_phase3_run,
     classify_phase3_joint_run,
     classify_phase3_metrics,
     classify_phase3_route,
     configure_phase3_route,
+    nested_route_support,
+    orthogonal_procrustes_nrmse,
     phase3_checkpoint_key,
     physical_manifold_metrics,
+    representation_effective_rank,
 )
 
 
@@ -105,6 +111,58 @@ def test_phase3_route_ownership_and_matched_contract() -> None:
         assert "matched" in str(error)
     else:  # pragma: no cover
         raise AssertionError("mismatched operator seed was accepted")
+
+
+def test_coordinate_invariant_representation_diagnostics_ignore_latent_gauge() -> None:
+    torch.manual_seed(19)
+    reference = torch.randn(128, 8)
+    orthogonal = torch.linalg.qr(torch.randn(8, 8)).Q
+    candidate = 3.5 * (reference @ orthogonal) + torch.randn(8) * 4.0
+    assert float(centered_linear_cka(candidate, reference)) > 0.99999
+    assert float(orthogonal_procrustes_nrmse(candidate, reference)) < 1.0e-5
+    assert float(representation_effective_rank(candidate)) > 1.0
+
+
+def test_from_scratch_route_preserves_constructor_initialization() -> None:
+    torch.manual_seed(23)
+    backbone, context, operator = (nn.Linear(3, 3) for _ in range(3))
+    original = backbone.weight.detach().clone()
+    declaration = configure_phase3_route(
+        "from_scratch",
+        backbone=backbone,
+        context_encoder=context,
+        operator=operator,
+        physical_decoder=None,
+    )
+    torch.testing.assert_close(backbone.weight, original)
+    assert all(
+        parameter.requires_grad
+        for module in (backbone, context, operator)
+        for parameter in module.parameters()
+    )
+    assert declaration["requires_online_reencoding"]
+
+
+def test_from_scratch_operator_can_train_its_nominal_generator() -> None:
+    config = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml")
+    assert config.v0_8_context and config.v0_9_adaptive and config.v0_9_phase2
+    operator = FactorizedAdaptiveOperator(
+        torch.zeros(16, 16),
+        config.v0_8_context.context_dim,
+        config.v0_9_adaptive,
+        config.v0_9_phase2,
+        trainable_nominal=True,
+    )
+    assert isinstance(operator.nominal_generator, nn.Parameter)
+    assert operator.nominal_generator.requires_grad
+    with torch.no_grad():
+        operator.nominal_generator.copy_(torch.eye(16))
+    projected = operator.project_trainable_nominal_stability_()
+    assert projected <= 1.0e-6
+    symmetric = 0.5 * (
+        operator.nominal_generator + operator.nominal_generator.transpose(-1, -2)
+    )
+    assert float(torch.linalg.eigvalsh(symmetric.detach())[-1]) <= 1.0e-6
 
 
 def test_phase3_route_classification_prefers_joint_when_physics_passes() -> None:
@@ -254,6 +312,9 @@ def test_phase3_checkpoint_selection_and_report_use_all_declared_gates() -> None
         "roundtrip": 0.24,
         "observer_normalized_rmse": 0.40,
         "observer_minimum_r2": 0.30,
+        "representation_linear_cka": 0.90,
+        "representation_procrustes_nrmse": 0.20,
+        "representation_effective_rank": 4.0,
         "rollout_gain_h8": 0.021,
         "rollout_gain_h16": 0.022,
         "rollout_gain_h32": 0.023,
@@ -319,3 +380,137 @@ def test_returned_joint_result_has_zero_strict_passes_under_complete_contract() 
     assert sum(gate["representation_feasible"] for gate in gates) == 4
     assert sum(gate["predictive"] for gate in gates) == 0
     assert sum(gate["strict_joint"] for gate in gates) == 0
+
+
+def test_matched_route_requires_decoded_physical_gain_not_only_latent_gain() -> None:
+    config = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml")
+    assert config.v0_9_phase3 and config.v0_9_phase2 and config.v0_9_evaluation
+    frozen: dict[str, float] = {}
+    candidate: dict[str, float] = {
+        "total": 1.0,
+        "physical_manifold_violation": 0.0,
+        "representation_drift": 5.0,
+        "roundtrip": 0.10,
+        "observer_normalized_rmse": 0.40,
+        "observer_minimum_r2": 0.30,
+        "representation_linear_cka": 0.5,
+        "representation_procrustes_nrmse": 0.7,
+        "representation_effective_rank": 6.0,
+    }
+    for horizon in config.v0_9_evaluation.rollout_horizons:
+        candidate[f"rollout_gain_h{horizon}"] = 0.10
+        for quantity in ("field", "velocity", "vorticity"):
+            name = f"decoded_{quantity}_relative_l2_h{horizon}"
+            frozen[name] = 1.0
+            candidate[name] = 0.90
+    passing = classify_matched_phase3_run(
+        candidate,
+        frozen,
+        config.v0_9_phase3,
+        config.v0_9_evaluation,
+        config.v0_9_phase2,
+        route="from_scratch",
+        condition_mode="latent_inferred",
+    )
+    assert passing["matched_route_pass"]
+    candidate["decoded_vorticity_relative_l2_h80"] = 1.01
+    failed = classify_matched_phase3_run(
+        candidate,
+        frozen,
+        config.v0_9_phase3,
+        config.v0_9_evaluation,
+        config.v0_9_phase2,
+        route="from_scratch",
+        condition_mode="latent_inferred",
+    )
+    assert not failed["decoded_vorticity_noninferiority"]
+    assert not failed["matched_route_pass"]
+
+
+def test_nested_route_support_requires_both_condition_modes_per_seed() -> None:
+    rows = []
+    for seed in (47, 53, 59):
+        for mode in ("known", "latent_inferred"):
+            for operator_seed in (701, 809, 907):
+                passed = not (seed == 59 or (mode == "latent_inferred" and operator_seed == 907))
+                rows.append(
+                    {
+                        "seed": seed,
+                        "condition_mode": mode,
+                        "operator_seed": operator_seed,
+                        "gates": {"matched_route_pass": passed},
+                    }
+                )
+    result = nested_route_support(rows, required_fraction=2.0 / 3.0)
+    assert result["backbone_pass_fraction"] == 2.0 / 3.0
+    assert result["supported"]
+
+
+def test_phase3_matched_workflow_builds_explicit_from_scratch_config(tmp_path: Path) -> None:
+    from gpu_validation.v0_9.scripts.gpu_validate_phase3_joint import _resolved_config
+    from gpu_validation.v0_9.scripts.gpu_validate_phase3_routes import _aggregate
+
+    config = _resolved_config(
+        Path("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml"),
+        phase2_id="phase2-source",
+        dataset_path=tmp_path / "data.pt",
+        run_root=tmp_path / "run",
+        seed=47,
+        condition_mode="latent_inferred",
+        operator_seed=701,
+        route="from_scratch",
+    )
+    assert "phase3-from_scratch" in config.tags
+    assert config.v0_9_adaptive and config.v0_9_adaptive.condition_mode == "latent_inferred"
+    assert config.v0_9_phase3 and config.v0_9_phase3.source_phase2_result == "phase2-source"
+    aggregate = _aggregate(
+        [
+            {"locked_test": {"common": 1.0, "first_only": 2.0}},
+            {"locked_test": {"common": 3.0, "second_only": 4.0}},
+        ]
+    )
+    assert aggregate == {"common": 2.0}
+
+
+def test_from_scratch_residual_scale_uses_only_training_trajectories() -> None:
+    from train.train_v0_9_phase3 import _from_scratch_residual_scale
+
+    class IdentityNormalizer:
+        @staticmethod
+        def transform(value: torch.Tensor) -> torch.Tensor:
+            return value
+
+    class TinyBackbone:
+        @staticmethod
+        def encode_target(value: torch.Tensor) -> torch.Tensor:
+            flattened = value.flatten(1)
+            return torch.stack((flattened.mean(dim=1), flattened[:, 0]), dim=-1)
+
+    adaptive = SimpleNamespace(
+        operator_adapter=SimpleNamespace(nominal_generator=torch.zeros(2, 2))
+    )
+    train_states = torch.arange(5 * 4, dtype=torch.float32).reshape(5, 1, 2, 2)
+    excluded_states = torch.full((5, 1, 2, 2), 1.0e9)
+    records = [
+        SimpleNamespace(
+            trajectory_id="train",
+            states_raw=train_states,
+            dts=torch.ones(4),
+        ),
+        SimpleNamespace(
+            trajectory_id="test",
+            states_raw=excluded_states,
+            dts=torch.ones(4),
+        ),
+    ]
+    scale = _from_scratch_residual_scale(
+        TinyBackbone(),
+        adaptive,
+        IdentityNormalizer(),
+        records,
+        {"train"},
+        torch.device("cpu"),
+    )
+    expected_latents = TinyBackbone.encode_target(train_states)
+    expected = (expected_latents[1:] - expected_latents[:-1]).square().mean(dim=0).sqrt()
+    torch.testing.assert_close(scale, expected)

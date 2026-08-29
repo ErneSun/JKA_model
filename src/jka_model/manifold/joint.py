@@ -108,6 +108,45 @@ class JointMarkovObjectiveResult:
     adaptive: AdaptiveObjectiveResult
 
 
+def centered_linear_cka(candidate: Tensor, reference: Tensor) -> Tensor:
+    """Linear CKA after centering; invariant to orthogonal basis and isotropic scale."""
+    if candidate.shape != reference.shape or candidate.ndim != 2 or candidate.shape[0] < 2:
+        raise ValueError("linear CKA requires aligned [N,d] representations with N >= 2")
+    candidate = candidate.float() - candidate.float().mean(dim=0, keepdim=True)
+    reference = reference.float() - reference.float().mean(dim=0, keepdim=True)
+    cross = reference.T @ candidate
+    numerator = cross.square().sum()
+    denominator = (reference.T @ reference).square().sum().sqrt() * (
+        (candidate.T @ candidate).square().sum().sqrt()
+    )
+    return numerator / denominator.clamp_min(1.0e-12)
+
+
+def orthogonal_procrustes_nrmse(candidate: Tensor, reference: Tensor) -> Tensor:
+    """Centered/normalized residual after the optimal orthogonal latent alignment."""
+    if candidate.shape != reference.shape or candidate.ndim != 2 or candidate.shape[0] < 2:
+        raise ValueError("Procrustes requires aligned [N,d] representations with N >= 2")
+    candidate = candidate.float() - candidate.float().mean(dim=0, keepdim=True)
+    reference = reference.float() - reference.float().mean(dim=0, keepdim=True)
+    candidate = candidate / candidate.norm().clamp_min(1.0e-12)
+    reference = reference / reference.norm().clamp_min(1.0e-12)
+    left, _, right_h = torch.linalg.svd(candidate.T @ reference, full_matrices=False)
+    aligned = candidate @ (left @ right_h)
+    return (aligned - reference).norm()
+
+
+def representation_effective_rank(representation: Tensor) -> Tensor:
+    """Entropy effective rank of the centered latent covariance."""
+    if representation.ndim != 2 or representation.shape[0] < 2:
+        raise ValueError("effective rank requires an [N,d] representation with N >= 2")
+    centered = representation.float() - representation.float().mean(dim=0, keepdim=True)
+    singular_values = torch.linalg.svdvals(centered)
+    energy = singular_values.square()
+    probabilities = energy / energy.sum().clamp_min(1.0e-12)
+    entropy = -(probabilities * probabilities.clamp_min(1.0e-12).log()).sum()
+    return entropy.exp()
+
+
 @dataclass(slots=True)
 class MatureCheckpointTracker:
     """Early stopping whose patience begins only after the full curriculum is active."""
@@ -146,16 +185,23 @@ def phase3_checkpoint_key(
     phase2: V09Phase2Config,
     *,
     condition_mode: str,
+    route: str = "joint",
 ) -> tuple[float, ...]:
     """Rank mature checkpoints by feasibility before matched predictive skill."""
     if condition_mode not in {"known", "latent_inferred"}:
         raise ValueError("invalid Phase-3 condition mode")
+    if route not in {"joint", "from_scratch"}:
+        raise ValueError("invalid trainable Phase-3 route")
     physical = max(float(metrics["physical_manifold_violation"]) / 1.0e-8 - 1.0, 0.0)
-    drift = max(
-        float(metrics["representation_drift"])
-        / phase3.max_normalized_representation_drift
-        - 1.0,
-        0.0,
+    drift = (
+        max(
+            float(metrics["representation_drift"])
+            / phase3.max_normalized_representation_drift
+            - 1.0,
+            0.0,
+        )
+        if route == "joint"
+        else 0.0
     )
     roundtrip = max(float(metrics["roundtrip"]) / phase3.max_roundtrip_nrmse - 1.0, 0.0)
     observer_rmse = (
@@ -204,12 +250,16 @@ def classify_phase3_joint_run(
     phase2: V09Phase2Config,
     *,
     condition_mode: str,
+    route: str = "joint",
 ) -> dict[str, bool]:
     """Apply every declared joint-route gate; no partial fraction is called success."""
+    if route not in {"joint", "from_scratch"}:
+        raise ValueError("invalid trainable Phase-3 route")
     finite = all(math.isfinite(float(value)) for value in metrics.values())
     physics = finite and float(metrics["physical_manifold_violation"]) <= 1.0e-8
     drift = finite and (
-        float(metrics["representation_drift"])
+        route == "from_scratch"
+        or float(metrics["representation_drift"])
         <= phase3.max_normalized_representation_drift
     )
     roundtrip = finite and float(metrics["roundtrip"]) <= phase3.max_roundtrip_nrmse
@@ -225,16 +275,32 @@ def classify_phase3_joint_run(
             and float(metrics.get("observer_minimum_r2", float("-inf")))
             >= phase2.min_condition_observer_r2
         )
-    representation = physics and drift and roundtrip
+    geometry_names = (
+        "representation_linear_cka",
+        "representation_procrustes_nrmse",
+        "representation_effective_rank",
+    )
+    geometry_present = all(name in metrics for name in geometry_names)
+    geometry_finite = finite and (
+        (route == "joint" and not geometry_present)
+        or (
+            geometry_present
+            and all(math.isfinite(float(metrics[name])) for name in geometry_names)
+        )
+    )
+    representation = physics and drift and roundtrip and geometry_finite
+    strict_route = representation and predictive and observer
     return {
         "finite": finite,
         "physics": physics,
         "representation_drift": drift,
         "roundtrip": roundtrip,
+        "coordinate_invariant_geometry": geometry_finite,
         "representation_feasible": representation,
         "predictive": predictive,
         "observer": observer,
-        "strict_joint": representation and predictive and observer,
+        "strict_route": strict_route,
+        "strict_joint": strict_route,
     }
 
 
@@ -284,6 +350,7 @@ def joint_markov_objective(
     *,
     epoch: int,
     validation: bool,
+    route: str = "joint",
 ) -> JointMarkovObjectiveResult:
     """Joint Koopman/JEPA/round-trip objective with inequality physics gates.
 
@@ -304,6 +371,8 @@ def joint_markov_objective(
     assert phase3 and phase2 and training and evaluation and cylinder and adaptive_config
     if not phase3.enabled or not phase2.enabled:
         raise ValueError("joint Phase-3 objective requires enabled Phase-2/Phase-3")
+    if route not in {"frozen", "joint", "from_scratch"}:
+        raise ValueError("invalid Phase-3 objective route")
 
     history_model = normalizer.transform(batch["history_raw"])
     future_model = normalizer.transform(batch["target_raw"])
@@ -431,7 +500,11 @@ def joint_markov_objective(
         + phase3.lambda_roundtrip * roundtrip
         + phase3.lambda_jepa_consistency * jepa
         + phase3.lambda_physical_manifold * physics
-        + phase3.lambda_representation_drift * drift_excess
+        + (
+            phase3.lambda_representation_drift * drift_excess
+            if route == "joint"
+            else current.new_zeros(())
+        )
     )
     terms = {
         **adaptive.terms,

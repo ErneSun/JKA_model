@@ -78,7 +78,10 @@ def _resolved_config(
     seed: int,
     condition_mode: str,
     operator_seed: int,
+    route: str = "joint",
 ) -> ProjectConfig:
+    if route not in {"joint", "from_scratch"}:
+        raise ValueError("invalid Phase-3 resolved-config route")
     payload = load_config(source).to_dict()
     payload["training"].update(
         {"seed": seed, "stage": "adaptive", "run_root": str(run_root.resolve())}
@@ -99,7 +102,7 @@ def _resolved_config(
     )
     payload["tags"] = [
         "v0.9",
-        "phase3-joint",
+        f"phase3-{route}",
         f"backbone-seed-{seed}",
         f"operator-seed-{operator_seed}",
         f"condition-{condition_mode}",
@@ -361,6 +364,7 @@ def main() -> None:
                 evaluation,
                 phase2,
                 condition_mode=row["condition_mode"],
+                route="joint",
             )
             for row in rows
         ]
@@ -369,6 +373,15 @@ def main() -> None:
 
         def pass_fraction(name: str) -> float:
             return sum(bool(gate[name]) for gate in run_gates) / len(run_gates)
+
+        latent_gates = [
+            gate
+            for row, gate in zip(rows, run_gates, strict=True)
+            if row["condition_mode"] == "latent_inferred"
+        ]
+        latent_observer_fraction = sum(
+            bool(gate["observer"]) for gate in latent_gates
+        ) / len(latent_gates)
 
         summary = {
             "schema_version": 2,
@@ -400,6 +413,7 @@ def main() -> None:
             ),
             "predictive_pass_fraction": pass_fraction("predictive"),
             "observer_pass_fraction": pass_fraction("observer"),
+            "latent_observer_pass_fraction": latent_observer_fraction,
             "strict_joint_pass_fraction": pass_fraction("strict_joint"),
             "aggregate_locked_test": aggregate,
             "runs": rows,
@@ -427,6 +441,8 @@ def main() -> None:
             "- Representation-feasible pass fraction: "
             f"`{summary['representation_feasible_pass_fraction']:.3f}`\n"
             f"- Predictive pass fraction: `{summary['predictive_pass_fraction']:.3f}`\n"
+            "- Latent-only observer pass fraction: "
+            f"`{summary['latent_observer_pass_fraction']:.3f}`\n"
             f"- Strict joint pass fraction: `{summary['strict_joint_pass_fraction']:.3f}`\n"
             "- Scientific status: `JOINT_R1_EVIDENCE_COMPLETE_REVIEW_REQUIRED`\n"
             "- Next: review corrected joint evidence before from-scratch control\n"

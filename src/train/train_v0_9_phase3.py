@@ -22,7 +22,9 @@ from jka_model.adaptive import (
     adaptive_training_scales,
     condition_observer_metrics,
     load_adaptive_cache,
+    load_adaptive_checkpoint,
     phase2_condition_scales,
+    symmetric_abscissa_proxy,
 )
 from jka_model.config import ProjectConfig, load_config, save_config
 from jka_model.context import build_dynamic_context_model
@@ -32,24 +34,37 @@ from jka_model.manifold import (
     MatureCheckpointTracker,
     RawFieldAdaptiveRolloutDataset,
     assert_online_reencoding_required,
+    centered_linear_cka,
     configure_phase3_route,
     joint_markov_objective,
     move_raw_field_batch,
+    orthogonal_procrustes_nrmse,
     phase3_checkpoint_key,
+    representation_effective_rank,
 )
 from jka_model.models import FieldJEPAKoopmanModel
 from jka_model.residual.cache import file_sha256
+from jka_model.training.ema import EMATracker
 from jka_model.utils import get_git_commit, load_checkpoint, set_global_seed
 
 
 @dataclass(frozen=True, slots=True)
 class Phase3JointTrainingResult:
+    route: str
     run_dir: Path
     checkpoint: Path
     completed_epochs: int
     best_epoch: int
     trainable_parameters: int
     validation_metrics: dict[str, float]
+    locked_test_metrics: dict[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class Phase3FrozenEvaluationResult:
+    route: str
+    run_dir: Path
+    trainable_parameters: int
     locked_test_metrics: dict[str, float]
 
 
@@ -74,6 +89,39 @@ def _frozen_target_latents(
     return targets
 
 
+@torch.no_grad()
+def _from_scratch_residual_scale(
+    backbone: FieldJEPAKoopmanModel,
+    adaptive_model: AdaptiveKoopmanModel,
+    normalizer: ChannelStandardizer,
+    records: Any,
+    training_trajectory_ids: set[str],
+    device: torch.device,
+) -> torch.Tensor:
+    """Fit a fixed latent residual scale from the from-scratch training split only."""
+    residuals: list[torch.Tensor] = []
+    generator = adaptive_model.operator_adapter.nominal_generator.detach().float()
+    for record in records:
+        if record.trajectory_id not in training_trajectory_ids:
+            continue
+        states = normalizer.transform(
+            record.states_raw.to(device=device, dtype=torch.float32)
+        )
+        latents = backbone.encode_target(states).float()
+        dts = record.dts.to(device=device, dtype=torch.float32)
+        transitions = torch.linalg.matrix_exp(generator.unsqueeze(0) * dts[:, None, None])
+        nominal = torch.einsum("bij,bj->bi", transitions, latents[:-1])
+        residuals.append((latents[1:] - nominal).cpu())
+    if not residuals:
+        raise ValueError("from-scratch residual scale has no training trajectories")
+    values = torch.cat(residuals)
+    floor = max(
+        float(values.square().mean().sqrt()) * 1.0e-3,
+        torch.finfo(torch.float32).eps,
+    )
+    return values.square().mean(dim=0).sqrt().clamp_min(floor)
+
+
 def _save_payload(payload: dict[str, Any], path: Path) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
@@ -84,13 +132,14 @@ def _save_payload(payload: dict[str, Any], path: Path) -> None:
             temporary.unlink()
 
 
-def _build_joint_models(
+def _build_phase3_models(
     config: ProjectConfig,
     *,
     cache: Any,
     context_checkpoint: str | Path,
     backbone_checkpoint: str | Path,
     device: torch.device,
+    route: str,
 ) -> tuple[
     FieldJEPAKoopmanModel,
     nn.Module,
@@ -118,16 +167,26 @@ def _build_joint_models(
         or saved_backbone.normalizer_state is None
     ):
         raise ValueError("Phase-3 backbone lacks JEPA/normalizer state")
-    backbone = initialize_v0_6_model(config, device=device)
-    backbone.load_online_state_dict(saved_backbone.online_model_state)
-    backbone.target_encoder.load_state_dict(saved_backbone.target_model_state, strict=True)
+    inherited_backbone = initialize_v0_6_model(config, device=device)
+    inherited_backbone.load_online_state_dict(saved_backbone.online_model_state)
+    inherited_backbone.target_encoder.load_state_dict(
+        saved_backbone.target_model_state, strict=True
+    )
     normalizer = ChannelStandardizer(eps=config.data.normalization.eps)
     normalizer.load_state_dict(saved_backbone.normalizer_state)
     if not normalizer.matches_state_dict(cache.normalizer_state):
         raise ValueError("Phase-3 backbone/cache normalizer mismatch")
-    reference_encoder = copy.deepcopy(backbone.online_encoder).to(device)
+    reference_encoder = copy.deepcopy(inherited_backbone.online_encoder).to(device)
     reference_encoder.requires_grad_(False)
     reference_encoder.eval()
+
+    if route in {"frozen", "joint"}:
+        backbone = inherited_backbone
+    elif route == "from_scratch":
+        backbone = initialize_v0_6_model(config, device=device)
+        backbone.hard_sync_target()
+    else:
+        raise ValueError("invalid Phase-3 model route")
 
     context_payload = load_context_checkpoint(context_checkpoint)
     history = int(context_payload["history_length_steps"])
@@ -138,17 +197,24 @@ def _build_joint_models(
         parameter_dim=cache.context_parameter_dim,
         history=history,
     )
-    dynamic.load_state_dict(context_payload["best_context_state"], strict=True)
+    if route in {"frozen", "joint"}:
+        dynamic.load_state_dict(context_payload["best_context_state"], strict=True)
+    nominal_generator = (
+        cache.nominal_generator
+        if route in {"frozen", "joint"}
+        else backbone.koopman_core.A.detach()
+    )
     operator = FactorizedAdaptiveOperator(
-        cache.nominal_generator,
+        nominal_generator,
         context_config.context_dim,
         adaptive_config,
         phase2,
+        trainable_nominal=route == "from_scratch",
     )
     adaptive_model = AdaptiveKoopmanModel(dynamic.context_encoder, operator).to(device)
-    assert_online_reencoding_required("joint", uses_frozen_latent_cache=False)
+    assert_online_reencoding_required(route, uses_frozen_latent_cache=False)
     configure_phase3_route(
-        "joint",
+        route,
         backbone=backbone,
         context_encoder=adaptive_model.context_encoder,
         operator=adaptive_model.operator_adapter,
@@ -157,7 +223,10 @@ def _build_joint_models(
     )
     backbone.target_encoder.requires_grad_(False)
     backbone.target_encoder.eval()
-    if backbone.koopman_core.A.requires_grad:
+    # The predictor used by this route is adaptive_model.operator_adapter.  Keep the
+    # duplicate shell core frozen; from-scratch trains its own nominal generator there.
+    backbone.koopman_core.requires_grad_(False)
+    if route == "joint" and backbone.koopman_core.A.requires_grad:
         raise RuntimeError("Phase-3 joint route must keep inherited A0 frozen")
     return backbone, reference_encoder, adaptive_model, normalizer, context_payload
 
@@ -175,6 +244,7 @@ def _evaluate(
     config: ProjectConfig,
     device: torch.device,
     epoch: int,
+    route: str,
 ) -> dict[str, float]:
     backbone.eval()
     adaptive_model.eval()
@@ -183,6 +253,8 @@ def _evaluate(
     maximum = {"representation_drift", "physical_manifold_violation", "burden_max"}
     observer_predictions: list[torch.Tensor] = []
     observer_targets: list[torch.Tensor] = []
+    candidate_representations: list[torch.Tensor] = []
+    reference_representations: list[torch.Tensor] = []
     for raw in loader:
         batch = move_raw_field_batch(raw, device)
         objective = joint_markov_objective(
@@ -197,6 +269,7 @@ def _evaluate(
             config,
             epoch=epoch,
             validation=True,
+            route=route,
         )
         batch_size = batch["history_raw"].shape[0]
         for name, value in {"total": objective.total, **objective.terms}.items():
@@ -218,6 +291,9 @@ def _evaluate(
             observer_targets.append(
                 normalized_target.reshape(-1, normalized_target.shape[-1]).cpu()
             )
+        history_model = normalizer.transform(batch["history_raw"][:, -1])
+        candidate_representations.append(backbone.encode(history_model).float().cpu())
+        reference_representations.append(reference_encoder(history_model).float().cpu())
         count += batch_size
     if count == 0:
         raise RuntimeError("Phase-3 validation dataset is empty")
@@ -237,10 +313,31 @@ def _evaluate(
             torch.cat(observer_predictions), torch.cat(observer_targets)
         )
         result.update({f"observer_{name}": value for name, value in observer.items()})
+    candidate = torch.cat(candidate_representations)
+    reference = torch.cat(reference_representations)
+    result.update(
+        {
+            "representation_linear_cka": float(centered_linear_cka(candidate, reference)),
+            "representation_procrustes_nrmse": float(
+                orthogonal_procrustes_nrmse(candidate, reference)
+            ),
+            "representation_effective_rank": float(
+                representation_effective_rank(candidate)
+            ),
+            "reference_effective_rank": float(
+                representation_effective_rank(reference)
+            ),
+        }
+    )
+    result["nominal_symmetric_abscissa"] = float(
+        symmetric_abscissa_proxy(
+            adaptive_model.operator_adapter.nominal_generator.detach().float()
+        )
+    )
     return result
 
 
-def train_v0_9_phase3_joint(
+def _train_v0_9_phase3_route(
     config: ProjectConfig | str | Path,
     *,
     context_checkpoint: str | Path,
@@ -250,6 +347,7 @@ def train_v0_9_phase3_joint(
     run_dir: str | Path,
     frozen_target_cache: str | Path | None = None,
     device: str | torch.device = "cuda",
+    route: str,
 ) -> Phase3JointTrainingResult:
     resolved = load_config(config) if isinstance(config, (str, Path)) else config
     phase3 = resolved.v0_9_phase3
@@ -258,10 +356,21 @@ def train_v0_9_phase3_joint(
     evaluation = resolved.v0_9_evaluation
     adaptive_config = resolved.v0_9_adaptive
     cylinder = resolved.cylinder_wake_2d
-    required = (phase3, phase2, training, evaluation, adaptive_config, cylinder)
+    required = (
+        phase3,
+        phase2,
+        training,
+        evaluation,
+        adaptive_config,
+        cylinder,
+        resolved.ema,
+    )
     if any(value is None for value in required) or not phase3.enabled:
         raise ValueError("Phase-3 joint training requires enabled complete configuration")
     assert phase3 and phase2 and training and evaluation and adaptive_config and cylinder
+    assert resolved.ema
+    if route not in {"joint", "from_scratch"}:
+        raise ValueError("Phase-3 training route must be joint or from_scratch")
     selected = torch.device(device)
     if selected.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
@@ -271,7 +380,7 @@ def train_v0_9_phase3_joint(
         (destination / name).mkdir()
     save_config(resolved, destination / "config" / "resolved_config.yaml")
     print(
-        f"[V0.9][phase3:joint:{resolved.v0_9_adaptive.condition_mode}] START "
+        f"[V0.9][phase3:{route}:{resolved.v0_9_adaptive.condition_mode}] START "
         f"seed={resolved.training.seed} init={training.operator_initialization_seed} "
         f"epochs={training.epochs} device={selected}",
         flush=True,
@@ -282,17 +391,21 @@ def train_v0_9_phase3_joint(
     )
     cache = load_adaptive_cache(adaptive_cache)
     backbone, reference_encoder, adaptive_model, normalizer, context_payload = (
-        _build_joint_models(
+        _build_phase3_models(
             resolved,
             cache=cache,
             context_checkpoint=context_checkpoint,
             backbone_checkpoint=backbone_checkpoint,
             device=selected,
+            route=route,
         )
     )
     dataset = load_cylinder_wake_dataset(physical_dataset, cylinder)
     target_cache_path = None if frozen_target_cache is None else Path(frozen_target_cache)
-    if target_cache_path is not None and target_cache_path.is_file():
+    if route == "from_scratch" and target_cache_path is not None:
+        raise ValueError("from-scratch Phase-3 must use its live EMA target encoder")
+    frozen_targets: dict[str, torch.Tensor] | None = None
+    if route == "joint" and target_cache_path is not None and target_cache_path.is_file():
         try:
             target_payload = torch.load(target_cache_path, map_location="cpu", weights_only=False)
         except TypeError:  # pragma: no cover
@@ -305,7 +418,7 @@ def train_v0_9_phase3_joint(
         ):
             raise ValueError("Phase-3 frozen JEPA target cache provenance mismatch")
         frozen_targets = target_payload["targets"]
-    else:
+    elif route == "joint":
         frozen_targets = _frozen_target_latents(
             backbone, normalizer, dataset.records, selected
         )
@@ -345,7 +458,19 @@ def train_v0_9_phase3_joint(
         )
         for split, value in datasets.items()
     }
-    residual_scale_cpu, condition_mean_cpu, condition_std_cpu = adaptive_training_scales(cache)
+    if route == "from_scratch":
+        residual_scale_cpu = _from_scratch_residual_scale(
+            backbone,
+            adaptive_model,
+            normalizer,
+            dataset.records,
+            {item.trajectory_id for item in cache.select("train")},
+            selected,
+        )
+        residual_scale_source = "from_scratch_initial_training_split"
+    else:
+        residual_scale_cpu, _, _ = adaptive_training_scales(cache)
+        residual_scale_source = "inherited_phase2_training_split"
     condition_mean_cpu, condition_std_cpu = phase2_condition_scales(cache)
     residual_scale = residual_scale_cpu.to(selected)
     condition_mean = condition_mean_cpu.to(selected)
@@ -374,9 +499,15 @@ def train_v0_9_phase3_joint(
     amp_enabled = selected.type == "cuda" and training.precision != "fp32"
     amp_dtype = torch.float16 if training.precision == "amp_fp16" else torch.bfloat16
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled and amp_dtype is torch.float16)
+    ema = (
+        EMATracker(resolved.ema, len(loaders["train"]) * training.epochs)
+        if route == "from_scratch"
+        else None
+    )
     nominal_core = backbone.koopman_core.A.detach().clone()
     nominal_adapter = adaptive_model.operator_adapter.nominal_generator.detach().clone()
     best_states: tuple[dict[str, Any], dict[str, Any]] | None = None
+    best_ema_state: dict[str, Any] | None = None
     best_metrics: dict[str, float] = {}
     completed = 0
     history_rows: list[dict[str, Any]] = []
@@ -413,6 +544,7 @@ def train_v0_9_phase3_joint(
                     resolved,
                     epoch=epoch,
                     validation=False,
+                    route=route,
                 )
             scaler.scale(objective.total).backward()
             scaler.unscale_(optimizer)
@@ -420,11 +552,20 @@ def train_v0_9_phase3_joint(
                 [*representation_parameters, *adaptive_parameters],
                 training.gradient_clip_norm,
             )
+            scale_before = scaler.get_scale()
             scaler.step(optimizer)
             scaler.update()
+            optimizer_updated = not scaler.is_enabled() or scaler.get_scale() >= scale_before
+            if route == "from_scratch" and optimizer_updated:
+                adaptive_model.operator_adapter.project_trainable_nominal_stability_()
+            if ema is not None and optimizer_updated:
+                ema.update_after_optimizer(backbone)
         scheduler.step()
-        if not torch.equal(backbone.koopman_core.A.detach(), nominal_core) or not torch.equal(
-            adaptive_model.operator_adapter.nominal_generator.detach(), nominal_adapter
+        if route == "joint" and (
+            not torch.equal(backbone.koopman_core.A.detach(), nominal_core)
+            or not torch.equal(
+                adaptive_model.operator_adapter.nominal_generator.detach(), nominal_adapter
+            )
         ):
             raise RuntimeError("Phase-3 joint training changed the frozen nominal generator A0")
         metrics = _evaluate(
@@ -439,6 +580,7 @@ def train_v0_9_phase3_joint(
             resolved,
             selected,
             epoch,
+            route,
         )
         key = phase3_checkpoint_key(
             metrics,
@@ -446,6 +588,7 @@ def train_v0_9_phase3_joint(
             evaluation,
             phase2,
             condition_mode=adaptive_config.condition_mode,
+            route=route,
         )
         history_rows.append({"epoch": epoch + 1, **metrics})
         completed = epoch + 1
@@ -456,6 +599,7 @@ def train_v0_9_phase3_joint(
                 copy.deepcopy(adaptive_model.state_dict()),
             )
             best_metrics = dict(metrics)
+            best_ema_state = None if ema is None else copy.deepcopy(ema.state_dict())
         if should_stop:
             break
     if best_states is None or checkpoint_tracker.best_epoch is None:
@@ -475,6 +619,7 @@ def train_v0_9_phase3_joint(
         resolved,
         selected,
         best_epoch - 1,
+        route,
     )
     (destination / "logs" / "history.json").write_text(
         json.dumps(history_rows, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -482,11 +627,11 @@ def train_v0_9_phase3_joint(
     trainable_count = sum(
         parameter.numel() for parameter in [*representation_parameters, *adaptive_parameters]
     )
-    checkpoint = destination / "checkpoints" / "best_joint_markov.pt"
+    checkpoint = destination / "checkpoints" / f"best_{route}_markov.pt"
     _save_payload(
         {
-            "schema_version": "v0.9-phase3-joint-2",
-            "route": "joint",
+            "schema_version": "v0.9-phase3-route-1",
+            "route": route,
             "config": resolved.to_dict(),
             "config_hash": resolved.stable_hash,
             "backbone_state": backbone.state_dict(),
@@ -495,24 +640,25 @@ def train_v0_9_phase3_joint(
             "normalizer_state": normalizer.state_dict(),
             "source_backbone_sha256": file_sha256(backbone_checkpoint),
             "source_context_sha256": file_sha256(context_checkpoint),
-            # The operator is initialized from the same seed as the frozen route;
-            # loading a trained Phase-2 operator here would give joint an extra
-            # optimization budget and invalidate the matched comparison.
+            # No trainable route starts from a trained Phase-2 adaptive state. Joint
+            # retains the inherited A0; from-scratch learns its own nominal generator.
             "source_phase2_checkpoint_sha256": None,
             "adaptive_cache_fingerprint": cache.fingerprint,
             "frozen_target_cache_sha256": (
                 None if target_cache_path is None else file_sha256(target_cache_path)
             ),
+            "ema_state": best_ema_state,
             "condition_mean": condition_mean_cpu,
             "condition_std": condition_std_cpu,
             "residual_scale": residual_scale_cpu,
+            "residual_scale_source": residual_scale_source,
             "completed_epochs": completed,
             "best_epoch": best_epoch,
             "checkpoint_eligible_from_epoch": earliest_stop_epoch,
             "trainable_parameters": trainable_count,
             "best_validation_metrics": best_metrics,
             "locked_test_metrics": locked_test_metrics,
-            "nominal_generator_unchanged": True,
+            "nominal_generator_unchanged": route == "joint",
             "git_commit": get_git_commit(Path.cwd()),
         },
         checkpoint,
@@ -524,12 +670,13 @@ def train_v0_9_phase3_joint(
         json.dumps(locked_test_metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(
-        f"[V0.9][phase3:joint:{resolved.v0_9_adaptive.condition_mode}] PASS "
+        f"[V0.9][phase3:{route}:{resolved.v0_9_adaptive.condition_mode}] PASS "
         f"epochs={completed} best_epoch={best_epoch} val_total={best_metrics['total']:.6g} "
         f"drift={best_metrics['representation_drift']:.6g}",
         flush=True,
     )
     return Phase3JointTrainingResult(
+        route,
         destination,
         checkpoint,
         completed,
@@ -538,3 +685,160 @@ def train_v0_9_phase3_joint(
         best_metrics,
         locked_test_metrics,
     )
+
+
+def train_v0_9_phase3_joint(
+    config: ProjectConfig | str | Path,
+    **kwargs: Any,
+) -> Phase3JointTrainingResult:
+    return _train_v0_9_phase3_route(config, route="joint", **kwargs)
+
+
+def train_v0_9_phase3_from_scratch(
+    config: ProjectConfig | str | Path,
+    **kwargs: Any,
+) -> Phase3JointTrainingResult:
+    kwargs.pop("frozen_target_cache", None)
+    return _train_v0_9_phase3_route(
+        config,
+        route="from_scratch",
+        frozen_target_cache=None,
+        **kwargs,
+    )
+
+
+@torch.no_grad()
+def evaluate_v0_9_phase3_frozen(
+    config: ProjectConfig | str | Path,
+    *,
+    adaptive_checkpoint: str | Path,
+    context_checkpoint: str | Path,
+    adaptive_cache: str | Path,
+    backbone_checkpoint: str | Path,
+    physical_dataset: str | Path,
+    run_dir: str | Path,
+    frozen_target_cache: str | Path | None = None,
+    device: str | torch.device = "cuda",
+) -> Phase3FrozenEvaluationResult:
+    """Evaluate the inherited frozen route with the exact Phase-3 decoded metrics."""
+    resolved = load_config(config) if isinstance(config, (str, Path)) else config
+    required = (
+        resolved.v0_9_phase3,
+        resolved.v0_9_phase2,
+        resolved.v0_9_training,
+        resolved.v0_9_adaptive,
+        resolved.cylinder_wake_2d,
+    )
+    if any(value is None for value in required):
+        raise ValueError("Phase-3 frozen evaluation requires a complete configuration")
+    assert resolved.v0_9_phase3 and resolved.v0_9_training and resolved.v0_9_adaptive
+    assert resolved.cylinder_wake_2d
+    selected = torch.device(device)
+    if selected.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested but unavailable")
+    destination = Path(run_dir).resolve()
+    destination.mkdir(parents=True, exist_ok=False)
+    (destination / "evaluation").mkdir()
+    save_config(resolved, destination / "resolved_config.yaml")
+    print(
+        f"[V0.9][phase3:frozen:{resolved.v0_9_adaptive.condition_mode}] START ",
+        f"seed={resolved.training.seed}",
+        flush=True,
+    )
+    cache = load_adaptive_cache(adaptive_cache)
+    backbone, reference_encoder, adaptive_model, normalizer, context_payload = (
+        _build_phase3_models(
+            resolved,
+            cache=cache,
+            context_checkpoint=context_checkpoint,
+            backbone_checkpoint=backbone_checkpoint,
+            device=selected,
+            route="frozen",
+        )
+    )
+    payload = load_adaptive_checkpoint(adaptive_checkpoint)
+    if payload["adaptive_cache_fingerprint"] != cache.fingerprint:
+        raise ValueError("Phase-3 frozen checkpoint/cache mismatch")
+    if payload["backbone_checkpoint_sha256"] != file_sha256(backbone_checkpoint):
+        raise ValueError("Phase-3 frozen checkpoint/backbone mismatch")
+    if payload["context_checkpoint_sha256"] != file_sha256(context_checkpoint):
+        raise ValueError("Phase-3 frozen checkpoint/context mismatch")
+    adaptive_model.operator_adapter.load_state_dict(
+        payload["best_adaptive_state"], strict=True
+    )
+    dataset = load_cylinder_wake_dataset(physical_dataset, resolved.cylinder_wake_2d)
+    target_cache_path = None if frozen_target_cache is None else Path(frozen_target_cache)
+    if target_cache_path is not None and target_cache_path.is_file():
+        try:
+            target_payload = torch.load(
+                target_cache_path, map_location="cpu", weights_only=False
+            )
+        except TypeError:  # pragma: no cover
+            target_payload = torch.load(target_cache_path, map_location="cpu")
+        if (
+            not isinstance(target_payload, dict)
+            or target_payload.get("schema_version") != "v0.9-phase3-target-1"
+            or target_payload.get("backbone_checkpoint_sha256")
+            != file_sha256(backbone_checkpoint)
+        ):
+            raise ValueError("Phase-3 frozen target-cache provenance mismatch")
+        frozen_targets = target_payload["targets"]
+    else:
+        frozen_targets = _frozen_target_latents(
+            backbone, normalizer, dataset.records, selected
+        )
+        if target_cache_path is not None:
+            target_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            _save_payload(
+                {
+                    "schema_version": "v0.9-phase3-target-1",
+                    "backbone_checkpoint_sha256": file_sha256(backbone_checkpoint),
+                    "targets": frozen_targets,
+                },
+                target_cache_path,
+            )
+    history = int(context_payload["history_length_steps"])
+    maximum_horizon = max(
+        *resolved.v0_9_training.rollout_horizons,
+        *resolved.v0_9_training.active_observable_horizons,
+    )
+    test_dataset = RawFieldAdaptiveRolloutDataset(
+        cache,
+        dataset.records,
+        "test",
+        history,
+        maximum_horizon,
+        stride=resolved.v0_9_phase3.raw_field_rollout_stride,
+        frozen_target_latents=frozen_targets,
+    )
+    loader = DataLoader(
+        test_dataset,
+        batch_size=resolved.v0_9_phase3.raw_field_batch_size,
+        shuffle=False,
+        num_workers=0,
+    )
+    residual_scale_cpu = torch.as_tensor(payload["residual_training_scale"]).float()
+    condition_mean_cpu, condition_std_cpu = phase2_condition_scales(cache)
+    metrics = _evaluate(
+        backbone,
+        reference_encoder,
+        adaptive_model,
+        loader,
+        normalizer,
+        residual_scale_cpu.to(selected),
+        condition_mean_cpu.to(selected),
+        condition_std_cpu.to(selected),
+        resolved,
+        selected,
+        resolved.v0_9_training.epochs - 1,
+        "frozen",
+    )
+    (destination / "evaluation" / "locked_test_metrics.json").write_text(
+        json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(
+        f"[V0.9][phase3:frozen:{resolved.v0_9_adaptive.condition_mode}] PASS ",
+        f"total={metrics['total']:.6g}",
+        flush=True,
+    )
+    return Phase3FrozenEvaluationResult("frozen", destination, 0, metrics)

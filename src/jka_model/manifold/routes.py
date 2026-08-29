@@ -78,18 +78,11 @@ def configure_phase3_route(
         if physical_decoder is not None:
             physical_decoder.requires_grad_(True)
     elif route == "from_scratch":
+        # Construction and deterministic seeding belong to the caller.  Resetting every
+        # child here would initialize nested layers more than once and would destroy the
+        # adaptive operator's intentional zero-coordinate start.
         for module in modules.values():
             if module is not None:
-                reset = getattr(module, "reset_parameters", None)
-                if callable(reset):
-                    reset()
-                else:
-                    for child in module.modules():
-                        if child is module:
-                            continue
-                        child_reset = getattr(child, "reset_parameters", None)
-                        if callable(child_reset):
-                            child_reset()
                 module.requires_grad_(True)
     return {
         "route": route,

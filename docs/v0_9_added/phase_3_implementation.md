@@ -8,8 +8,10 @@
 - Phase 3.2 physical decoder interface: stream-function candidate implemented and unit-tested.
 - Phase 3.3 initial matched `joint` matrix: 18/18 workflow-complete as
   `v09-added-p3-joint-20260826T053347Z`, but scientifically unsupported after complete-gate review.
-- Phase 3.3 r1 correction: implemented and targeted-software-tested; corrected GPU evidence pending.
-- Matched `from_scratch` control and final aggregation: deferred until the corrected joint result.
+- Phase 3.3 r1 correction: formal 18/18 result returned as
+  `v09-added-p3-joint-r1-20260827T070153Z`; predictive 18/18 but scoped representation 0/18.
+- Phase 3.4 matched `from_scratch` control and Phase 3.5 route aggregation: implemented locally;
+  formal GPU evidence pending.
 - Formal RTX-5080 audit: completed as `v09-added-p3-audit-20260826T043840Z`.
 
 The current entry audit is deliberately not called scientific support. Its output status is
@@ -171,3 +173,46 @@ This command does not retrain Phase 2. It produces raw artifacts under
 
 This reruns only Phase-3.3 joint training and locked testing. It does not retrain Phase 2 or repeat
 the Phase-3 entry audit, and it does not yet run the `from_scratch` control.
+
+## Phase-3.4/3.5 matched route correction
+
+The r1 joint result shows a strong prediction-versus-coordinate-preservation trade-off. The joint
+drift limit remains 0.10 and is not relaxed after seeing the result. For `from_scratch`, raw
+coordinate drift is diagnostic only because a Koopman latent basis has rotation and scale gauge
+freedom. The workflow therefore reports:
+
+\[
+\operatorname{CKA}(Z,Z_0),\qquad
+\min_{Q^TQ=I}\frac{\|\widehat ZQ-\widehat Z_0\|_F}{\|\widehat Z_0\|_F},
+\qquad r_{\rm eff}(Z),
+\]
+
+where both representations are centered and normalized for the Procrustes diagnostic.
+
+The from-scratch route uses:
+
+- a newly initialized online encoder and decoder;
+- a hard-synchronized target encoder followed by optimizer-step EMA updates;
+- newly initialized causal context and low-rank adaptive heads;
+- a trainable nominal generator rather than inherited `A0`, projected after each successful
+  optimizer update onto the non-expansive set
+  `lambda_max((A0+A0^T)/2) <= 0`;
+- a fixed latent residual normalization fitted only from the from-scratch initial encoder,
+  initial nominal generator and training trajectories, rather than reusing V0.8 latent scales;
+- raw-field online re-encoding, with no frozen target-latent cache;
+- the same physical trajectories, split, seeds, horizons, epochs and locked test.
+
+Each from-scratch and returned joint run is paired with the exact frozen Phase-2 checkpoint for the
+same backbone seed, condition mode and operator seed. Final route success requires internal
+physics/round-trip/predictive/observer gates, at least 2% decoded-field gain at every declared
+horizon, and velocity/vorticity non-inferiority. Operator-seed evidence is nested within condition
+mode and backbone seed before a route-level claim is made.
+
+## One-line RTX-5080 matched three-route study
+
+```bash
+.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_phase3_routes.py --validation-id v09-added-p3-routes-$(date -u +%Y%m%dT%H%M%SZ) --phase2-id v09-added-p2-physical-20260824T105209Z --audit-id v09-added-p3-audit-20260826T043840Z --joint-id v09-added-p3-joint-r1-20260827T070153Z --seeds 47 53 59 --operator-seeds 701 809 907 --condition-modes known latent_inferred
+```
+
+This command does not retrain Phase 2 or joint r1. It performs 18 frozen locked-test reevaluations,
+18 from-scratch train/locked-test runs, and the final matched aggregation in one visible workflow.
