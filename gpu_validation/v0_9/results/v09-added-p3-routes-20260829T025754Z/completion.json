@@ -1,0 +1,12 @@
+{
+  "formal_from_scratch_training_count": 18,
+  "formal_frozen_evaluation_count": 18,
+  "git_commit": "6c2f2eb8d7079537f705524dc812d86c2c52e2af",
+  "requested_validation_id": "v09-added-p3-routes-20260829T025754Z",
+  "resolved_validation_id": "v09-added-p3-routes-20260829T025754Z",
+  "scientific_decision": "NO_PHASE3_ROUTE_SUPPORTED",
+  "source_joint_result": "v09-added-p3-joint-r1-20260827T070153Z",
+  "source_phase2_result": "v09-added-p2-physical-20260824T105209Z",
+  "status": "PASS",
+  "v1_0_readiness": "NOT_READY"
+}
