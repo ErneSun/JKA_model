@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Formal non-silent Phase-3.3 joint-route training on the returned audit decision."""
+"""Formal non-silent Phase-3 joint refinement with a matched frozen reference."""
 
 from __future__ import annotations
 
@@ -24,9 +24,10 @@ for import_root in (ROOT, ROOT / "src"):
 
 from jka_model.config import ProjectConfig, load_config, save_config  # noqa: E402
 from jka_model.manifold import (  # noqa: E402
-    classify_phase3_joint_run,
+    classify_matched_phase3_run,
     classify_phase3_metrics,
     classify_phase3_route,
+    nested_route_support,
 )
 from jka_model.utils import create_versioned_session, get_git_commit  # noqa: E402
 from train.train_v0_9_phase3 import train_v0_9_phase3_joint  # noqa: E402
@@ -170,6 +171,11 @@ def main() -> None:
     parser.add_argument(
         "--audit-id", default="v09-added-p3-audit-20260826T043840Z"
     )
+    parser.add_argument(
+        "--frozen-reference-id",
+        default="v09-added-p3-routes-20260829T025754Z",
+        help="completed matched-route result providing immutable frozen locked-test metrics",
+    )
     parser.add_argument("--seeds", nargs="+", type=int, default=[47, 53, 59])
     parser.add_argument("--operator-seeds", nargs="+", type=int, default=[701, 809, 907])
     parser.add_argument(
@@ -201,12 +207,17 @@ def main() -> None:
     phase2_raw = ROOT / "runs" / "v0_9" / args.phase2_id
     phase2_compact = ROOT / "gpu_validation" / "v0_9" / "results" / args.phase2_id
     audit_compact = ROOT / "gpu_validation" / "v0_9" / "results" / args.audit_id
+    frozen_reference_compact = (
+        ROOT / "gpu_validation" / "v0_9" / "results" / args.frozen_reference_id
+    )
     required = (
         phase2_raw / "v0_8_handoff_audit.json",
         phase2_compact / "completion.json",
         phase2_compact / "summary.json",
         audit_compact / "completion.json",
         audit_compact / "evaluation" / "phase3_route_decision.json",
+        frozen_reference_compact / "completion.json",
+        frozen_reference_compact / "evaluation" / "matched_route_summary.json",
     )
     if any(not path.is_file() for path in required):
         raise SystemExit("Phase-3 joint study requires complete Phase-2 raw/compact and audit data")
@@ -215,6 +226,14 @@ def main() -> None:
         raise SystemExit("Phase-3 source Phase-2 workflow is incomplete")
     phase2_summary = json.loads(required[2].read_text(encoding="utf-8"))
     source_decision = json.loads(required[4].read_text(encoding="utf-8"))
+    frozen_reference_completion = json.loads(required[5].read_text(encoding="utf-8"))
+    frozen_reference = json.loads(required[6].read_text(encoding="utf-8"))
+    if (
+        frozen_reference_completion.get("status") != "PASS"
+        or frozen_reference.get("source_phase2_result") != args.phase2_id
+        or len(frozen_reference.get("frozen", {}).get("runs", ())) != 18
+    ):
+        raise SystemExit("Phase-3 joint refinement requires a complete matched frozen reference")
     template = load_config(
         ROOT / "gpu_validation" / "v0_9" / "configs" / "gpu_adaptive_koopman.yaml"
     )
@@ -357,14 +376,28 @@ def main() -> None:
         evaluation = template.v0_9_evaluation
         if phase3 is None or phase2 is None or evaluation is None:
             raise RuntimeError("Phase-3 aggregation thresholds are missing")
+
+        def matched_key(row: dict[str, Any]) -> tuple[int, str, int]:
+            return (
+                int(row["seed"]),
+                str(row["condition_mode"]),
+                int(row["operator_seed"]),
+            )
+
+        frozen_by_key = {
+            matched_key(row): row for row in frozen_reference["frozen"]["runs"]
+        }
+        if set(frozen_by_key) != {matched_key(row) for row in rows}:
+            raise RuntimeError("refined joint matrix does not match the frozen reference matrix")
         run_gates = [
-            classify_phase3_joint_run(
+            classify_matched_phase3_run(
                 row["locked_test"],
+                frozen_by_key[matched_key(row)]["locked_test"],
                 phase3,
                 evaluation,
                 phase2,
-                condition_mode=row["condition_mode"],
                 route="joint",
+                condition_mode=row["condition_mode"],
             )
             for row in rows
         ]
@@ -382,12 +415,27 @@ def main() -> None:
         latent_observer_fraction = sum(
             bool(gate["observer"]) for gate in latent_gates
         ) / len(latent_gates)
+        nested_support = nested_route_support(
+            rows, required_fraction=evaluation.scientific_seed_fraction
+        )
+        scientific_status = (
+            "SCOPED_JOINT_REFINEMENT_SUPPORTED"
+            if nested_support["supported"]
+            else "JOINT_REFINEMENT_NOT_SUPPORTED"
+        )
+        v1_0_readiness = (
+            "READY"
+            if nested_support["backbone_pass_fraction"]
+            >= evaluation.v1_0_readiness_fraction
+            else "NOT_READY"
+        )
 
         summary = {
-            "schema_version": 2,
-            "phase": "V0.9_PHASE3_JOINT",
+            "schema_version": 3,
+            "phase": "V0.9_PHASE3_JOINT_PHYSICAL_REFINEMENT",
             "source_phase2_result": args.phase2_id,
             "source_phase3_audit": args.audit_id,
+            "source_frozen_reference": args.frozen_reference_id,
             "route": "joint",
             "phase2_retraining_performed": False,
             "operator_initialized_from_phase2_trained_state": False,
@@ -415,10 +463,22 @@ def main() -> None:
             "observer_pass_fraction": pass_fraction("observer"),
             "latent_observer_pass_fraction": latent_observer_fraction,
             "strict_joint_pass_fraction": pass_fraction("strict_joint"),
+            "decoded_field_material_gain_pass_fraction": pass_fraction(
+                "decoded_field_material_gain"
+            ),
+            "decoded_velocity_noninferiority_pass_fraction": pass_fraction(
+                "decoded_velocity_noninferiority"
+            ),
+            "decoded_vorticity_noninferiority_pass_fraction": pass_fraction(
+                "decoded_vorticity_noninferiority"
+            ),
+            "matched_route_pass_fraction": pass_fraction("matched_route_pass"),
+            "nested_support": nested_support,
             "aggregate_locked_test": aggregate,
             "runs": rows,
-            "scientific_status": "JOINT_R1_EVIDENCE_COMPLETE_REVIEW_REQUIRED",
-            "next_stage": "REVIEW_BEFORE_FROM_SCRATCH_CONTROL",
+            "scientific_status": scientific_status,
+            "v1_0_readiness": v1_0_readiness,
+            "next_stage": "REVIEW_REFINED_JOINT_EVIDENCE",
         }
         for destination in (
             raw / "evaluation" / "joint_summary.json",
@@ -430,6 +490,7 @@ def main() -> None:
         report = (
             "# V0.9 Phase-3 joint route\n\n"
             f"- Source audit: `{args.audit_id}` (dimensionally reassessed)\n"
+            f"- Frozen matched reference: `{args.frozen_reference_id}`\n"
             "- Corrected reconstruction physics: `PASS`\n"
             "- Corrected next route: `JOINT_MARKOV_REPRESENTATION`\n"
             f"- Formal train/locked-test runs: `{completed_runs}/{expected}`\n"
@@ -444,8 +505,15 @@ def main() -> None:
             "- Latent-only observer pass fraction: "
             f"`{summary['latent_observer_pass_fraction']:.3f}`\n"
             f"- Strict joint pass fraction: `{summary['strict_joint_pass_fraction']:.3f}`\n"
-            "- Scientific status: `JOINT_R1_EVIDENCE_COMPLETE_REVIEW_REQUIRED`\n"
-            "- Next: review corrected joint evidence before from-scratch control\n"
+            "- Decoded-field material-gain pass fraction: "
+            f"`{summary['decoded_field_material_gain_pass_fraction']:.3f}`\n"
+            f"- Matched route pass fraction: `{summary['matched_route_pass_fraction']:.3f}`\n"
+            "- Nested backbone support fraction: "
+            f"`{nested_support['backbone_pass_fraction']:.3f}`\n"
+            f"- Scientific status: `{scientific_status}`\n"
+            f"- V1.0 readiness: `{v1_0_readiness}`\n"
+            "- Next: review refined joint evidence; from-scratch remains a completed "
+            "negative control\n"
         )
         (compact / "report.md").write_text(report, encoding="utf-8")
         completion = {
@@ -453,12 +521,14 @@ def main() -> None:
             "resolved_validation_id": session.resolved_id,
             "source_phase2_result": args.phase2_id,
             "source_phase3_audit": args.audit_id,
+            "source_frozen_reference": args.frozen_reference_id,
             "status": "PASS",
             "git_commit": get_git_commit(ROOT),
             "formal_training_run_count": completed_runs,
             "formal_locked_test_run_count": completed_runs,
-            "scientific_status": "JOINT_R1_EVIDENCE_COMPLETE_REVIEW_REQUIRED",
-            "next_stage": "REVIEW_BEFORE_FROM_SCRATCH_CONTROL",
+            "scientific_status": scientific_status,
+            "v1_0_readiness": v1_0_readiness,
+            "next_stage": "REVIEW_REFINED_JOINT_EVIDENCE",
         }
         (compact / "completion.json").write_text(
             json.dumps(completion, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -473,6 +543,7 @@ def main() -> None:
             "validation_id": session.resolved_id,
             "source_phase2_result": args.phase2_id,
             "source_phase3_audit": args.audit_id,
+            "source_frozen_reference": args.frozen_reference_id,
             "status": "FAILED_INCOMPLETE",
             "failed_stage": current_stage,
             "failed_run": current_run,

@@ -10,8 +10,10 @@
   `v09-added-p3-joint-20260826T053347Z`, but scientifically unsupported after complete-gate review.
 - Phase 3.3 r1 correction: formal 18/18 result returned as
   `v09-added-p3-joint-r1-20260827T070153Z`; predictive 18/18 but scoped representation 0/18.
-- Phase 3.4 matched `from_scratch` control and Phase 3.5 route aggregation: implemented locally;
-  formal GPU evidence pending.
+- Phase 3.4 matched `from_scratch` control and Phase 3.5 route aggregation: formal 18+18 GPU
+  evidence completed as `v09-added-p3-routes-20260829T025754Z`; both candidate routes have matched
+  pass fraction 0 and the decision is `NO_PHASE3_ROUTE_SUPPORTED`.
+- Phase 3.6 decoded-physical joint refinement: implemented locally; formal GPU evidence pending.
 - Formal RTX-5080 audit: completed as `v09-added-p3-audit-20260826T043840Z`.
 
 The current entry audit is deliberately not called scientific support. Its output status is
@@ -216,3 +218,48 @@ mode and backbone seed before a route-level claim is made.
 
 This command does not retrain Phase 2 or joint r1. It performs 18 frozen locked-test reevaluations,
 18 from-scratch train/locked-test runs, and the final matched aggregation in one visible workflow.
+
+## Phase 3.6 — decoded-physical joint refinement
+
+The matched result establishes two distinct facts. The joint route improves its internal latent
+rollout by 8.8–21.7%, but its decoded field improves by only 0.58–1.10%, below the predeclared 2%
+material-gain threshold. The from-scratch route is retained as a completed negative control because
+its decoded field, round-trip, physics and inferred-observer evidence all degrade under the matched
+budget. Phase 3.6 therefore modifies only the joint training mechanism; it does not rerun or hide
+the from-scratch result.
+
+The refinement adds a training-split-only physical-coordinate objective
+
+\[
+\mathcal L_{\rm dec}=\sum_h \omega_h\left[
+2\,\frac{\|\hat x_h-x_h\|_2^2}{\|x_h\|_2^2+\epsilon}
++\frac{\|\hat u_h-u_h\|_2^2}{\|u_h\|_2^2+\epsilon}
++0.2\,\frac{\|\hat\omega_h-\omega_h\|_2^2}{\|\omega_h\|_2^2+\epsilon}
+\right],
+\]
+
+using only training trajectories and the already declared horizon weights. The frozen locked test
+remains evaluation-only. The representation-drift inequality is now normalized by its fixed
+tolerance,
+
+\[
+\mathcal L_{\rm drift}=
+\left[\max\left(\frac{d_{\rm rep}}{0.10}-1,0\right)\right]^2,
+\]
+
+so a four-times tolerance violation cannot appear numerically small. Joint representation
+parameters stay frozen until decoded/physics supervision begins, then use the same smooth ramp;
+the context and adaptive operator train from the first epoch. Mature checkpoints are ranked first
+by feasibility and then by decoded field/velocity/vorticity error before latent predictive gain.
+
+The formal workflow reuses the immutable frozen locked-test metrics from the completed matched
+study. It trains only the 18 joint cells, applies the same matched gates and nested seed rule, and
+produces a compact scientific report.
+
+## One-line RTX-5080 Phase-3.6 refinement
+
+```bash
+.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_phase3_joint.py --validation-id v09-added-p3-physical-joint-$(date -u +%Y%m%dT%H%M%SZ) --phase2-id v09-added-p2-physical-20260824T105209Z --audit-id v09-added-p3-audit-20260826T043840Z --frozen-reference-id v09-added-p3-routes-20260829T025754Z --seeds 47 53 59 --operator-seeds 701 809 907 --condition-modes known latent_inferred
+```
+
+This command does not repeat Phase 2, the entry audit, frozen evaluation, or from-scratch training.

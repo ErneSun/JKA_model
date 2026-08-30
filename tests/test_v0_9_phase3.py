@@ -22,6 +22,7 @@ from jka_model.manifold import (
     classify_phase3_metrics,
     classify_phase3_route,
     configure_phase3_route,
+    decoded_physical_supervision,
     nested_route_support,
     orthogonal_procrustes_nrmse,
     phase3_checkpoint_key,
@@ -74,6 +75,31 @@ def test_physical_metrics_enforce_cylinder_no_slip() -> None:
     field[:, 0, 3:5, 2:4] = 1.0
     dirty = physical_manifold_metrics(field, valid_mask=valid, dx=1.0, dy=1.0)
     assert dirty["boundary_no_slip_mse"] > 0
+
+
+def test_decoded_physical_supervision_is_dimensionless_and_differentiable() -> None:
+    torch.manual_seed(11)
+    target = torch.randn(2, 3, 10, 8)
+    predicted = (target + 0.1 * torch.randn_like(target)).requires_grad_(True)
+    terms = decoded_physical_supervision(
+        predicted,
+        target,
+        torch.ones(2, 10, 8, dtype=torch.bool),
+        dx=0.2,
+        dy=0.3,
+    )
+    loss = terms["field"] + terms["velocity"] + terms["vorticity"]
+    assert float(loss.detach()) > 0
+    loss.backward()
+    assert predicted.grad is not None and torch.isfinite(predicted.grad).all()
+    exact = decoded_physical_supervision(
+        target,
+        target,
+        torch.ones(10, 8, dtype=torch.bool),
+        dx=0.2,
+        dy=0.3,
+    )
+    assert exact["field"] == 0 and exact["velocity"] == 0 and exact["vorticity"] == 0
 
 
 def test_trainable_phase3_routes_reject_frozen_latent_cache() -> None:
@@ -302,6 +328,21 @@ def test_phase3_early_stopping_patience_starts_after_curriculum_maturity() -> No
     assert not selected and stop
 
 
+def test_phase3_joint_representation_lr_waits_for_physical_supervision() -> None:
+    from train.train_v0_9_phase3 import _phase3_learning_rate_scales
+
+    assert _phase3_learning_rate_scales(
+        epoch=0, epochs=80, representation_start=0.35, representation_ramp=0.25
+    ) == (0.0, 1.0)
+    representation, operator = _phase3_learning_rate_scales(
+        epoch=32, epochs=80, representation_start=0.35, representation_ramp=0.25
+    )
+    assert 0.0 < representation < operator == 1.0
+    assert _phase3_learning_rate_scales(
+        epoch=79, epochs=80, representation_start=0.35, representation_ramp=0.25
+    ) == (0.5, 0.5)
+
+
 def test_phase3_checkpoint_selection_and_report_use_all_declared_gates() -> None:
     config = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml")
     assert config.v0_9_phase3 and config.v0_9_phase2 and config.v0_9_evaluation
@@ -320,6 +361,10 @@ def test_phase3_checkpoint_selection_and_report_use_all_declared_gates() -> None
         "rollout_gain_h32": 0.023,
         "rollout_gain_h80": 0.024,
     }
+    for horizon in config.v0_9_evaluation.rollout_horizons:
+        passing[f"decoded_field_relative_l2_h{horizon}"] = 0.30
+        passing[f"decoded_velocity_relative_l2_h{horizon}"] = 0.20
+        passing[f"decoded_vorticity_relative_l2_h{horizon}"] = 0.40
     drifting = {**passing, "total": 1.0, "representation_drift": 0.11}
     passing_key = phase3_checkpoint_key(
         passing,
@@ -336,6 +381,22 @@ def test_phase3_checkpoint_selection_and_report_use_all_declared_gates() -> None
         condition_mode="latent_inferred",
     )
     assert passing_key < drifting_key
+    decoded_worse = {
+        **passing,
+        **{
+            f"decoded_field_relative_l2_h{horizon}": 0.35
+            for horizon in config.v0_9_evaluation.rollout_horizons
+        },
+        "total": 0.1,
+    }
+    decoded_worse_key = phase3_checkpoint_key(
+        decoded_worse,
+        config.v0_9_phase3,
+        config.v0_9_evaluation,
+        config.v0_9_phase2,
+        condition_mode="latent_inferred",
+    )
+    assert passing_key < decoded_worse_key
     gate = classify_phase3_joint_run(
         passing,
         config.v0_9_phase3,

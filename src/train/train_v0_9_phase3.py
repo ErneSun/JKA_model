@@ -13,7 +13,6 @@ from typing import Any
 import torch
 from torch import nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
 from jka_model.adaptive import (
@@ -66,6 +65,24 @@ class Phase3FrozenEvaluationResult:
     run_dir: Path
     trainable_parameters: int
     locked_test_metrics: dict[str, float]
+
+
+def _phase3_learning_rate_scales(
+    *, epoch: int, epochs: int, representation_start: float, representation_ramp: float
+) -> tuple[float, float]:
+    """Return representation/operator LR multipliers for staged joint refinement."""
+    if not 0 <= epoch < epochs or not 0 <= representation_start <= 1:
+        raise ValueError("invalid Phase-3 learning-rate schedule")
+    if not 0 <= representation_ramp <= 1 or representation_start + representation_ramp > 1:
+        raise ValueError("invalid Phase-3 representation ramp")
+    progress = epoch / max(epochs - 1, 1)
+    if progress <= representation_start:
+        representation = 0.0
+    else:
+        denominator = representation_ramp or max(1.0 - representation_start, 1.0e-12)
+        representation = min(1.0, (progress - representation_start) / denominator)
+    decay = 0.5 if epoch >= max(1, epochs // 2) else 1.0
+    return representation * decay, decay
 
 
 @torch.no_grad()
@@ -495,7 +512,6 @@ def _train_v0_9_phase3_route(
         ],
         weight_decay=training.weight_decay,
     )
-    scheduler = StepLR(optimizer, step_size=max(1, training.epochs // 2), gamma=0.5)
     amp_enabled = selected.type == "cuda" and training.precision != "fp32"
     amp_dtype = torch.float16 if training.precision == "amp_fp16" else torch.bfloat16
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled and amp_dtype is torch.float16)
@@ -521,7 +537,26 @@ def _train_v0_9_phase3_route(
         patience=training.patience,
     )
     for epoch in range(training.epochs):
+        if route == "joint":
+            representation_lr_scale, operator_lr_scale = _phase3_learning_rate_scales(
+                epoch=epoch,
+                epochs=training.epochs,
+                representation_start=training.physics_start_fraction,
+                representation_ramp=training.physics_ramp_duration_fraction,
+            )
+        else:
+            decay = 0.5 if epoch >= max(1, training.epochs // 2) else 1.0
+            representation_lr_scale = operator_lr_scale = decay
+        optimizer.param_groups[0]["lr"] = (
+            phase3.representation_learning_rate * representation_lr_scale
+        )
+        optimizer.param_groups[1]["lr"] = phase3.operator_learning_rate * operator_lr_scale
+        for parameter in representation_parameters:
+            parameter.requires_grad_(route != "joint" or representation_lr_scale > 0)
         backbone.train()
+        # The JEPA teacher is an immutable target for joint and is EMA-updated only
+        # after optimizer steps for from-scratch. It must never enter train mode.
+        backbone.target_encoder.eval()
         adaptive_model.train()
         for raw in loaders["train"]:
             batch = move_raw_field_batch(raw, selected)
@@ -560,7 +595,6 @@ def _train_v0_9_phase3_route(
                 adaptive_model.operator_adapter.project_trainable_nominal_stability_()
             if ema is not None and optimizer_updated:
                 ema.update_after_optimizer(backbone)
-        scheduler.step()
         if route == "joint" and (
             not torch.equal(backbone.koopman_core.A.detach(), nominal_core)
             or not torch.equal(
@@ -590,7 +624,14 @@ def _train_v0_9_phase3_route(
             condition_mode=adaptive_config.condition_mode,
             route=route,
         )
-        history_rows.append({"epoch": epoch + 1, **metrics})
+        history_rows.append(
+            {
+                "epoch": epoch + 1,
+                "representation_lr_scale": representation_lr_scale,
+                "operator_lr_scale": operator_lr_scale,
+                **metrics,
+            }
+        )
         completed = epoch + 1
         selected_checkpoint, should_stop = checkpoint_tracker.consider(completed, key)
         if selected_checkpoint:

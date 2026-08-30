@@ -78,6 +78,11 @@ v0_9_phase3:
   lambda_jepa_consistency: 0.20
   lambda_physical_manifold: 1.0
   lambda_representation_drift: 1.0
+  # Training-split physical-coordinate supervision. Locked-test frozen gains
+  # remain evaluation-only and are never used as optimization targets.
+  lambda_decoded_field: 2.0
+  lambda_decoded_velocity: 1.0
+  lambda_decoded_vorticity: 0.20
   max_normalized_representation_drift: 0.10
 v0_9_training:
   epochs: 80

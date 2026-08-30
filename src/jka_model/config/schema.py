@@ -2490,6 +2490,9 @@ class V09Phase3Config:
     lambda_jepa_consistency: float = 0.20
     lambda_physical_manifold: float = 1.0
     lambda_representation_drift: float = 1.0
+    lambda_decoded_field: float = 2.0
+    lambda_decoded_velocity: float = 1.0
+    lambda_decoded_vorticity: float = 0.20
     max_normalized_representation_drift: float = 0.10
 
     def __post_init__(self) -> None:
@@ -2519,6 +2522,9 @@ class V09Phase3Config:
             self.lambda_jepa_consistency,
             self.lambda_physical_manifold,
             self.lambda_representation_drift,
+            self.lambda_decoded_field,
+            self.lambda_decoded_velocity,
+            self.lambda_decoded_vorticity,
             self.max_normalized_representation_drift,
         )
         if any(not math.isfinite(value) or value <= 0 for value in positive):
