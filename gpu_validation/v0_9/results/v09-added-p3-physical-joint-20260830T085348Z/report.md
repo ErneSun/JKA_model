@@ -1,0 +1,22 @@
+# V0.9 Phase-3 joint route
+
+- Source audit: `v09-added-p3-audit-20260826T043840Z` (dimensionally reassessed)
+- Frozen matched reference: `v09-added-p3-routes-20260829T025754Z`
+- Corrected reconstruction physics: `PASS`
+- Corrected next route: `JOINT_MARKOV_REPRESENTATION`
+- Formal train/locked-test runs: `18/18`
+- Completed epoch range: `[65, 80]`
+- Selected best-epoch range: `[49, 80]`
+- Raw-field online re-encoding: `YES`
+- Frozen nominal generator A0: `YES`
+- Physics pass fraction: `1.000`
+- Representation-feasible pass fraction: `0.000`
+- Predictive pass fraction: `1.000`
+- Latent-only observer pass fraction: `0.111`
+- Strict joint pass fraction: `0.000`
+- Decoded-field material-gain pass fraction: `0.000`
+- Matched route pass fraction: `0.000`
+- Nested backbone support fraction: `0.000`
+- Scientific status: `JOINT_REFINEMENT_NOT_SUPPORTED`
+- V1.0 readiness: `NOT_READY`
+- Next: review refined joint evidence; from-scratch remains a completed negative control

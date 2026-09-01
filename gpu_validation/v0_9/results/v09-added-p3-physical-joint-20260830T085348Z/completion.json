@@ -1,0 +1,14 @@
+{
+  "formal_locked_test_run_count": 18,
+  "formal_training_run_count": 18,
+  "git_commit": "65d26344c338d3e96d50665995c6ecb55c6c1da9",
+  "next_stage": "REVIEW_REFINED_JOINT_EVIDENCE",
+  "requested_validation_id": "v09-added-p3-physical-joint-20260830T085348Z",
+  "resolved_validation_id": "v09-added-p3-physical-joint-20260830T085348Z",
+  "scientific_status": "JOINT_REFINEMENT_NOT_SUPPORTED",
+  "source_frozen_reference": "v09-added-p3-routes-20260829T025754Z",
+  "source_phase2_result": "v09-added-p2-physical-20260824T105209Z",
+  "source_phase3_audit": "v09-added-p3-audit-20260826T043840Z",
+  "status": "PASS",
+  "v1_0_readiness": "NOT_READY"
+}

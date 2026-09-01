@@ -1,0 +1,71 @@
+{
+  "corrected": {
+    "next_candidate": "JOINT_MARKOV_REPRESENTATION",
+    "nominal_tangent_status": "PASS",
+    "reconstruction_physics_status": "PASS",
+    "roundtrip_status": "FAIL"
+  },
+  "correction": "divergence RMS is compared to sqrt(max_divergence_mse)",
+  "original_next_candidate": "PHYSICAL_MANIFOLD_DECODER",
+  "schema_version": 1,
+  "seeds": [
+    {
+      "backbone_seed": 47,
+      "boundary_degradation": 0.043160807341337204,
+      "data_boundary_no_slip_mse": 0.0,
+      "data_divergence_rms": 0.08332311362028122,
+      "divergence_degradation": -0.23947220292052485,
+      "nominal_tangent_boundary": 0.00038708094507455826,
+      "nominal_tangent_divergence": 0.028083721175789833,
+      "nominal_tangent_outer_boundary": 0.0027200307231396437,
+      "reconstruction_boundary_no_slip_mse": 0.002158040413632989,
+      "reconstruction_divergence_rms": 0.049456629902124405,
+      "reconstruction_outer_boundary_mse": 0.020021328702569008,
+      "reconstruction_physics_status": "PASS",
+      "reconstruction_relative_l2": 0.28635141253471375,
+      "roundtrip_nrmse": 0.4005717933177948,
+      "roundtrip_status": "FAIL",
+      "sample_count": 12,
+      "tangent_status": "PASS"
+    },
+    {
+      "backbone_seed": 53,
+      "boundary_degradation": 0.03223802149295807,
+      "data_boundary_no_slip_mse": 0.0,
+      "data_divergence_rms": 0.07248792797327042,
+      "divergence_degradation": -0.2758548903783871,
+      "nominal_tangent_boundary": 0.0008205340127460659,
+      "nominal_tangent_divergence": 0.013525907881557941,
+      "nominal_tangent_outer_boundary": 0.0016225435538217425,
+      "reconstruction_boundary_no_slip_mse": 0.0016119010979309678,
+      "reconstruction_divergence_rms": 0.03347615525126457,
+      "reconstruction_outer_boundary_mse": 0.019176239147782326,
+      "reconstruction_physics_status": "PASS",
+      "reconstruction_relative_l2": 0.289590448141098,
+      "roundtrip_nrmse": 0.3676985204219818,
+      "roundtrip_status": "FAIL",
+      "sample_count": 12,
+      "tangent_status": "PASS"
+    },
+    {
+      "backbone_seed": 59,
+      "boundary_degradation": 0.010320124216377735,
+      "data_boundary_no_slip_mse": 0.0,
+      "data_divergence_rms": 0.07249623537063599,
+      "divergence_degradation": -0.27278907593414403,
+      "nominal_tangent_boundary": 0.0004809990059584379,
+      "nominal_tangent_divergence": 0.006822869181632996,
+      "nominal_tangent_outer_boundary": 0.0030335094779729843,
+      "reconstruction_boundary_no_slip_mse": 0.0005160061991773546,
+      "reconstruction_divergence_rms": 0.03391803428530693,
+      "reconstruction_outer_boundary_mse": 0.019270092248916626,
+      "reconstruction_physics_status": "PASS",
+      "reconstruction_relative_l2": 0.29086974263191223,
+      "roundtrip_nrmse": 0.5309803485870361,
+      "roundtrip_status": "FAIL",
+      "sample_count": 12,
+      "tangent_status": "PASS"
+    }
+  ],
+  "source_phase3_audit": "v09-added-p3-audit-20260826T043840Z"
+}
