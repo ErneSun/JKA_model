@@ -369,8 +369,8 @@ class FactorizedAdaptiveOperator(nn.Module):
         detach_static: bool = False,
         delta_budget: float | None = None,
     ) -> dict[str, Tensor]:
-        if active_components not in {"static", "full"}:
-            raise ValueError("Phase-2 active_components must be static or full")
+        if active_components not in {"static", "dynamic", "full"}:
+            raise ValueError("Phase-2 active_components must be static, dynamic, or full")
         budget = self.symmetric_delta_budget if delta_budget is None else delta_budget
         if not math.isfinite(float(budget)) or budget <= 0:
             raise ValueError("Phase-2 total delta budget must be finite and positive")
@@ -417,11 +417,27 @@ class FactorizedAdaptiveOperator(nn.Module):
         if active_components == "static":
             dynamic_coordinates = torch.zeros_like(dynamic_coordinates)
             dynamic_gate = torch.zeros_like(dynamic_gate)
+        elif active_components == "dynamic":
+            static_coordinates = torch.zeros_like(static_coordinates)
+            static_gate = torch.zeros_like(static_gate)
         static_left, static_right = self._factor_pair("static")
         dynamic_left, dynamic_right = self._factor_pair("dynamic")
-        static_delta = torch.einsum("ir,br,jr->bij", static_left, static_coordinates, static_right)
-        dynamic_delta = torch.einsum(
-            "ir,br,jr->bij", dynamic_left, dynamic_coordinates, dynamic_right
+        zero_delta = context.new_zeros(
+            (context.shape[0], self.latent_dim, self.latent_dim)
+        )
+        static_delta = (
+            zero_delta
+            if active_components == "dynamic"
+            else torch.einsum(
+                "ir,br,jr->bij", static_left, static_coordinates, static_right
+            )
+        )
+        dynamic_delta = (
+            zero_delta
+            if active_components == "static"
+            else torch.einsum(
+                "ir,br,jr->bij", dynamic_left, dynamic_coordinates, dynamic_right
+            )
         )
         if detach_static:
             # Stage 2 is a residual fit: the dynamic branch sees the forecast

@@ -13,7 +13,11 @@
 - Phase 3.4 matched `from_scratch` control and Phase 3.5 route aggregation: formal 18+18 GPU
   evidence completed as `v09-added-p3-routes-20260829T025754Z`; both candidate routes have matched
   pass fraction 0 and the decision is `NO_PHASE3_ROUTE_SUPPORTED`.
-- Phase 3.6 decoded-physical joint refinement: implemented locally; formal GPU evidence pending.
+- Phase 3.6 decoded-physical joint refinement: formal GPU result
+  `v09-added-p3-physical-joint-20260830T085348Z`; technical PASS, scientific
+  `JOINT_REFINEMENT_NOT_SUPPORTED`.
+- Phase 3.7 physical pullback, dynamical-gauge audit and independent observer admission:
+  implemented locally; formal GPU evidence pending. See `phase_3_7_implementation.md`.
 - Formal RTX-5080 audit: completed as `v09-added-p3-audit-20260826T043840Z`.
 
 The current entry audit is deliberately not called scientific support. Its output status is

@@ -47,6 +47,11 @@ from jka_model.adaptive.objectives import (
     phase2_training_state,
     relative_propagator_growth_loss,
 )
+from jka_model.adaptive.observer_admission import (
+    OBSERVER_VARIANTS,
+    classify_observer_admission,
+    observer_history_variant,
+)
 from jka_model.adaptive.physics import (
     FrozenCylinderPhysics,
     FrozenDecoderObservables,
@@ -72,6 +77,7 @@ __all__ = [
     "FrozenDecoderObservables",
     "FactorizedAdaptiveOperator",
     "PhysicalLossResult",
+    "OBSERVER_VARIANTS",
     "latent_prediction_metrics",
     "operator_burden",
     "operator_explained_fraction",
@@ -82,6 +88,7 @@ __all__ = [
     "condition_observer_metrics",
     "causal_observer_features",
     "condition_targets",
+    "classify_observer_admission",
     "conditional_centering_loss",
     "adaptive_stabilization_objective",
     "adaptive_latent_rollout",
@@ -94,6 +101,7 @@ __all__ = [
     "load_adaptive_cache",
     "load_adaptive_checkpoint",
     "matched_history_pairs",
+    "observer_history_variant",
     "phase2_condition_scales",
     "save_adaptive_cache",
     "save_adaptive_checkpoint",

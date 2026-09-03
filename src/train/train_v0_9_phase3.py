@@ -16,12 +16,16 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
 from jka_model.adaptive import (
+    OBSERVER_VARIANTS,
     AdaptiveKoopmanModel,
     FactorizedAdaptiveOperator,
     adaptive_training_scales,
+    causal_observer_features,
+    classify_observer_admission,
     condition_observer_metrics,
     load_adaptive_cache,
     load_adaptive_checkpoint,
+    observer_history_variant,
     phase2_condition_scales,
     symmetric_abscissa_proxy,
 )
@@ -35,6 +39,7 @@ from jka_model.manifold import (
     assert_online_reencoding_required,
     centered_linear_cka,
     configure_phase3_route,
+    dynamical_gauge_metrics,
     joint_markov_objective,
     move_raw_field_batch,
     orthogonal_procrustes_nrmse,
@@ -57,6 +62,7 @@ class Phase3JointTrainingResult:
     trainable_parameters: int
     validation_metrics: dict[str, float]
     locked_test_metrics: dict[str, float]
+    observer_admission: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +166,7 @@ def _build_phase3_models(
 ) -> tuple[
     FieldJEPAKoopmanModel,
     nn.Module,
+    nn.Module,
     AdaptiveKoopmanModel,
     ChannelStandardizer,
     dict[str, Any],
@@ -196,6 +203,9 @@ def _build_phase3_models(
     reference_encoder = copy.deepcopy(inherited_backbone.online_encoder).to(device)
     reference_encoder.requires_grad_(False)
     reference_encoder.eval()
+    reference_decoder = copy.deepcopy(inherited_backbone.training_decoder).to(device)
+    reference_decoder.requires_grad_(False)
+    reference_decoder.eval()
 
     if route in {"frozen", "joint"}:
         backbone = inherited_backbone
@@ -245,13 +255,21 @@ def _build_phase3_models(
     backbone.koopman_core.requires_grad_(False)
     if route == "joint" and backbone.koopman_core.A.requires_grad:
         raise RuntimeError("Phase-3 joint route must keep inherited A0 frozen")
-    return backbone, reference_encoder, adaptive_model, normalizer, context_payload
+    return (
+        backbone,
+        reference_encoder,
+        reference_decoder,
+        adaptive_model,
+        normalizer,
+        context_payload,
+    )
 
 
 @torch.no_grad()
 def _evaluate(
     backbone: FieldJEPAKoopmanModel,
     reference_encoder: nn.Module,
+    reference_decoder: nn.Module,
     adaptive_model: AdaptiveKoopmanModel,
     loader: DataLoader,
     normalizer: ChannelStandardizer,
@@ -262,6 +280,8 @@ def _evaluate(
     device: torch.device,
     epoch: int,
     route: str,
+    observer_admitted: bool,
+    observer_controls: dict[str, nn.Module] | None = None,
 ) -> dict[str, float]:
     backbone.eval()
     adaptive_model.eval()
@@ -277,6 +297,7 @@ def _evaluate(
         objective = joint_markov_objective(
             backbone,
             reference_encoder,
+            reference_decoder,
             adaptive_model,
             batch,
             normalizer,
@@ -287,6 +308,7 @@ def _evaluate(
             epoch=epoch,
             validation=True,
             route=route,
+            observer_admitted=observer_admitted,
         )
         batch_size = batch["history_raw"].shape[0]
         for name, value in {"total": objective.total, **objective.terms}.items():
@@ -330,6 +352,53 @@ def _evaluate(
             torch.cat(observer_predictions), torch.cat(observer_targets)
         )
         result.update({f"observer_{name}": value for name, value in observer.items()})
+    phase3 = config.v0_9_phase3
+    phase2 = config.v0_9_phase2
+    adaptive = config.v0_9_adaptive
+    if (
+        phase3 is not None
+        and phase2 is not None
+        and adaptive is not None
+        and phase3.observer_admission_enabled
+        and adaptive.condition_mode == "latent_inferred"
+    ):
+        if observer_controls is None:
+            raise RuntimeError("Phase-3.7 latent evaluation requires frozen observer controls")
+        control_metrics = _evaluate_observer_controls(
+            backbone,
+            adaptive_model,
+            observer_controls,
+            loader,
+            normalizer,
+            condition_mean,
+            condition_std,
+            device,
+        )
+        control_decision = classify_observer_admission(
+            control_metrics, phase2, phase3
+        )
+        result.update(
+            {
+                "observer_admitted": float(
+                    observer_admitted and bool(control_decision["admitted"])
+                ),
+                "observer_history_gain_vs_instantaneous": float(
+                    control_decision["history_gain_vs_instantaneous"]
+                ),
+                "observer_history_gain_vs_shuffled": float(
+                    control_decision["history_gain_vs_shuffled"]
+                ),
+                "observer_instantaneous_normalized_rmse": float(
+                    control_metrics["instantaneous"]["normalized_rmse"]
+                ),
+                "observer_shuffled_normalized_rmse": float(
+                    control_metrics["shuffled_history"]["normalized_rmse"]
+                ),
+                "observer_mean_normalized_rmse": float(
+                    control_metrics["mean"]["normalized_rmse"]
+                ),
+            }
+        )
     candidate = torch.cat(candidate_representations)
     reference = torch.cat(reference_representations)
     result.update(
@@ -346,12 +415,249 @@ def _evaluate(
             ),
         }
     )
+    if config.v0_9_phase3 and config.v0_9_phase3.physics_aligned_latent_enabled:
+        gauge = dynamical_gauge_metrics(
+            candidate,
+            reference,
+            adaptive_model.operator_adapter.nominal_generator,
+        )
+        result.update({name: float(value) for name, value in gauge.items()})
     result["nominal_symmetric_abscissa"] = float(
         symmetric_abscissa_proxy(
             adaptive_model.operator_adapter.nominal_generator.detach().float()
         )
     )
     return result
+
+
+def _observer_prediction(
+    observer: nn.Module,
+    context: torch.Tensor,
+    features: torch.Tensor,
+    *,
+    output_limit: float,
+) -> torch.Tensor:
+    raw = observer(torch.cat((context, features), dim=-1))
+    return output_limit * torch.tanh(raw / output_limit)
+
+
+@torch.no_grad()
+def _evaluate_observer_controls(
+    backbone: FieldJEPAKoopmanModel,
+    adaptive_model: AdaptiveKoopmanModel,
+    observers: dict[str, nn.Module],
+    loader: DataLoader,
+    normalizer: ChannelStandardizer,
+    condition_mean: torch.Tensor,
+    condition_std: torch.Tensor,
+    device: torch.device,
+) -> dict[str, dict[str, float]]:
+    predictions = {name: [] for name in OBSERVER_VARIANTS}
+    targets: list[torch.Tensor] = []
+    output_limit = float(adaptive_model.operator_adapter.observer_output_limit)
+    backbone.eval()
+    adaptive_model.context_encoder.eval()
+    for module in observers.values():
+        module.eval()
+    for raw in loader:
+        batch = move_raw_field_batch(raw, device)
+        history_z = backbone.encode(normalizer.transform(batch["history_raw"])).float()
+        target = (batch["future_condition_targets"][:, 0] - condition_mean) / condition_std
+        for name in OBSERVER_VARIANTS:
+            variant = observer_history_variant(history_z, name)
+            context = adaptive_model.context_encoder(
+                variant,
+                batch["history_dts"],
+                batch["future_dts"][:, :1],
+                batch["context_parameters"],
+            )
+            features = causal_observer_features(variant, batch["history_dts"])
+            predictions[name].append(
+                _observer_prediction(
+                    observers[name],
+                    context,
+                    features,
+                    output_limit=output_limit,
+                ).cpu()
+            )
+        targets.append(target.cpu())
+    if not targets:
+        raise RuntimeError("Phase-3 observer validation dataset is empty")
+    target_values = torch.cat(targets)
+    metrics = {
+        name: condition_observer_metrics(torch.cat(values), target_values)
+        for name, values in predictions.items()
+    }
+    metrics["mean"] = condition_observer_metrics(
+        torch.zeros_like(target_values), target_values
+    )
+    return metrics
+
+
+def _pretrain_observer_admission(
+    backbone: FieldJEPAKoopmanModel,
+    adaptive_model: AdaptiveKoopmanModel,
+    loaders: dict[str, DataLoader],
+    normalizer: ChannelStandardizer,
+    condition_mean: torch.Tensor,
+    condition_std: torch.Tensor,
+    config: ProjectConfig,
+    device: torch.device,
+) -> tuple[dict[str, Any], dict[str, nn.Module] | None]:
+    """Fit the causal observer independently from representation/operator gradients."""
+    phase3 = config.v0_9_phase3
+    phase2 = config.v0_9_phase2
+    adaptive = config.v0_9_adaptive
+    if phase3 is None or phase2 is None or adaptive is None:
+        raise ValueError("observer admission requires complete Phase-3 configuration")
+    required = adaptive.condition_mode == "latent_inferred"
+    if not phase3.observer_admission_enabled:
+        return (
+            {
+                "enabled": False,
+                "required": required,
+                "admitted": True,
+                "reason": "legacy_joint_observer_training",
+                "operator_condition_route": "legacy_joint",
+            },
+            None,
+        )
+    if not required:
+        for parameter in adaptive_model.operator_adapter.condition_observer.parameters():
+            parameter.requires_grad_(False)
+        return (
+            {
+                "enabled": True,
+                "required": required,
+                "admitted": True,
+                "reason": "known_condition_does_not_require_observer",
+                "operator_condition_route": "known_condition_full",
+            },
+            None,
+        )
+
+    print(
+        "[V0.9][phase3:observer] START independent history/instantaneous/shuffled controls",
+        flush=True,
+    )
+    source = adaptive_model.operator_adapter.condition_observer
+    observers = {name: copy.deepcopy(source).to(device) for name in OBSERVER_VARIANTS}
+    optimizers = {
+        name: AdamW(
+            module.parameters(),
+            lr=phase3.observer_learning_rate,
+            weight_decay=config.v0_9_training.weight_decay if config.v0_9_training else 0.0,
+        )
+        for name, module in observers.items()
+    }
+    output_limit = float(adaptive_model.operator_adapter.observer_output_limit)
+    best_keys: dict[str, tuple[float, float] | None] = {
+        name: None for name in OBSERVER_VARIANTS
+    }
+    best_epochs = {name: 0 for name in OBSERVER_VARIANTS}
+    best_states: dict[str, dict[str, Any]] = {}
+    backbone.eval()
+    adaptive_model.context_encoder.eval()
+    for epoch in range(phase3.observer_pretrain_epochs):
+        for module in observers.values():
+            module.train()
+        for raw in loaders["train"]:
+            batch = move_raw_field_batch(raw, device)
+            with torch.no_grad():
+                history_z = backbone.encode(
+                    normalizer.transform(batch["history_raw"])
+                ).float()
+                target = (
+                    batch["future_condition_targets"][:, 0] - condition_mean
+                ) / condition_std
+            for name in OBSERVER_VARIANTS:
+                variant = observer_history_variant(history_z, name)
+                with torch.no_grad():
+                    context = adaptive_model.context_encoder(
+                        variant,
+                        batch["history_dts"],
+                        batch["future_dts"][:, :1],
+                        batch["context_parameters"],
+                    )
+                    features = causal_observer_features(variant, batch["history_dts"])
+                optimizers[name].zero_grad(set_to_none=True)
+                prediction = _observer_prediction(
+                    observers[name],
+                    context,
+                    features,
+                    output_limit=output_limit,
+                )
+                loss = torch.nn.functional.smooth_l1_loss(prediction, target, beta=1.0)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    observers[name].parameters(),
+                    config.v0_9_training.gradient_clip_norm
+                    if config.v0_9_training
+                    else 1.0,
+                )
+                optimizers[name].step()
+        for module in observers.values():
+            module.eval()
+        metrics = _evaluate_observer_controls(
+            backbone,
+            adaptive_model,
+            observers,
+            loaders["validation"],
+            normalizer,
+            condition_mean,
+            condition_std,
+            device,
+        )
+        for name, module in observers.items():
+            values = metrics[name]
+            key = (
+                float(values["normalized_rmse"]),
+                -float(values["minimum_r2"]),
+            )
+            if not all(math.isfinite(value) for value in key):
+                continue
+            if best_keys[name] is None or key < best_keys[name]:
+                best_keys[name] = key
+                best_epochs[name] = epoch + 1
+                best_states[name] = copy.deepcopy(module.state_dict())
+    if set(best_states) != set(OBSERVER_VARIANTS):
+        raise RuntimeError("Phase-3 observer admission selected no finite control model")
+    for name, module in observers.items():
+        module.load_state_dict(best_states[name], strict=True)
+    source.load_state_dict(best_states["history"], strict=True)
+    source.requires_grad_(False)
+    best_metrics = _evaluate_observer_controls(
+        backbone,
+        adaptive_model,
+        observers,
+        loaders["validation"],
+        normalizer,
+        condition_mean,
+        condition_std,
+        device,
+    )
+    decision = classify_observer_admission(best_metrics, phase2, phase3)
+    report: dict[str, Any] = {
+        "enabled": True,
+        "required": True,
+        "selection_split": "validation",
+        "best_epochs": best_epochs,
+        "epochs": phase3.observer_pretrain_epochs,
+        "controls": best_metrics,
+        **decision,
+    }
+    report["operator_condition_route"] = (
+        "latent_condition_full" if report["admitted"] else "history_only_fallback"
+    )
+    report["operator_route_frozen_after_initial_admission"] = True
+    print(
+        "[V0.9][phase3:observer] PASS "
+        f"admitted={report['admitted']} "
+        f"rmse={best_metrics['history']['normalized_rmse']:.6g} "
+        f"history_gain={report['history_gain_vs_instantaneous']:.6g}",
+        flush=True,
+    )
+    return report, observers
 
 
 def _train_v0_9_phase3_route(
@@ -407,7 +713,14 @@ def _train_v0_9_phase3_route(
         deterministic=resolved.training.deterministic,
     )
     cache = load_adaptive_cache(adaptive_cache)
-    backbone, reference_encoder, adaptive_model, normalizer, context_payload = (
+    (
+        backbone,
+        reference_encoder,
+        reference_decoder,
+        adaptive_model,
+        normalizer,
+        context_payload,
+    ) = (
         _build_phase3_models(
             resolved,
             cache=cache,
@@ -493,6 +806,18 @@ def _train_v0_9_phase3_route(
     condition_mean = condition_mean_cpu.to(selected)
     condition_std = condition_std_cpu.to(selected)
 
+    observer_admission, observer_controls = _pretrain_observer_admission(
+        backbone,
+        adaptive_model,
+        loaders,
+        normalizer,
+        condition_mean,
+        condition_std,
+        resolved,
+        selected,
+    )
+    observer_admitted = bool(observer_admission["admitted"])
+
     representation_parameters = [
         parameter for parameter in backbone.parameters() if parameter.requires_grad
     ]
@@ -570,6 +895,7 @@ def _train_v0_9_phase3_route(
                 objective = joint_markov_objective(
                     backbone,
                     reference_encoder,
+                    reference_decoder,
                     adaptive_model,
                     batch,
                     normalizer,
@@ -580,6 +906,7 @@ def _train_v0_9_phase3_route(
                     epoch=epoch,
                     validation=False,
                     route=route,
+                    observer_admitted=observer_admitted,
                 )
             scaler.scale(objective.total).backward()
             scaler.unscale_(optimizer)
@@ -605,6 +932,7 @@ def _train_v0_9_phase3_route(
         metrics = _evaluate(
             backbone,
             reference_encoder,
+            reference_decoder,
             adaptive_model,
             loaders["validation"],
             normalizer,
@@ -615,6 +943,8 @@ def _train_v0_9_phase3_route(
             selected,
             epoch,
             route,
+            observer_admitted,
+            observer_controls,
         )
         key = phase3_checkpoint_key(
             metrics,
@@ -651,6 +981,7 @@ def _train_v0_9_phase3_route(
     locked_test_metrics = _evaluate(
         backbone,
         reference_encoder,
+        reference_decoder,
         adaptive_model,
         loaders["test"],
         normalizer,
@@ -661,7 +992,38 @@ def _train_v0_9_phase3_route(
         selected,
         best_epoch - 1,
         route,
+        observer_admitted,
+        observer_controls,
     )
+    if observer_controls is not None:
+        validation_controls = _evaluate_observer_controls(
+            backbone,
+            adaptive_model,
+            observer_controls,
+            loaders["validation"],
+            normalizer,
+            condition_mean,
+            condition_std,
+            selected,
+        )
+        locked_controls = _evaluate_observer_controls(
+            backbone,
+            adaptive_model,
+            observer_controls,
+            loaders["test"],
+            normalizer,
+            condition_mean,
+            condition_std,
+            selected,
+        )
+        observer_admission["joint_validation"] = {
+            "controls": validation_controls,
+            **classify_observer_admission(validation_controls, phase2, phase3),
+        }
+        observer_admission["locked_test"] = {
+            "controls": locked_controls,
+            **classify_observer_admission(locked_controls, phase2, phase3),
+        }
     (destination / "logs" / "history.json").write_text(
         json.dumps(history_rows, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -671,13 +1033,19 @@ def _train_v0_9_phase3_route(
     checkpoint = destination / "checkpoints" / f"best_{route}_markov.pt"
     _save_payload(
         {
-            "schema_version": "v0.9-phase3-route-1",
+            "schema_version": (
+                "v0.9-phase3-route-2"
+                if phase3.physics_aligned_latent_enabled
+                or phase3.observer_admission_enabled
+                else "v0.9-phase3-route-1"
+            ),
             "route": route,
             "config": resolved.to_dict(),
             "config_hash": resolved.stable_hash,
             "backbone_state": backbone.state_dict(),
             "adaptive_state": adaptive_model.state_dict(),
             "reference_encoder_state": reference_encoder.state_dict(),
+            "reference_decoder_state": reference_decoder.state_dict(),
             "normalizer_state": normalizer.state_dict(),
             "source_backbone_sha256": file_sha256(backbone_checkpoint),
             "source_context_sha256": file_sha256(context_checkpoint),
@@ -699,6 +1067,15 @@ def _train_v0_9_phase3_route(
             "trainable_parameters": trainable_count,
             "best_validation_metrics": best_metrics,
             "locked_test_metrics": locked_test_metrics,
+            "observer_admission": observer_admission,
+            "observer_control_states": (
+                None
+                if observer_controls is None
+                else {
+                    name: module.state_dict()
+                    for name, module in observer_controls.items()
+                }
+            ),
             "nominal_generator_unchanged": route == "joint",
             "git_commit": get_git_commit(Path.cwd()),
         },
@@ -709,6 +1086,10 @@ def _train_v0_9_phase3_route(
     )
     (destination / "evaluation" / "locked_test_metrics.json").write_text(
         json.dumps(locked_test_metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (destination / "evaluation" / "observer_admission.json").write_text(
+        json.dumps(observer_admission, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
     print(
         f"[V0.9][phase3:{route}:{resolved.v0_9_adaptive.condition_mode}] PASS "
@@ -725,6 +1106,7 @@ def _train_v0_9_phase3_route(
         trainable_count,
         best_metrics,
         locked_test_metrics,
+        observer_admission,
     )
 
 
@@ -787,7 +1169,14 @@ def evaluate_v0_9_phase3_frozen(
         flush=True,
     )
     cache = load_adaptive_cache(adaptive_cache)
-    backbone, reference_encoder, adaptive_model, normalizer, context_payload = (
+    (
+        backbone,
+        reference_encoder,
+        reference_decoder,
+        adaptive_model,
+        normalizer,
+        context_payload,
+    ) = (
         _build_phase3_models(
             resolved,
             cache=cache,
@@ -863,6 +1252,7 @@ def evaluate_v0_9_phase3_frozen(
     metrics = _evaluate(
         backbone,
         reference_encoder,
+        reference_decoder,
         adaptive_model,
         loader,
         normalizer,
@@ -873,6 +1263,7 @@ def evaluate_v0_9_phase3_frozen(
         selected,
         resolved.v0_9_training.epochs - 1,
         "frozen",
+        True,
     )
     (destination / "evaluation" / "locked_test_metrics.json").write_text(
         json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8"

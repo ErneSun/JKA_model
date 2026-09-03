@@ -81,6 +81,16 @@ class ChannelStandardizer:
         mean, scale = self._statistics_for(states_model)
         return states_model * scale + mean
 
+    def inverse_transform_tangent(self, tangent_model: Tensor) -> Tensor:
+        """Map a model-space perturbation to raw units without adding the mean.
+
+        Tangent vectors transform by the linear part of the affine normalizer.  Using
+        :meth:`inverse_transform` here would incorrectly add the channel mean and would
+        make a zero perturbation non-zero in physical coordinates.
+        """
+        _, scale = self._statistics_for(tangent_model)
+        return tangent_model * scale
+
     def state_dict(self) -> dict[str, Any]:
         if not self.is_fitted:
             raise RuntimeError("cannot serialize an unfitted normalizer")

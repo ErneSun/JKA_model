@@ -2,6 +2,18 @@
 
 从项目根目录运行：
 
+当前 Phase 3.7 正式验证（复用已完成的 matched frozen reference，不重复 Phase 2 或
+from-scratch negative control）：
+
+```bash
+.venv/bin/python gpu_validation/v0_9/scripts/gpu_validate_phase3_joint.py --phase37 --validation-id v09-added-p37-aligned-$(date -u +%Y%m%dT%H%M%SZ) --phase2-id v09-added-p2-physical-20260824T105209Z --audit-id v09-added-p3-audit-20260826T043840Z --frozen-reference-id v09-added-p3-routes-20260829T025754Z --seeds 47 53 59 --operator-seeds 701 809 907 --condition-modes known latent_inferred
+```
+
+该命令运行 3 backbone seeds x 3 operator seeds x 2 condition modes 的 matched joint
+matrix。新增判据为 frozen-decoder physical pullback、与 `A0` 相容的 dynamical gauge，以及
+独立 history/instantaneous/shuffled observer admission；未获准的 latent observer 自动转为
+history-only dynamic-operator fallback，但不能通过 observer scientific gate。
+
 Phase 3 entry audit（不重复 Phase 2 训练）：
 
 ```bash

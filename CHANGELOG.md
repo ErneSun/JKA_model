@@ -1,5 +1,16 @@
 # Changelog
 
+## V0.9 Added Phase 3.7 — 2026-09-03
+
+- Added a frozen-decoder Jacobian-vector pullback loss so latent rollout errors are weighted by
+  physical field, velocity and vorticity sensitivity.
+- Added dynamical Procrustes/generator-commutator metrics without relaxing the existing drift gate.
+- Added independent history/instantaneous/shuffled/mean condition-observer controls and a hard
+  admission gate; failed latent observers now use an explicitly reported history-only fallback.
+- Extended the Phase-3 joint workflow with `--phase37`, matched aggregation and compact reports.
+- Preserved frozen `A0`, the immutable frozen route, the completed from-scratch negative control,
+  raw-field online re-encoding and the 2% decoded-field acceptance threshold.
+
 ## 0.9.0 — Context-conditioned low-rank adaptive Koopman dynamics
 
 - Closed Phase 2 after the physics-first formal run improved constraint compliance but eliminated

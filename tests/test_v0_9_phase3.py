@@ -7,9 +7,15 @@ from types import SimpleNamespace
 import torch
 from torch import nn
 
-from jka_model.adaptive import AdaptiveCache, AdaptiveTrajectory, FactorizedAdaptiveOperator
+from jka_model.adaptive import (
+    AdaptiveCache,
+    AdaptiveTrajectory,
+    FactorizedAdaptiveOperator,
+    classify_observer_admission,
+    observer_history_variant,
+)
 from jka_model.config import ProjectConfig, V09Phase3Config, load_config
-from jka_model.data import TrajectoryDataset, TrajectoryRecord
+from jka_model.data import ChannelStandardizer, TrajectoryDataset, TrajectoryRecord
 from jka_model.manifold import (
     MatchedRouteContract,
     MatureCheckpointTracker,
@@ -23,6 +29,8 @@ from jka_model.manifold import (
     classify_phase3_route,
     configure_phase3_route,
     decoded_physical_supervision,
+    dynamical_gauge_metrics,
+    frozen_decoder_pullback_supervision,
     nested_route_support,
     orthogonal_procrustes_nrmse,
     phase3_checkpoint_key,
@@ -100,6 +108,143 @@ def test_decoded_physical_supervision_is_dimensionless_and_differentiable() -> N
         dy=0.3,
     )
     assert exact["field"] == 0 and exact["velocity"] == 0 and exact["vorticity"] == 0
+
+
+def test_physical_pullback_uses_tangent_units_and_is_differentiable() -> None:
+    class Decoder(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.linear = nn.Linear(4, 3 * 6 * 5, bias=False)
+
+        def forward(self, latent: torch.Tensor) -> torch.Tensor:
+            return self.linear(latent).reshape(-1, 3, 6, 5)
+
+    torch.manual_seed(13)
+    decoder = Decoder().requires_grad_(False)
+    normalizer = ChannelStandardizer()
+    normalizer.load_state_dict(
+        {
+            "kind": "channel_standardizer",
+            "eps": 1.0e-6,
+            "mean": torch.tensor([10.0, -7.0, 3.0]),
+            "scale": torch.tensor([2.0, 3.0, 4.0]),
+            "spatial_dim": 2,
+            "layout": "channels_first",
+            "fitted_trajectory_ids": ["train"],
+        }
+    )
+    zero = torch.zeros(1, 3, 6, 5)
+    torch.testing.assert_close(normalizer.inverse_transform_tangent(zero), zero)
+    target_latent = torch.randn(2, 4)
+    predicted_latent = (target_latent + 0.1 * torch.randn_like(target_latent)).requires_grad_(True)
+    target_raw = torch.randn(2, 3, 6, 5)
+    terms = frozen_decoder_pullback_supervision(
+        decoder,
+        predicted_latent,
+        target_latent,
+        target_raw,
+        torch.ones(2, 6, 5, dtype=torch.bool),
+        normalizer,
+        dx=0.2,
+        dy=0.3,
+    )
+    loss = terms["field"] + terms["velocity"] + terms["vorticity"]
+    assert float(loss.detach()) > 0
+    loss.backward()
+    assert predicted_latent.grad is not None and torch.isfinite(predicted_latent.grad).all()
+    exact = frozen_decoder_pullback_supervision(
+        decoder,
+        target_latent,
+        target_latent,
+        target_raw,
+        torch.ones(6, 5, dtype=torch.bool),
+        normalizer,
+        dx=0.2,
+        dy=0.3,
+    )
+    assert exact["field"] == 0 and exact["velocity"] == 0 and exact["vorticity"] == 0
+
+
+def test_dynamical_gauge_separates_harmless_and_incompatible_rotations() -> None:
+    torch.manual_seed(17)
+    reference = torch.randn(128, 6)
+    transform = torch.linalg.qr(torch.randn(6, 6)).Q
+    candidate = reference @ transform.T
+    isotropic = -0.2 * torch.eye(6)
+    harmless = dynamical_gauge_metrics(candidate, reference, isotropic)
+    assert float(harmless["dynamical_gauge_nrmse"]) < 1.0e-5
+    assert float(harmless["generator_commutator"]) < 1.0e-5
+    anisotropic = torch.diag(torch.linspace(-0.1, -0.6, 6))
+    incompatible = dynamical_gauge_metrics(candidate, reference, anisotropic)
+    assert float(incompatible["generator_commutator"]) > 0.05
+
+
+def test_observer_admission_requires_absolute_and_history_control_skill() -> None:
+    config = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml")
+    assert config.v0_9_phase2 and config.v0_9_phase3
+    history = torch.arange(2 * 4 * 3, dtype=torch.float32).reshape(2, 4, 3)
+    instantaneous = observer_history_variant(history, "instantaneous")
+    shuffled = observer_history_variant(history, "shuffled_history")
+    torch.testing.assert_close(instantaneous, history[:, -1:].expand_as(history))
+    torch.testing.assert_close(shuffled[:, -1], history[:, -1])
+    assert not torch.equal(shuffled[:, :-1], history[:, :-1])
+    metrics = {
+        "history": {"normalized_rmse": 0.30, "minimum_r2": 0.40},
+        "instantaneous": {"normalized_rmse": 0.36, "minimum_r2": 0.20},
+        "shuffled_history": {"normalized_rmse": 0.35, "minimum_r2": 0.22},
+        "mean": {"normalized_rmse": 1.0, "minimum_r2": 0.0},
+    }
+    admitted = classify_observer_admission(metrics, config.v0_9_phase2, config.v0_9_phase3)
+    assert admitted["admitted"]
+    metrics["instantaneous"]["normalized_rmse"] = 0.31
+    rejected = classify_observer_admission(metrics, config.v0_9_phase2, config.v0_9_phase3)
+    assert not rejected["admitted"]
+
+
+def test_phase37_gates_require_dynamical_gauge_and_observer_admission() -> None:
+    source = load_config("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml")
+    payload = source.to_dict()
+    payload["v0_9_phase3"].update(
+        {
+            "physics_aligned_latent_enabled": True,
+            "observer_admission_enabled": True,
+        }
+    )
+    config = ProjectConfig.from_dict(payload)
+    assert config.v0_9_phase3 and config.v0_9_phase2 and config.v0_9_evaluation
+    metrics = {
+        "physical_manifold_violation": 0.0,
+        "representation_drift": 0.09,
+        "roundtrip": 0.20,
+        "dynamical_gauge_nrmse": 0.08,
+        "generator_commutator": 0.09,
+        "observer_admitted": 1.0,
+        "observer_normalized_rmse": 0.4,
+        "observer_minimum_r2": 0.3,
+        "representation_linear_cka": 0.99,
+        "representation_procrustes_nrmse": 0.05,
+        "representation_effective_rank": 4.0,
+        **{f"rollout_gain_h{horizon}": 0.03 for horizon in (8, 16, 32, 80)},
+    }
+    passing = classify_phase3_joint_run(
+        metrics,
+        config.v0_9_phase3,
+        config.v0_9_evaluation,
+        config.v0_9_phase2,
+        condition_mode="latent_inferred",
+    )
+    assert passing["dynamical_gauge"] and passing["observer"]
+    assert passing["strict_joint"]
+    failed = classify_phase3_joint_run(
+        {**metrics, "observer_admitted": 0.0, "generator_commutator": 0.11},
+        config.v0_9_phase3,
+        config.v0_9_evaluation,
+        config.v0_9_phase2,
+        condition_mode="latent_inferred",
+    )
+    assert not failed["dynamical_gauge"]
+    assert not failed["observer"]
+    assert not failed["strict_joint"]
 
 
 def test_trainable_phase3_routes_reject_frozen_latent_cache() -> None:
@@ -531,6 +676,21 @@ def test_phase3_matched_workflow_builds_explicit_from_scratch_config(tmp_path: P
         ]
     )
     assert aggregate == {"common": 2.0}
+
+    phase37 = _resolved_config(
+        Path("gpu_validation/v0_9/configs/gpu_adaptive_koopman.yaml"),
+        phase2_id="phase2-source",
+        dataset_path=tmp_path / "data.pt",
+        run_root=tmp_path / "phase37",
+        seed=47,
+        condition_mode="latent_inferred",
+        operator_seed=701,
+        phase37=True,
+    )
+    assert phase37.v0_9_phase3
+    assert phase37.v0_9_phase3.physics_aligned_latent_enabled
+    assert phase37.v0_9_phase3.observer_admission_enabled
+    assert "phase3.7-physics-aligned" in phase37.tags
 
 
 def test_from_scratch_residual_scale_uses_only_training_trajectories() -> None:

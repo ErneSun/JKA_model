@@ -2494,6 +2494,14 @@ class V09Phase3Config:
     lambda_decoded_velocity: float = 1.0
     lambda_decoded_vorticity: float = 0.20
     max_normalized_representation_drift: float = 0.10
+    physics_aligned_latent_enabled: bool = False
+    lambda_physical_pullback: float = 0.50
+    max_dynamical_gauge_nrmse: float = 0.10
+    max_generator_commutator: float = 0.10
+    observer_admission_enabled: bool = False
+    observer_pretrain_epochs: int = 12
+    observer_learning_rate: float = 5.0e-4
+    min_observer_history_gain: float = 0.02
 
     def __post_init__(self) -> None:
         if self.enabled and not self.source_phase2_result.strip():
@@ -2526,9 +2534,16 @@ class V09Phase3Config:
             self.lambda_decoded_velocity,
             self.lambda_decoded_vorticity,
             self.max_normalized_representation_drift,
+            self.lambda_physical_pullback,
+            self.max_dynamical_gauge_nrmse,
+            self.max_generator_commutator,
+            self.observer_learning_rate,
+            self.min_observer_history_gain,
         )
         if any(not math.isfinite(value) or value <= 0 for value in positive):
             raise ValueError("V0.9 Phase-3 scales and tolerances must be finite and positive")
+        if self.observer_pretrain_epochs < 1:
+            raise ValueError("V0.9 Phase-3 observer pretraining epochs must be positive")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -2544,6 +2559,10 @@ class V09Phase3Config:
         _reject_unknown(data, allowed, "V0.9 Phase-3 config")
         values = {name: data.get(name, getattr(defaults, name)) for name in allowed}
         values["enabled"] = bool(values["enabled"])
+        values["physics_aligned_latent_enabled"] = bool(
+            values["physics_aligned_latent_enabled"]
+        )
+        values["observer_admission_enabled"] = bool(values["observer_admission_enabled"])
         values["source_phase2_result"] = str(values["source_phase2_result"])
         values["routes"] = tuple(str(value) for value in values["routes"])
         values["joint_backbone_allowlist"] = tuple(
@@ -2553,8 +2572,11 @@ class V09Phase3Config:
         values["audit_samples_per_trajectory"] = int(values["audit_samples_per_trajectory"])
         values["raw_field_batch_size"] = int(values["raw_field_batch_size"])
         values["raw_field_rollout_stride"] = int(values["raw_field_rollout_stride"])
+        values["observer_pretrain_epochs"] = int(values["observer_pretrain_epochs"])
         for name in allowed - {
             "enabled",
+            "physics_aligned_latent_enabled",
+            "observer_admission_enabled",
             "source_phase2_result",
             "routes",
             "joint_backbone_allowlist",
@@ -2562,6 +2584,7 @@ class V09Phase3Config:
             "audit_samples_per_trajectory",
             "raw_field_batch_size",
             "raw_field_rollout_stride",
+            "observer_pretrain_epochs",
         }:
             values[name] = float(values[name])
         return cls(**values)

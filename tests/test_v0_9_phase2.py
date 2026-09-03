@@ -186,6 +186,34 @@ def test_phase2_dynamic_residual_freezes_static_branch_and_uses_total_projection
     assert float(torch.linalg.matrix_norm(symmetric, ord="fro").detach().max()) <= 0.100001
 
 
+def test_dynamic_only_fallback_exactly_removes_condition_branch() -> None:
+    adapter = _operator("latent_inferred")
+    context = torch.randn(4, 8)
+    with torch.no_grad():
+        adapter.static_coordinate_head[-1].bias.fill_(0.25)
+        adapter.dynamic_coordinate_head[-1].bias.fill_(0.25)
+    components = adapter.phase2_components(
+        context,
+        condition_override=torch.zeros(4, 3),
+        active_components="dynamic",
+    )
+    assert torch.equal(
+        components["static_coordinates"],
+        torch.zeros_like(components["static_coordinates"]),
+    )
+    assert torch.equal(
+        components["static_delta"], torch.zeros_like(components["static_delta"])
+    )
+    assert torch.equal(
+        components["static_gate"], torch.zeros_like(components["static_gate"])
+    )
+    assert torch.equal(components["delta"], components["dynamic_delta"])
+    components["delta"].square().mean().backward()
+    assert adapter.static_coordinate_head[-1].weight.grad is None
+    assert adapter.static_left_factor.grad is None
+    assert adapter.dynamic_coordinate_head[-1].weight.grad is not None
+
+
 def test_condition_rate_is_causal_and_centering_has_no_variance_floor() -> None:
     conditions = torch.tensor([[80.0, 0.8], [80.0, 0.8], [100.0, 1.0]])
     targets = condition_targets(conditions, torch.tensor([0.5, 0.5, 0.5]))

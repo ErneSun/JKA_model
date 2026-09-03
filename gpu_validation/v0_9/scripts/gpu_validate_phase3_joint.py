@@ -41,7 +41,14 @@ def _stage(label: str, action: Any) -> Any:
 
 
 def _run_tests(python: str, log_path: Path) -> None:
-    command = [python, "-m", "pytest", "-q", "tests/test_v0_9_phase3.py"]
+    command = [
+        python,
+        "-m",
+        "pytest",
+        "-q",
+        "tests/test_v0_9_phase2.py",
+        "tests/test_v0_9_phase3.py",
+    ]
     with log_path.open("w", encoding="utf-8") as stream:
         process = subprocess.Popen(
             command,
@@ -80,6 +87,7 @@ def _resolved_config(
     condition_mode: str,
     operator_seed: int,
     route: str = "joint",
+    phase37: bool = False,
 ) -> ProjectConfig:
     if route not in {"joint", "from_scratch"}:
         raise ValueError("invalid Phase-3 resolved-config route")
@@ -99,7 +107,12 @@ def _resolved_config(
             raise ValueError("Phase-3 template configuration is missing")
         payload["v0_9_phase3"] = template_phase3.to_dict()
     payload["v0_9_phase3"].update(
-        {"enabled": True, "source_phase2_result": phase2_id}
+        {
+            "enabled": True,
+            "source_phase2_result": phase2_id,
+            "physics_aligned_latent_enabled": phase37,
+            "observer_admission_enabled": phase37,
+        }
     )
     payload["tags"] = [
         "v0.9",
@@ -107,6 +120,7 @@ def _resolved_config(
         f"backbone-seed-{seed}",
         f"operator-seed-{operator_seed}",
         f"condition-{condition_mode}",
+        "phase3.7-physics-aligned" if phase37 else "phase3.6-decoded-physical",
     ]
     return ProjectConfig.from_dict(payload)
 
@@ -183,6 +197,11 @@ def main() -> None:
     )
     parser.add_argument("--skip-software-tests", action="store_true")
     parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument(
+        "--phase37",
+        action="store_true",
+        help="enable physical pullback geometry and independent observer admission",
+    )
     args = parser.parse_args()
     if len(set(args.seeds)) != 3 or len(args.seeds) != 3:
         raise SystemExit("formal Phase-3 joint study requires three unique backbone seeds")
@@ -237,6 +256,16 @@ def main() -> None:
     template = load_config(
         ROOT / "gpu_validation" / "v0_9" / "configs" / "gpu_adaptive_koopman.yaml"
     )
+    if args.phase37:
+        template_payload = template.to_dict()
+        assert isinstance(template_payload["v0_9_phase3"], dict)
+        template_payload["v0_9_phase3"].update(
+            {
+                "physics_aligned_latent_enabled": True,
+                "observer_admission_enabled": True,
+            }
+        )
+        template = ProjectConfig.from_dict(template_payload)
     reassessment = _corrected_audit(source_decision, phase2_summary, template)
     if reassessment["corrected"]["next_candidate"] != "JOINT_MARKOV_REPRESENTATION":
         raise SystemExit("corrected Phase-3 audit does not select the joint route")
@@ -331,6 +360,7 @@ def main() -> None:
                         seed=seed,
                         condition_mode=mode,
                         operator_seed=operator_seed,
+                        phase37=args.phase37,
                     )
                     config_path = raw / "configs" / f"seed_{seed}_{mode}_{operator_seed}.yaml"
                     save_config(config, config_path)
@@ -357,6 +387,7 @@ def main() -> None:
                             "trainable_parameters": trained.trainable_parameters,
                             "validation": trained.validation_metrics,
                             "locked_test": trained.locked_test_metrics,
+                            "observer_admission": trained.observer_admission,
                             "checkpoint": str(trained.checkpoint),
                         }
                     )
@@ -431,8 +462,12 @@ def main() -> None:
         )
 
         summary = {
-            "schema_version": 3,
-            "phase": "V0.9_PHASE3_JOINT_PHYSICAL_REFINEMENT",
+            "schema_version": 4 if args.phase37 else 3,
+            "phase": (
+                "V0.9_PHASE3_7_PHYSICS_ALIGNED_REPRESENTATION"
+                if args.phase37
+                else "V0.9_PHASE3_JOINT_PHYSICAL_REFINEMENT"
+            ),
             "source_phase2_result": args.phase2_id,
             "source_phase3_audit": args.audit_id,
             "source_frozen_reference": args.frozen_reference_id,
@@ -456,12 +491,32 @@ def main() -> None:
                 "representation_drift"
             ),
             "roundtrip_pass_fraction": pass_fraction("roundtrip"),
+            "dynamical_gauge_pass_fraction": pass_fraction("dynamical_gauge"),
             "representation_feasible_pass_fraction": pass_fraction(
                 "representation_feasible"
             ),
             "predictive_pass_fraction": pass_fraction("predictive"),
             "observer_pass_fraction": pass_fraction("observer"),
             "latent_observer_pass_fraction": latent_observer_fraction,
+            "initial_latent_observer_admission_fraction": sum(
+                bool(row["observer_admission"].get("admitted", False))
+                for row in rows
+                if row["condition_mode"] == "latent_inferred"
+            )
+            / len(latent_gates),
+            "latent_observer_admission_fraction": sum(
+                bool(row["locked_test"].get("observer_admitted", 0.0))
+                for row in rows
+                if row["condition_mode"] == "latent_inferred"
+            )
+            / len(latent_gates),
+            "history_only_fallback_fraction": sum(
+                row["observer_admission"].get("operator_condition_route")
+                == "history_only_fallback"
+                for row in rows
+                if row["condition_mode"] == "latent_inferred"
+            )
+            / len(latent_gates),
             "strict_joint_pass_fraction": pass_fraction("strict_joint"),
             "decoded_field_material_gain_pass_fraction": pass_fraction(
                 "decoded_field_material_gain"
@@ -488,7 +543,12 @@ def main() -> None:
                 json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
         report = (
-            "# V0.9 Phase-3 joint route\n\n"
+            (
+                "# V0.9 Phase-3.7 physics-aligned joint route\n\n"
+                if args.phase37
+                else "# V0.9 Phase-3 joint route\n\n"
+            )
+            +
             f"- Source audit: `{args.audit_id}` (dimensionally reassessed)\n"
             f"- Frozen matched reference: `{args.frozen_reference_id}`\n"
             "- Corrected reconstruction physics: `PASS`\n"
@@ -501,9 +561,17 @@ def main() -> None:
             f"- Physics pass fraction: `{summary['physics_pass_fraction']:.3f}`\n"
             "- Representation-feasible pass fraction: "
             f"`{summary['representation_feasible_pass_fraction']:.3f}`\n"
+            "- Dynamical-gauge pass fraction: "
+            f"`{summary['dynamical_gauge_pass_fraction']:.3f}`\n"
             f"- Predictive pass fraction: `{summary['predictive_pass_fraction']:.3f}`\n"
             "- Latent-only observer pass fraction: "
             f"`{summary['latent_observer_pass_fraction']:.3f}`\n"
+            "- Latent observer-admission fraction: "
+            f"`{summary['latent_observer_admission_fraction']:.3f}`\n"
+            "- Initial validation observer-admission fraction: "
+            f"`{summary['initial_latent_observer_admission_fraction']:.3f}`\n"
+            "- History-only fallback fraction: "
+            f"`{summary['history_only_fallback_fraction']:.3f}`\n"
             f"- Strict joint pass fraction: `{summary['strict_joint_pass_fraction']:.3f}`\n"
             "- Decoded-field material-gain pass fraction: "
             f"`{summary['decoded_field_material_gain_pass_fraction']:.3f}`\n"
@@ -517,6 +585,7 @@ def main() -> None:
         )
         (compact / "report.md").write_text(report, encoding="utf-8")
         completion = {
+            "phase": summary["phase"],
             "requested_validation_id": session.requested_id,
             "resolved_validation_id": session.resolved_id,
             "source_phase2_result": args.phase2_id,
@@ -534,12 +603,18 @@ def main() -> None:
             json.dumps(completion, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         print(
-            f"V0.9 PHASE3 JOINT COMPLETE id={session.resolved_id} "
+            f"V0.9 {'PHASE3.7' if args.phase37 else 'PHASE3'} JOINT COMPLETE "
+            f"id={session.resolved_id} "
             f"runs={completed_runs} report={compact / 'report.md'}",
             flush=True,
         )
     except Exception as error:
         failure = {
+            "phase": (
+                "V0.9_PHASE3_7_PHYSICS_ALIGNED_REPRESENTATION"
+                if args.phase37
+                else "V0.9_PHASE3_JOINT_PHYSICAL_REFINEMENT"
+            ),
             "validation_id": session.resolved_id,
             "source_phase2_result": args.phase2_id,
             "source_phase3_audit": args.audit_id,
@@ -556,7 +631,8 @@ def main() -> None:
             json.dumps(failure, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         print(
-            f"V0.9 PHASE3 JOINT FAILED id={session.resolved_id} "
+            f"V0.9 {'PHASE3.7' if args.phase37 else 'PHASE3'} JOINT FAILED "
+            f"id={session.resolved_id} "
             f"failure={compact / 'failure.json'}",
             flush=True,
         )

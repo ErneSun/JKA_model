@@ -40,6 +40,7 @@ class Phase2TrainingState:
     observer_only: bool
     observer_weight: float
     delta_budget: float
+    condition_admitted: bool = True
 
 
 @dataclass(slots=True)
@@ -234,6 +235,8 @@ def differentiable_adaptive_rollout(
         next_dt = future_dts[:, index : index + 1]
         condition = None if conditions is None else conditions[:, index]
         condition_override = None if oracle_conditions is None else oracle_conditions[:, index]
+        if phase2_state is not None and not phase2_state.condition_admitted:
+            condition_override = latent_buffer.new_zeros((batch, condition_dim))
         # The encoder parameters are frozen, but its Jacobian with respect to a
         # predicted history must remain in the graph.  Otherwise multi-step
         # training degenerates into detached one-step corrections.
