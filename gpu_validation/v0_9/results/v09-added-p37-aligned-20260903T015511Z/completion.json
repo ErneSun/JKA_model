@@ -1,0 +1,15 @@
+{
+  "formal_locked_test_run_count": 18,
+  "formal_training_run_count": 18,
+  "git_commit": "893f6538a80be63516cf06aae2daf870134f69b0",
+  "next_stage": "REVIEW_REFINED_JOINT_EVIDENCE",
+  "phase": "V0.9_PHASE3_7_PHYSICS_ALIGNED_REPRESENTATION",
+  "requested_validation_id": "v09-added-p37-aligned-20260903T015511Z",
+  "resolved_validation_id": "v09-added-p37-aligned-20260903T015511Z",
+  "scientific_status": "JOINT_REFINEMENT_NOT_SUPPORTED",
+  "source_frozen_reference": "v09-added-p3-routes-20260829T025754Z",
+  "source_phase2_result": "v09-added-p2-physical-20260824T105209Z",
+  "source_phase3_audit": "v09-added-p3-audit-20260826T043840Z",
+  "status": "PASS",
+  "v1_0_readiness": "NOT_READY"
+}
