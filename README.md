@@ -117,6 +117,7 @@ V0.9 不做 persistent residual state、backbone 联合微调或 V1.0 action/con
 - [V0.8 状态](./docs/v0_8/status.md)
 - [V0.9 文档入口](./docs/v0_9/README.md)
 - [V0.9 状态](./docs/v0_9/status.md)
+- [V0.9 新路线 Stage 1：同样本瓶颈审计](./docs/v0_9_added/route_stage1_bottleneck_audit.md)
 - [V0.4 Code Walkthrough](./docs/v0_4_code_walkthrough.md)
 - [V0.4 Implementation Checklist](./docs/v0_4_implementation_checklist.md)
 - [V0.3 Code Walkthrough](./docs/v0_3_code_walkthrough.md)
